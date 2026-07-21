@@ -1,0 +1,75 @@
+name: Release
+
+# Builds unsigned (ad-hoc-signed) installers and publishes them to a GitHub
+# Release. No Apple Developer ID / notarization and no Windows Authenticode
+# cert are used — distribution is intentionally unsigned. End users bypass
+# Gatekeeper / SmartScreen on first launch; see the "Install" section of
+# README.md for the exact steps.
+#
+# Trigger by pushing a CalVer tag, e.g.:
+#   git tag v26.5.1 && git push origin v26.5.1
+
+on:
+  push:
+    tags:
+      - "v[0-9][0-9].[0-9]*.[0-9]*"
+
+# Needed for tauri-action to create the GitHub Release and upload artifacts.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # One universal DMG that runs on both Apple Silicon and Intel Macs.
+          - platform: macos-latest
+            label: macOS (universal)
+            args: "--target universal-apple-darwin"
+            rust-targets: "aarch64-apple-darwin,x86_64-apple-darwin"
+          - platform: windows-2025
+            label: Windows (x64)
+            args: ""
+            rust-targets: ""
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install JS deps
+        run: npm ci
+
+      - name: Build and publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Reuse the pushed tag (refs/tags/v26.5.1 -> v26.5.1) as the release
+          # tag, so the release lines up with BUILD.md's tagging step.
+          tagName: ${{ github.ref_name }}
+          releaseName: "ScreenPick ${{ github.ref_name }}"
+          releaseBody: |
+            Unsigned build. **First launch on macOS is blocked by Gatekeeper** —
+            see the install steps in the README before reporting "app is damaged".
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}

@@ -1,0 +1,65 @@
+[package]
+name = "screenpick"
+version = "26.7.3"
+description = "Cross-platform screenshot and annotation tool for macOS and Windows."
+authors = ["tstone-1"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "screenpick_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# macos-private-api: required for `.transparent(true)` overlay windows (region/window pickers) on macOS.
+# image-png: lets the macOS tray decode its monochrome template icon (icons/tray-macos.png) at runtime.
+tauri = { version = "2", features = ["macos-private-api", "protocol-asset", "tray-icon", "image-png"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-single-instance = "2"
+# Native OS drag-out: lets a Recent thumbnail be dragged into other apps as a
+# real image file (the flattened annotated PNG), which a plain webview drag
+# can't deliver. Drives `startDrag` from the frontend.
+tauri-plugin-drag = "2"
+# File + stderr logging so packaged builds (where stderr is invisible) leave a
+# diagnosable trail. `log` is the facade the codebase writes through.
+tauri-plugin-log = "2"
+log = "0.4"
+arboard = "3"
+# Pinned: capture_window_at_point depends on Window::all() returning front-to-back order on macOS,
+# which is xcap 0.9.6's behavior. Re-verify before bumping.
+# `wgc` (Windows only) routes capture through Windows.Graphics.Capture instead of the
+# default GDI BitBlt/PrintWindow path. GDI returns a blank (white) client area for
+# GPU/DirectComposition-composited windows — Task Manager, Settings, and other WinUI3
+# apps — capturing only the title-bar frame. WGC captures the actual composited output
+# and also corrects per-window DPI. The yellow capture border is suppressed via
+# SetIsBorderRequired(false) on Windows 11 (best-effort, non-fatal on older builds).
+# No-op off Windows (only enables `windows/*` feature flags), so the macOS pin is unaffected.
+xcap = { version = "=0.9.6", features = ["image", "wgc"] }
+# Pin until cookie/tauri-utils no longer conflict with time 0.3.48's new impls.
+time = "=0.3.47"
+# Pin (transitive via brotli, brought in by tauri-codegen): alloc-stdlib 0.2.3 pulls
+# alloc-no-stdlib 3.0.0, whose StackAllocator API breaks brotli-decompressor 5.0.1
+# (61 compile errors on `cargo build`/`cargo test`). Held here, not just in Cargo.lock,
+# because a lockfile-only pin gets silently re-bumped by the next `cargo update`.
+# Revisit when brotli/brotli-decompressor support alloc-no-stdlib 3.x.
+alloc-stdlib = "=0.2.2"
+# Typed IPC contract: specta + tauri-specta auto-generate src/lib/bindings.ts so Rust
+# is the source of truth for command/event shapes. Pinned to the rc release line that's
+# compatible with Tauri 2.
+specta = "=2.0.0-rc.25"
+specta-typescript = "=0.0.12"
+tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-core-graphics = "0.3.2"

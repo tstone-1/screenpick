@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "overlays",
+  "description": "Core window capability for capture picker overlays",
+  "windows": ["region-selector", "screen-picker", "screen-overlay-*", "window-selector"],
+  "permissions": ["core:default"]
+}

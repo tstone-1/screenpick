@@ -1,0 +1,29 @@
+# cargo-audit ignore list. Read automatically by `cargo audit` when run from
+# `src-tauri/` (its default lookup is `audit.toml` in the current directory).
+# See BUILD.md's "cargo audit triage" note for the standing release-checklist
+# context — this file is what makes that gate meaningful again instead of
+# rubber-stamping a chronically-red check.
+#
+# Re-run `cargo audit -f Cargo.lock` after every `cargo update` and at every
+# release; if a NEW advisory shows up (not one of the ids below), that is a
+# real finding and must be triaged before release, not silently absorbed by
+# this file.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2026-0194 (quadratic run time checking a start tag for duplicate
+    # attribute names) and RUSTSEC-2026-0195 (unbounded namespace-declaration
+    # allocation / memory-exhaustion DoS in `NsReader`), both in `quick-xml`.
+    # Transitive via two paths: tauri-plugin-notification -> notify-rust, and
+    # tauri -> tauri-utils -> plist. Accepted: ScreenPick's own code never
+    # feeds XML or plist data from an untrusted/network source into either
+    # dependency — the only XML/plist involved is the macOS Info.plist
+    # embedded at build time and the OS-notification bodies we generate
+    # ourselves (see `notify_first_hide` / `notify_settings_reset` in lib.rs,
+    # `notify_manifest_recovery` in documents.rs). The fix needs quick-xml
+    # >=0.41, which is blocked on notify-rust and plist bumping their pin.
+    # Revisit: every `cargo update` pass, and explicitly re-checked at each
+    # release per BUILD.md's pre-release checklist.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+]
