@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [CalVer](https://calver.org/) `YY.M.MICRO` versioning
 (see [BUILD.md](BUILD.md#version-management)).
 
-## [Unreleased]
+## [26.7.4] - 2026-07-21
 
 ### Added
 

@@ -1,6 +1,6 @@
 {
   "name": "screenpick",
-  "version": "26.7.3",
+  "version": "26.7.4",
   "description": "Cross-platform screenshot and annotation tool for macOS and Windows.",
   "type": "module",
   "scripts": {
