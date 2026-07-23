@@ -28,14 +28,14 @@ pub(crate) struct RegionPickerSession {
     target_monitor_id: Mutex<Option<u32>>,
 }
 
-impl std::ops::Deref for RegionPickerSession {
-    type Target = PickerSession;
-    fn deref(&self) -> &PickerSession {
+impl RegionPickerSession {
+    // Explicit accessor instead of Deref: a call site always says which
+    // session methods it's using, rather than relying on inherited methods
+    // resolving invisibly through pseudo-inheritance.
+    fn session(&self) -> &PickerSession {
         &self.session
     }
-}
 
-impl RegionPickerSession {
     fn set_target_monitor(&self, id: Option<u32>) {
         *self
             .target_monitor_id
@@ -67,6 +67,7 @@ pub(crate) fn start_region_selection(app: AppHandle) -> Result<(), String> {
     ensure_screen_capture_access()?;
 
     app.state::<RegionPickerSession>()
+        .session()
         .close_existing(&app, REGION_WINDOW);
 
     let primary = primary_monitor()?;
@@ -78,7 +79,7 @@ pub(crate) fn start_region_selection(app: AppHandle) -> Result<(), String> {
     let position = *tauri_primary.position();
     let size = *tauri_primary.size();
 
-    let id = app.state::<RegionPickerSession>().next_id();
+    let id = app.state::<RegionPickerSession>().session().next_id();
 
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
@@ -86,7 +87,7 @@ pub(crate) fn start_region_selection(app: AppHandle) -> Result<(), String> {
 
     let session_state = app.state::<RegionPickerSession>();
     session_state.set_target_monitor(monitor_id);
-    session_state.record(id);
+    session_state.session().record(id);
 
     tauri::async_runtime::spawn(create_region_window(app.clone(), id, position, size));
 
@@ -151,7 +152,7 @@ pub(crate) fn finish_region_selection(
     // (global shortcut firing again, or the user clicking start while the
     // overlay is hiding) can't emit a CaptureCompleted on someone else's
     // session. finish_capture owns the hide/settle/end/restore/emit sequence.
-    let session_id = app.state::<RegionPickerSession>().current();
+    let session_id = app.state::<RegionPickerSession>().session().current();
     finish_capture(
         &app,
         session_id,
@@ -177,7 +178,7 @@ pub(crate) fn cancel_region_selection(app: AppHandle) -> Result<(), String> {
 
 fn end_region_session(app: &AppHandle, expected_id: Option<u64>) -> bool {
     let session = app.state::<RegionPickerSession>();
-    let ended = session.end(app, REGION_WINDOW, expected_id);
+    let ended = session.session().end(app, REGION_WINDOW, expected_id);
     if ended {
         session.set_target_monitor(None);
     }
@@ -186,7 +187,9 @@ fn end_region_session(app: &AppHandle, expected_id: Option<u64>) -> bool {
 
 fn finish_region_session(app: &AppHandle, expected_id: Option<u64>) -> bool {
     let session = app.state::<RegionPickerSession>();
-    let ended = session.end_without_restore(app, REGION_WINDOW, expected_id);
+    let ended = session
+        .session()
+        .end_without_restore(app, REGION_WINDOW, expected_id);
     if ended {
         session.set_target_monitor(None);
     }

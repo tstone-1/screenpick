@@ -1,6 +1,7 @@
 import { commands, type CaptureResult, type WindowBounds } from "./bindings";
+import type { Result } from "./commandResult";
 
-type CommandResult<T> = Promise<{ status: "ok"; data: T } | { status: "error"; error: string }>;
+type CommandResult<T> = Promise<Result<T, string>>;
 
 export type StrictWindowBounds = {
   x: number;

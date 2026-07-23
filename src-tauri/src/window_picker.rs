@@ -16,9 +16,11 @@ const WINDOW_PICKER: &str = "window-selector";
 #[derive(Default)]
 pub(crate) struct WindowPickerSession(PickerSession);
 
-impl std::ops::Deref for WindowPickerSession {
-    type Target = PickerSession;
-    fn deref(&self) -> &PickerSession {
+impl WindowPickerSession {
+    // Explicit accessor instead of Deref: a call site always says which
+    // session methods it's using, rather than relying on inherited methods
+    // resolving invisibly through pseudo-inheritance.
+    fn session(&self) -> &PickerSession {
         &self.0
     }
 }
@@ -31,6 +33,7 @@ pub(crate) fn start_window_selection(app: AppHandle) -> Result<(), String> {
     ensure_screen_capture_access()?;
 
     app.state::<WindowPickerSession>()
+        .session()
         .close_existing(&app, WINDOW_PICKER);
 
     let (position, size) = virtual_desktop_bounds(&app)?;
@@ -39,8 +42,8 @@ pub(crate) fn start_window_selection(app: AppHandle) -> Result<(), String> {
         let _ = window.hide();
     }
 
-    let id = app.state::<WindowPickerSession>().next_id();
-    app.state::<WindowPickerSession>().record(id);
+    let id = app.state::<WindowPickerSession>().session().next_id();
+    app.state::<WindowPickerSession>().session().record(id);
     tauri::async_runtime::spawn(create_window_picker(app.clone(), id, position, size));
     Ok(())
 }
@@ -198,7 +201,7 @@ pub(crate) fn finish_window_point_selection(
 ) -> Result<CaptureResult, String> {
     // Snapshot the session id BEFORE the hide-and-capture window so a re-entry
     // can't emit a CaptureCompleted on someone else's session.
-    let session_id = app.state::<WindowPickerSession>().current();
+    let session_id = app.state::<WindowPickerSession>().session().current();
 
     // Resolve the overlay coordinates BEFORE hiding it; inner_position is
     // unreliable once the window is hidden. finish_capture then owns the
@@ -248,10 +251,12 @@ pub(crate) fn cancel_window_selection(app: AppHandle) -> Result<(), String> {
 
 fn end_window_session(app: &AppHandle, expected_id: Option<u64>) -> bool {
     app.state::<WindowPickerSession>()
+        .session()
         .end(app, WINDOW_PICKER, expected_id)
 }
 
 fn finish_window_session(app: &AppHandle, expected_id: Option<u64>) -> bool {
     app.state::<WindowPickerSession>()
+        .session()
         .end_without_restore(app, WINDOW_PICKER, expected_id)
 }

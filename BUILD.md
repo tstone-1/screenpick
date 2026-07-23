@@ -163,7 +163,7 @@ spctl -a -vv src-tauri/target/<target>/release/bundle/macos/ScreenPick.app || tr
 
 ### 4. Git Commit and Tag
 
-> ScreenPick is a **private** GitHub repo under the `tstone-1` account.
+> ScreenPick is a **public** GitHub repo under the `tstone-1` account.
 > Before pushing: `gh auth switch --user tstone-1`.
 
 ```sh

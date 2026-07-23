@@ -19,9 +19,11 @@ const SCREEN_OVERLAY_PREFIX: &str = "screen-overlay-";
 #[derive(Default)]
 pub(crate) struct ScreenPickerSession(PickerSession);
 
-impl std::ops::Deref for ScreenPickerSession {
-    type Target = PickerSession;
-    fn deref(&self) -> &PickerSession {
+impl ScreenPickerSession {
+    // Explicit accessor instead of Deref: a call site always says which
+    // session methods it's using, rather than relying on inherited methods
+    // resolving invisibly through pseudo-inheritance.
+    fn session(&self) -> &PickerSession {
         &self.0
     }
 }
@@ -30,6 +32,7 @@ impl std::ops::Deref for ScreenPickerSession {
 #[specta::specta]
 pub(crate) fn start_screen_selection(app: AppHandle) -> Result<(), String> {
     app.state::<ScreenPickerSession>()
+        .session()
         .close_existing(&app, SCREEN_PICKER);
     close_screen_overlays(&app);
 
@@ -66,8 +69,8 @@ pub(crate) fn start_screen_selection(app: AppHandle) -> Result<(), String> {
             restore_main_window(&app);
         })?;
 
-    let id = app.state::<ScreenPickerSession>().next_id();
-    app.state::<ScreenPickerSession>().record(id);
+    let id = app.state::<ScreenPickerSession>().session().next_id();
+    app.state::<ScreenPickerSession>().session().record(id);
 
     for (index, (monitor_id, position, size)) in overlay_targets.into_iter().enumerate() {
         tauri::async_runtime::spawn(create_screen_overlay_window(
@@ -95,6 +98,7 @@ pub(crate) fn start_screen_selection(app: AppHandle) -> Result<(), String> {
 #[specta::specta]
 pub(crate) fn capture_screen_under_cursor(app: AppHandle) -> Result<(), String> {
     app.state::<ScreenPickerSession>()
+        .session()
         .close_existing(&app, SCREEN_PICKER);
     close_screen_overlays(&app);
 
@@ -140,8 +144,8 @@ fn monitor_id_under_cursor(app: &AppHandle, monitors: &[CapturableMonitor]) -> O
 /// the capture-under-cursor hotkey.
 fn capture_monitor_now(app: &AppHandle, monitor_id: u32) -> Result<(), String> {
     let session = app.state::<ScreenPickerSession>();
-    let id = session.next_id();
-    session.record(id);
+    let id = session.session().next_id();
+    session.session().record(id);
 
     // Deliberately a longer settle than the picker's PICKER_HIDE_DELAY_MS: this
     // path hides the OPAQUE main editor window (not a translucent overlay), and
@@ -221,7 +225,11 @@ async fn create_screen_picker_window(app: AppHandle, id: u64) {
     .visible(false)
     .on_page_load(move |window, payload| {
         if matches!(payload.event(), PageLoadEvent::Finished) {
-            if !app_for_load.state::<ScreenPickerSession>().is_current(id) {
+            if !app_for_load
+                .state::<ScreenPickerSession>()
+                .session()
+                .is_current(id)
+            {
                 let _ = window.close();
                 return;
             }
@@ -284,7 +292,11 @@ async fn create_screen_overlay_window(
     .visible(false)
     .on_page_load(move |window, payload| {
         if matches!(payload.event(), PageLoadEvent::Finished) {
-            if !app_for_load.state::<ScreenPickerSession>().is_current(id) {
+            if !app_for_load
+                .state::<ScreenPickerSession>()
+                .session()
+                .is_current(id)
+            {
                 let _ = window.close();
                 return;
             }
@@ -331,7 +343,7 @@ pub(crate) fn finish_screen_selection(
     // doesn't cause us to emit a CaptureCompleted on someone else's session.
     // finish_capture owns the hide/settle/end/restore/emit sequence; screen is
     // the one picker that also hides per-display overlays in the hide step.
-    let session_id = app.state::<ScreenPickerSession>().current();
+    let session_id = app.state::<ScreenPickerSession>().session().current();
     finish_capture(
         &app,
         session_id,
@@ -359,12 +371,14 @@ pub(crate) fn cancel_screen_selection(app: AppHandle) -> Result<(), String> {
 fn end_screen_session(app: &AppHandle, expected_id: Option<u64>) -> bool {
     close_screen_overlays(app);
     app.state::<ScreenPickerSession>()
+        .session()
         .end(app, SCREEN_PICKER, expected_id)
 }
 
 fn finish_screen_session(app: &AppHandle, expected_id: Option<u64>) -> bool {
     close_screen_overlays(app);
     app.state::<ScreenPickerSession>()
+        .session()
         .end_without_restore(app, SCREEN_PICKER, expected_id)
 }
 
@@ -391,7 +405,10 @@ fn close_screen_overlays(app: &AppHandle) {
 
 fn retry_close_screen_overlays(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
-        std::thread::sleep(std::time::Duration::from_millis(75));
+        // tokio::time::sleep, not std::thread::sleep: this runs on a tokio
+        // worker thread (tauri::async_runtime::spawn), and blocking that
+        // thread for 75ms would starve any other task scheduled onto it.
+        tokio::time::sleep(std::time::Duration::from_millis(75)).await;
         close_screen_overlays(&app);
     });
 }

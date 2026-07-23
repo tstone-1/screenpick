@@ -319,11 +319,12 @@ export class EditorState {
 
   // User-visible signal that the most recent document-persistence attempt
   // (create, autosave, or crop/cut re-base) failed — sanitized message; full
-  // detail always goes to console.error alongside it. Rendered as a status-bar
-  // badge (+page.svelte) next to captureActivity, which plays the same role
-  // for capture-side failures. Cleared on the next successful persist. Lives
-  // on DocumentStore (every write that can set it happens there); this getter
-  // preserves `editor.persistError` for existing consumers.
+  // detail always goes to the diagnostics log (console + on-disk log file)
+  // alongside it. Rendered as a status-bar badge (+page.svelte) next to
+  // captureActivity, which plays the same role for capture-side failures.
+  // Cleared on the next successful persist. Lives on DocumentStore (every
+  // write that can set it happens there); this getter preserves
+  // `editor.persistError` for existing consumers.
   get persistError(): string | null {
     return this.#documentStore.persistError;
   }
@@ -544,10 +545,10 @@ export class EditorState {
   // reflect the returned dirty/currentPath back onto `document`/`currentCapture`
   // — the two fields DocumentStore can't reach itself (see the seam comment
   // above class EditorState).
-  async #persistCurrentDocument(replaceBase = false): Promise<DocumentRecord | null> {
+  async #persistCurrentDocument(options: { replaceBase?: boolean } = {}): Promise<DocumentRecord | null> {
     const capture = this.document?.capture;
     if (!capture?.documentId) return null;
-    const saved = await this.#documentStore.persistDocument(capture, this.annotations, replaceBase);
+    const saved = await this.#documentStore.persistDocument(capture, this.annotations, options);
     if (saved) {
       const patch = recentCapturePatchForRecord(saved);
       // Deliberately does NOT patch title/width/height from `saved` — the
@@ -1450,9 +1451,10 @@ export class EditorState {
     });
   }
 
-  updateSelectedAnnotation(patch: AnnotationStylePatch, commitHistory = true) {
+  updateSelectedAnnotation(patch: AnnotationStylePatch, options: { commitHistory?: boolean } = {}) {
     const target = this.selectedAnnotation;
     if (!target) return;
+    const commitHistory = options.commitHistory ?? true;
     if (commitHistory) this.#recordHistory();
     this.annotations = this.annotations.map((annotation) => {
       if (annotation.id !== target.id) return annotation;
@@ -1682,7 +1684,7 @@ export class EditorState {
       this.activeTool = "select";
       // Crop changed the working raster: copy the new base into the document and
       // re-render its flattened current.png alongside the transformed annotations.
-      void this.#persistCurrentDocument(true);
+      void this.#persistCurrentDocument({ replaceBase: true });
       return `${capture.title} created.`;
     } catch (error) {
       return error instanceof Error ? error.message : String(error || "Crop failed.");
@@ -1838,7 +1840,7 @@ export class EditorState {
       this.#pushRecent(capture);
       this.activeTool = "select";
       this.cutBand = null;
-      void this.#persistCurrentDocument(true);
+      void this.#persistCurrentDocument({ replaceBase: true });
       return `${capture.title} created.`;
     } catch (error) {
       return error instanceof Error ? error.message : String(error || "Cut failed.");

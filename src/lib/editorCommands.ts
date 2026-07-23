@@ -3,8 +3,9 @@ import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 
 import { commands, type DocumentRecord } from "./bindings";
+import type { Result } from "./commandResult";
 
-type CommandResult<T> = Promise<{ status: "ok"; data: T } | { status: "error"; error: string }>;
+type CommandResult<T> = Promise<Result<T, string>>;
 
 // Thin adapter over the editor's Tauri commands, mirroring the role
 // `windowPickerCommands.ts` plays for the window picker: keeps `convertFileSrc`

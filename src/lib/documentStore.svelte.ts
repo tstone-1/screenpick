@@ -14,6 +14,7 @@
 // this split) reads and writes it directly.
 import { commands, type CaptureResult, type DocumentRecord } from "./bindings";
 import { saveDocument as saveDocumentIpc, toAssetUrl } from "./editorCommands";
+import { logError } from "./diagnosticsLog";
 import { renderFlattenedPng } from "./annotationRendering";
 import { deserializeAnnotations, serializeAnnotations, type Annotation, type CropRect } from "./annotations";
 
@@ -134,9 +135,10 @@ export class DocumentStore {
   recentCaptures = $state<RecentCapture[]>([]);
   // User-visible signal that the most recent document-persistence attempt
   // (create, autosave, or crop/cut re-base) failed — sanitized message; full
-  // detail always goes to console.error alongside it. Rendered as a status-bar
-  // badge (+page.svelte) next to captureActivity, which plays the same role
-  // for capture-side failures. Cleared on the next successful persist.
+  // detail always goes to the diagnostics log (console + the on-disk log
+  // file, via logError) alongside it. Rendered as a status-bar badge
+  // (+page.svelte) next to captureActivity, which plays the same role for
+  // capture-side failures. Cleared on the next successful persist.
   persistError = $state<string | null>(null);
 
   // Session workspaces (annotations + view + undo/redo) for documents opened this
@@ -300,12 +302,28 @@ export class DocumentStore {
   // Delete a document's persisted files + session caches (workspace, seeded
   // layer). Does NOT touch `recentCaptures` — callers handle the strip so they
   // can batch (retention) or branch on the open document (close).
+  //
+  // Fire-and-forget from the caller's perspective (retention evicts a whole
+  // batch synchronously; close-document doesn't block on disk I/O either), but
+  // the result is still checked (N1 in the 2026-07 code review): an ignored
+  // failure here silently resurrects a discarded document at next launch,
+  // since nothing else would ever retry or even notice the delete didn't
+  // happen.
   discardDocument(capture: RecentCapture): void {
     this.#captureWorkspaces.delete(workspaceKeyFor(capture));
     if (capture.documentId) {
-      this.#seededAnnotations.delete(capture.documentId);
-      this.#lastPersistedBasePath.delete(capture.documentId);
-      void deleteDocumentIpc(capture.documentId);
+      const id = capture.documentId;
+      this.#seededAnnotations.delete(id);
+      this.#lastPersistedBasePath.delete(id);
+      deleteDocumentIpc(id)
+        .then((result) => {
+          if (result.status !== "ok") {
+            logError(`Failed to delete discarded document ${id}:`, result.error);
+          }
+        })
+        .catch((error) => {
+          logError(`Failed to delete discarded document ${id}:`, error);
+        });
     }
   }
 
@@ -366,7 +384,7 @@ export class DocumentStore {
       if (result.status !== "ok") return null;
       return result.data;
     } catch (error) {
-      console.error("Failed to persist capture as a document:", error);
+      logError("Failed to persist capture as a document:", error);
       this.persistError = "Could not save this screenshot as a document.";
       return null;
     }
@@ -384,31 +402,46 @@ export class DocumentStore {
       if (result.status !== "ok") return;
       const records = result.data;
       this.clearSeededAnnotations();
-      this.recentCaptures = records.map((record) => {
+      const recordDerived = records.map((record) => {
         this.seedAnnotations(record.id, deserializeAnnotations(record.annotations));
         return this.recentFromRecord(record);
       });
+      // Merge, don't replace (N3 in the 2026-07 code review): a hotkey capture
+      // that completes while this load is still in flight (e.g. `listDocuments`
+      // is slow, or create_document raced ahead of it) has already pushed an
+      // in-memory entry onto `recentCaptures` — the disk snapshot predates it,
+      // so wholesale-replacing the array would silently drop its strip entry.
+      // Disk records win for any key they carry (they're the authoritative,
+      // freshly-seeded state); an in-memory entry survives only for a key no
+      // record has. It's kept ahead of the disk-derived list — the same
+      // position `pushRecent`'s MRU-newest-first prepend would have put it,
+      // since nothing on disk is newer than a capture still being ingested.
+      const recordKeys = new Set(records.map((record) => record.id));
+      const inMemoryOnly = this.recentCaptures.filter(
+        (entry) => !entry.documentId || !recordKeys.has(entry.documentId)
+      );
+      this.recentCaptures = [...inMemoryOnly, ...recordDerived];
       // Apply the clean-document retention policy to the restored strip (the
       // dirty flag is persisted, so dirty docs are correctly retained here).
       this.enforceRetention(openCapture, currentCapture);
     } catch (error) {
-      console.error("Failed to load persisted documents:", error);
+      logError("Failed to load persisted documents:", error);
       this.persistError = "Could not load your saved screenshots.";
     }
   }
 
   // Write `capture`'s annotation layer + a freshly flattened current.png to the
   // store, and reflect the returned dirty/currentPath back onto `recentCaptures`.
-  // `replaceBase` additionally copies the (new) working raster into the document
-  // — used after crop/cut, which change the base image.
+  // `options.replaceBase` additionally copies the (new) working raster into the
+  // document — used after crop/cut, which change the base image.
   //
-  // `replaceBase` alone is not trusted as the sole signal for whether a
+  // `options.replaceBase` alone is not trusted as the sole signal for whether a
   // re-base is needed. `capture.path` can legitimately diverge from the
   // document's on-disk base.png without the caller asking for a re-base —
   // undo/redo restores an old (or, on redo, a newer) capture via EditorState's
-  // #restore, changing `path`/dims without going through the replaceBase=true
-  // call that produced them. Comparing against #lastPersistedBasePath catches
-  // that drift regardless of which caller triggered this save, so the
+  // #restore, changing `path`/dims without going through the `{ replaceBase:
+  // true }` call that produced them. Comparing against #lastPersistedBasePath
+  // catches that drift regardless of which caller triggered this save, so the
   // annotation layer/flattened render below is always written against the
   // raster actually on disk.
   //
@@ -421,12 +454,12 @@ export class DocumentStore {
   async persistDocument(
     capture: RecentCapture,
     annotations: Annotation[],
-    replaceBase = false
+    options: { replaceBase?: boolean } = {}
   ): Promise<DocumentRecord | null> {
     if (!capture.documentId) return null;
     const id = capture.documentId;
     const dirty = annotations.length > 0;
-    const needsRebase = replaceBase || this.#lastPersistedBasePath.get(id) !== capture.path;
+    const needsRebase = options.replaceBase || this.#lastPersistedBasePath.get(id) !== capture.path;
     try {
       if (needsRebase) {
         const based = await replaceDocumentBaseIpc(
@@ -452,7 +485,7 @@ export class DocumentStore {
       this.persistError = null;
       return saved.data;
     } catch (error) {
-      console.error("Failed to persist document:", error);
+      logError("Failed to persist document:", error);
       this.persistError =
         error instanceof Error ? error.message : "Could not save this screenshot's changes.";
       return null;

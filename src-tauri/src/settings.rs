@@ -10,6 +10,11 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{AppHandle, Manager};
 
+// document_store is the AppHandle-free, unit-testable home for the atomic-write
+// primitive (see the code review that unified it with this module's former
+// write_settings_atomically); importing it here is fine even though this
+// module is not itself part of the pure-module family.
+use crate::document_store;
 use crate::path_utils::strip_verbatim_prefix;
 
 /// Current on-disk schema for `capture-settings.json`. Bump when an
@@ -72,7 +77,9 @@ impl Default for CaptureSettings {
 
 pub(crate) struct SettingsState {
     settings: Mutex<CaptureSettings>,
-    config_path: Mutex<PathBuf>,
+    // Resolved once in `load` and never mutated afterwards, so this doesn't need
+    // interior mutability like the fields above.
+    config_path: PathBuf,
     trusted_capture_files: Mutex<Vec<PathBuf>>,
 }
 
@@ -91,7 +98,7 @@ impl SettingsState {
         Ok((
             Self {
                 settings: Mutex::new(settings),
-                config_path: Mutex::new(config_path),
+                config_path,
                 trusted_capture_files: Mutex::new(Vec::new()),
             },
             recovery,
@@ -154,41 +161,11 @@ impl SettingsState {
     }
 
     fn save(&self, settings: &CaptureSettings) -> Result<(), String> {
-        let config_path = self
-            .config_path
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone();
-        if let Some(parent) = config_path.parent() {
+        if let Some(parent) = self.config_path.parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let json = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
-        write_settings_atomically(&config_path, json.as_bytes()).map_err(|e| e.to_string())
-    }
-}
-
-fn write_settings_atomically(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("capture-settings.json");
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let tmp = parent.join(format!(".{file_name}.tmp-{}-{ts}", std::process::id()));
-    fs::write(&tmp, bytes)?;
-    match fs::rename(&tmp, path) {
-        Ok(()) => Ok(()),
-        Err(err) if cfg!(windows) && err.kind() == std::io::ErrorKind::AlreadyExists => {
-            fs::remove_file(path)?;
-            fs::rename(&tmp, path)
-        }
-        Err(err) => {
-            let _ = fs::remove_file(&tmp);
-            Err(err)
-        }
+        document_store::write_atomic(&self.config_path, json.as_bytes())
     }
 }
 

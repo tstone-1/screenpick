@@ -69,7 +69,7 @@ Click **More info → Run anyway** to install.
 
 ## Build from source
 
-Prerequisites: [Node.js](https://nodejs.org/) (with npm) and the
+Prerequisites: [Node.js](https://nodejs.org/) 24+ (with npm) and the
 [Rust toolchain](https://www.rust-lang.org/tools/install) via `rustup`, plus your
 platform's [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
 
