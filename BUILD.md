@@ -171,8 +171,15 @@ gh auth switch --user tstone-1
 git add -A
 git commit -m "Release vYY.M.MICRO: brief description"
 git tag vYY.M.MICRO
-git push origin main --tags
+git push origin main
+git push origin vYY.M.MICRO
 ```
+
+> Push the release tag **by name** — never `git push --tags` (or `--all`/`--mirror`).
+> A clone can carry local tags that were deliberately never published (e.g. tags
+> from before the public-history squash, which point into the retired private
+> history); `--tags` would push them all, and pushed tags drag their entire
+> commit graph to the public repo with them.
 
 **Release hygiene checks:**
 - [ ] `git describe --tags --exact-match` matches the version files.
@@ -314,7 +321,7 @@ cargo check --manifest-path src-tauri/Cargo.toml   # refresh Cargo.lock
 npx tauri build --target universal-apple-darwin   # local smoke build (unsigned, ad-hoc)
 gh auth switch --user tstone-1
 git add -A && git commit -m "Release vYY.M.MICRO: description"
-git tag vYY.M.MICRO && git push origin main --tags
+git tag vYY.M.MICRO && git push origin main && git push origin vYY.M.MICRO   # tag by name, never --tags
 git describe --tags --exact-match
 # Pushing the tag triggers release.yml, which builds macOS + Windows and opens a
 # DRAFT release. Review it, then publish: gh release edit vYY.M.MICRO --draft=false
