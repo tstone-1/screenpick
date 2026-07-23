@@ -72,7 +72,7 @@
     {label}
     value={color}
     onchange={(nextColor, commitHistory) =>
-      editor.updateSelectedAnnotation({ color: nextColor }, commitHistory)}
+      editor.updateSelectedAnnotation({ color: nextColor }, { commitHistory })}
     ongesturestart={() => editor.beginSelectionEdit()}
     ongestureend={() => editor.endSelectionEdit()}
   />
@@ -226,7 +226,7 @@
           PEN_WIDTH_MIN,
           PEN_WIDTH_MAX,
           1,
-          (value) => editor.updateSelectedAnnotation({ width: value }, false)
+          (value) => editor.updateSelectedAnnotation({ width: value }, { commitHistory: false })
         )}
 
         <label class="checkbox-row">
@@ -235,7 +235,7 @@
             type="checkbox"
             checked={editor.selectedAnnotation.fill}
             onchange={(event) =>
-              editor.updateSelectedAnnotation({ fill: event.currentTarget.checked }, true)}
+              editor.updateSelectedAnnotation({ fill: event.currentTarget.checked }, { commitHistory: true })}
           />
         </label>
 
@@ -247,7 +247,7 @@
             SHAPE_FILL_OPACITY_MIN,
             SHAPE_FILL_OPACITY_MAX,
             SHAPE_FILL_OPACITY_STEP,
-            (value) => editor.updateSelectedAnnotation({ fillOpacity: value }, false)
+            (value) => editor.updateSelectedAnnotation({ fillOpacity: value }, { commitHistory: false })
           )}
         {/if}
 
@@ -260,7 +260,7 @@
           PEN_WIDTH_MIN,
           PEN_WIDTH_MAX,
           1,
-          (value) => editor.updateSelectedAnnotation({ width: value }, false)
+          (value) => editor.updateSelectedAnnotation({ width: value }, { commitHistory: false })
         )}
 
       {:else if editor.selectedAnnotation.kind === "highlight"}
@@ -272,7 +272,7 @@
           HIGHLIGHT_OPACITY_MIN,
           HIGHLIGHT_OPACITY_MAX,
           HIGHLIGHT_OPACITY_STEP,
-          (value) => editor.updateSelectedAnnotation({ opacity: value }, false)
+          (value) => editor.updateSelectedAnnotation({ opacity: value }, { commitHistory: false })
         )}
 
       {:else if editor.selectedAnnotation.kind === "text"}
@@ -286,7 +286,7 @@
           TEXT_FONT_SIZE_MIN,
           TEXT_FONT_SIZE_MAX,
           1,
-          (value) => editor.updateSelectedAnnotation({ fontSize: value }, false)
+          (value) => editor.updateSelectedAnnotation({ fontSize: value }, { commitHistory: false })
         )}
         <label class="checkbox-row">
           <span>Background</span>
@@ -294,7 +294,7 @@
             type="checkbox"
             checked={editor.selectedAnnotation.background}
             onchange={(event) =>
-              editor.updateSelectedAnnotation({ background: event.currentTarget.checked }, true)}
+              editor.updateSelectedAnnotation({ background: event.currentTarget.checked }, { commitHistory: true })}
           />
         </label>
         {#if editor.selectedAnnotation.background}
@@ -305,7 +305,7 @@
             TEXT_BACKGROUND_OPACITY_MIN,
             TEXT_BACKGROUND_OPACITY_MAX,
             TEXT_BACKGROUND_OPACITY_STEP,
-            (value) => editor.updateSelectedAnnotation({ backgroundOpacity: value }, false)
+            (value) => editor.updateSelectedAnnotation({ backgroundOpacity: value }, { commitHistory: false })
           )}
         {/if}
 
@@ -317,7 +317,7 @@
           BLUR_RADIUS_MIN,
           BLUR_RADIUS_MAX,
           1,
-          (value) => editor.updateSelectedAnnotation({ radius: value }, false)
+          (value) => editor.updateSelectedAnnotation({ radius: value }, { commitHistory: false })
         )}
       {/if}
 

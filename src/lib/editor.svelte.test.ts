@@ -271,10 +271,10 @@ describe("EditorState", () => {
     state.annotations = [shape];
     state.selectedAnnotationId = shape.id;
 
-    state.updateSelectedAnnotation({ fill: true }, false);
+    state.updateSelectedAnnotation({ fill: true }, { commitHistory: false });
     expect(state.historyPast).toHaveLength(0);
 
-    state.updateSelectedAnnotation({ width: 6 }, true);
+    state.updateSelectedAnnotation({ width: 6 }, { commitHistory: true });
     expect(state.historyPast).toHaveLength(1);
   });
 
@@ -286,9 +286,9 @@ describe("EditorState", () => {
     state.selectedAnnotationId = shape.id;
 
     state.beginSelectionEdit();
-    state.updateSelectedAnnotation({ fillOpacity: 0.3 }, false);
-    state.updateSelectedAnnotation({ fillOpacity: 0.4 }, false);
-    state.updateSelectedAnnotation({ fillOpacity: 0.5 }, false);
+    state.updateSelectedAnnotation({ fillOpacity: 0.3 }, { commitHistory: false });
+    state.updateSelectedAnnotation({ fillOpacity: 0.4 }, { commitHistory: false });
+    state.updateSelectedAnnotation({ fillOpacity: 0.5 }, { commitHistory: false });
     state.endSelectionEdit();
 
     expect(state.historyPast).toHaveLength(1);
@@ -489,9 +489,9 @@ describe("EditorState", () => {
     state.selectedAnnotationId = arrow.id;
 
     state.beginSelectionEdit();
-    state.updateSelectedAnnotation({ width: 4 }, false);
-    state.updateSelectedAnnotation({ width: 6 }, false);
-    state.updateSelectedAnnotation({ width: 8 }, false);
+    state.updateSelectedAnnotation({ width: 4 }, { commitHistory: false });
+    state.updateSelectedAnnotation({ width: 6 }, { commitHistory: false });
+    state.updateSelectedAnnotation({ width: 8 }, { commitHistory: false });
     state.endSelectionEdit();
 
     expect(state.historyPast).toHaveLength(1);
@@ -510,10 +510,10 @@ describe("EditorState", () => {
     state.selectedAnnotationId = arrow.id;
 
     state.beginSelectionEdit();
-    state.updateSelectedAnnotation({ width: 4 }, false);
+    state.updateSelectedAnnotation({ width: 4 }, { commitHistory: false });
     state.endSelectionEdit();
     state.beginSelectionEdit();
-    state.updateSelectedAnnotation({ width: 6 }, false);
+    state.updateSelectedAnnotation({ width: 6 }, { commitHistory: false });
     state.endSelectionEdit();
 
     expect(state.historyPast).toHaveLength(2);

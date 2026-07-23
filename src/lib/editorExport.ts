@@ -26,6 +26,7 @@ import {
   startFileDrag as startFileDragIpc
 } from "./editorCommands";
 import { renderFlattenedPng } from "./annotationRendering";
+import { logWarn } from "./diagnosticsLog";
 import type { Annotation } from "./annotations";
 import type { RecentCapture } from "./documentStore.svelte";
 
@@ -285,7 +286,7 @@ export function dragCaptures(captures: RecentCapture[]): void {
   // surface it: a failed drag is a no-op gesture (nothing drops), and there's
   // no activity-bar context for a drag the way there is for a click action.
   void startFileDragIpc(paths, paths[0]).catch((error) => {
-    console.warn("drag-out failed to start", error);
+    logWarn("drag-out failed to start", error);
   });
 }
 

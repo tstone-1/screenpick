@@ -19,8 +19,46 @@ permissions:
   contents: write
 
 jobs:
+  # Gate: a tag on a broken commit must not produce release artifacts. Runs
+  # the same frontend/Rust test invocations as ci.yml on the two platforms
+  # the release job actually builds on.
+  test:
+    name: Test (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos-latest, windows-2025]
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install JS deps
+        run: npm ci
+
+      - name: Vitest unit tests
+        run: npm run test:unit
+
+      - name: Rust unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+
   release:
     name: ${{ matrix.label }}
+    needs: test
     strategy:
       fail-fast: false
       matrix:

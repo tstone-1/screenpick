@@ -4383,7 +4383,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "screenpick"
-version = "26.7.4"
+version = "26.7.5"
 dependencies = [
  "alloc-stdlib",
  "arboard",
@@ -4404,6 +4404,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-specta",
  "time",
+ "tokio",
  "xcap",
 ]
 

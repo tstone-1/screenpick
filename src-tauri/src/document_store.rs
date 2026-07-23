@@ -129,8 +129,12 @@ pub(crate) fn is_valid_doc_id(id: &str) -> bool {
 /// tmp name), `sync_all` before rename (so a power loss can't leave a
 /// zero-length/half-written target on NTFS — the exact failure mode that used
 /// to be able to feed the corrupt-manifest recovery path below), then rename
-/// over the target. The tmp file is removed on any failure so a write that
-/// doesn't complete doesn't litter the directory forever.
+/// over the target — retrying once on Windows if the destination already
+/// exists (see `rename_replacing`). The tmp file is removed on any failure so a
+/// write that doesn't complete doesn't litter the directory forever. This is
+/// the single atomic-write primitive for the app (settings.rs calls into this
+/// pure module rather than keeping its own copy — see the code review that
+/// unified them).
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let file_name = path
@@ -151,11 +155,29 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
         let _ = fs::remove_file(&tmp);
         return Err(err.to_string());
     }
-    if let Err(err) = fs::rename(&tmp, path) {
+    if let Err(err) = rename_replacing(&tmp, path) {
         let _ = fs::remove_file(&tmp);
         return Err(err.to_string());
     }
     Ok(())
+}
+
+/// Rename `tmp` onto `path`, retrying once on Windows when the destination
+/// already exists. Unix `rename` always replaces an existing destination, but
+/// on Windows it can fail with `AlreadyExists`; removing the destination and
+/// retrying resolves it. The narrow window this opens (destination briefly
+/// absent) is safe here because `tmp` has already been durably written by the
+/// caller, so the retry can only ever land the new content, never a
+/// half-written one.
+fn rename_replacing(tmp: &Path, path: &Path) -> std::io::Result<()> {
+    match fs::rename(tmp, path) {
+        Ok(()) => Ok(()),
+        Err(err) if cfg!(windows) && err.kind() == std::io::ErrorKind::AlreadyExists => {
+            fs::remove_file(path)?;
+            fs::rename(tmp, path)
+        }
+        Err(err) => Err(err),
+    }
 }
 
 /// Serialize `manifest` and write it atomically to `path`.
@@ -315,6 +337,11 @@ mod tests {
         assert_eq!(json["annotations"], "[]");
     }
 
+    // Also covers the merged Windows `AlreadyExists`-retry path in
+    // `rename_replacing`: whichever way the OS's `rename` handles overwriting
+    // an existing destination (direct replace, or the remove-and-retry
+    // fallback), the observable contract asserted here — second write wins,
+    // no leftover tmp file — must hold either way.
     #[test]
     fn write_atomic_roundtrips_and_overwrites() {
         let dir = temp_dir_for("write-atomic-roundtrip");

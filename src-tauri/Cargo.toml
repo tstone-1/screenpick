@@ -1,8 +1,9 @@
 [package]
 name = "screenpick"
-version = "26.7.4"
+version = "26.7.5"
 description = "Cross-platform screenshot and annotation tool for macOS and Windows."
 authors = ["tstone-1"]
+license = "MIT"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -61,5 +62,9 @@ alloc-stdlib = "=0.2.2"
 specta = "=2.0.0-rc.25"
 specta-typescript = "=0.0.12"
 tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
+# Direct dep only for tokio::time::sleep inside tauri::async_runtime::spawn tasks
+# (a non-blocking wait must not park a tokio worker thread via std::thread::sleep).
+# Tauri already ships tokio transitively, so this adds no real weight.
+tokio = { version = "1", features = ["time"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-core-graphics = "0.3.2"

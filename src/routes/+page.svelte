@@ -517,7 +517,8 @@
           <button
             type="button"
             class="recent-item"
-            class:active={editor.currentCapture?.path === recent.path}
+            class:active={editor.currentCapture != null &&
+              recentKey(editor.currentCapture) === recentKey(recent)}
             class:selected={isRecentSelected(recent)}
             draggable="true"
             onclick={(event) => handleRecentClick(event, recent, recentIndex)}

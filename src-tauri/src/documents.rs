@@ -29,11 +29,23 @@
 //! into `document_store` so they're unit-testable on Windows (see that
 //! module's doc comment for why this module itself is excluded from Windows
 //! `cargo test` builds).
+//!
+//! Manifest access (`read_manifest` -> mutate -> `write_manifest`) has no
+//! synchronization of its own; every command below that does a manifest
+//! read-modify-write acquires `MANIFEST_LOCK` across the whole span. Today
+//! that's redundant with Tauri 2 serializing non-async commands on the IPC
+//! thread, but that serialization is an implementation detail we don't
+//! control, not a contract these commands are written against — the lock
+//! makes correctness independent of it, so these commands stay safe if any of
+//! them is ever made async.
 
 use std::{
     fs,
     path::PathBuf,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex,
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -41,6 +53,9 @@ use tauri::{AppHandle, Manager};
 
 use crate::capture::{error_message, verify_capture_source};
 use crate::document_store::{self, is_valid_doc_id, DocumentMeta, DocumentRecord};
+
+/// Guards every manifest read-modify-write span (see the module doc comment).
+static MANIFEST_LOCK: Mutex<()> = Mutex::new(());
 
 /// Encoded-PNG size ceiling for a document's `current.png`, mirroring the
 /// clipboard/export caps so a malformed payload can't drive a runaway write.
@@ -243,9 +258,13 @@ pub(crate) fn create_document(
         dirty: false,
         base_file: None,
     };
+    let guard = MANIFEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut manifest = read_manifest(&app);
     manifest.push(meta.clone());
     write_manifest(&app, &manifest)?;
+    drop(guard);
     record_for(&app, meta)
 }
 
@@ -281,6 +300,9 @@ pub(crate) fn replace_document_base(
     );
     fs::copy(&canonical_source, dir.join(&base_file)).map_err(error_message)?;
 
+    let guard = MANIFEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut manifest = read_manifest(&app);
     let meta = manifest
         .iter_mut()
@@ -293,6 +315,7 @@ pub(crate) fn replace_document_base(
     meta.base_file = Some(base_file);
     let updated = meta.clone();
     write_manifest(&app, &manifest)?;
+    drop(guard);
     record_for(&app, updated)
 }
 
@@ -318,6 +341,9 @@ pub(crate) fn save_document(
     document_store::write_atomic(&dir.join("annotations.json"), annotations.as_bytes())?;
     document_store::write_atomic(&dir.join("current.png"), &current_png)?;
 
+    let guard = MANIFEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut manifest = read_manifest(&app);
     let meta = manifest
         .iter_mut()
@@ -327,6 +353,7 @@ pub(crate) fn save_document(
     meta.updated_at = now_millis();
     let updated = meta.clone();
     write_manifest(&app, &manifest)?;
+    drop(guard);
     record_for(&app, updated)
 }
 
@@ -340,6 +367,9 @@ pub(crate) fn delete_document(app: AppHandle, id: String) -> Result<(), String> 
     if dir.is_dir() {
         fs::remove_dir_all(&dir).map_err(error_message)?;
     }
+    let _guard = MANIFEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut manifest = read_manifest(&app);
     manifest.retain(|meta| meta.id != id);
     write_manifest(&app, &manifest)

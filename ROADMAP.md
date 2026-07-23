@@ -18,7 +18,7 @@ _(nothing currently in flight — move items here from the priority sections as 
 ## P0 — Ship-blocking
 
 ### 1. Package and release workflow
-ScreenPick has no published build; the app only exists as a `tauri dev` shell on contributors' machines. Distribution must work before any other feature matters to a user.
+ScreenPick now has published builds — installers ship via tagged GitHub Releases (first cut: v26.7.4). What remains is hardening that release path, not creating it.
 
 **Decision (2026-05-30): ship unsigned.** No $99/year Apple Developer ID and no
 Windows code-signing cert for now. Builds are ad-hoc-signed so they run on Apple
@@ -61,7 +61,7 @@ with an actionable banner:
 Remaining: proactive first-run onboarding *before* the first capture attempt (today the banner appears after the first denied capture / on the startup poll), and the relaunch caveat that will disappear once signing is stable (see #1).
 
 ### 3. Auto-update channel
-Without an updater, every released version is the last version a user runs. Decide and wire this before the first release — retrofitting it later is harder.
+Without an updater, every released version is the last version a user runs. The first release (v26.7.4) shipped without one, so this is now a retrofit onto an installed base rather than a pre-launch decision — existing users will need to notice a new release and reinstall manually until this lands.
 
 - Adopt `tauri-plugin-updater`.
 - Sign update manifests with a Tauri update key (store the private key in 1Password, public key in `tauri.conf.json`).
@@ -157,10 +157,14 @@ Imgur, S3, or a generic POST endpoint. One-click share is what makes CleanShot's
 "Copy text from this screenshot" is a high-value workflow. macOS has Vision framework (free, accurate); Windows has Windows.Media.Ocr. Per-OS implementations behind a single `commands.ocrRegion` command.
 
 ### 17. System tray / menu-bar quick access
-The main window does not need to be open to take a capture. Tray menu with capture modes, recent captures, and quit; the global shortcuts already work without the main window — the tray makes that discoverable.
+**Delivered in part.** `src-tauri/src/tray.rs` ships an always-present tray icon (Show/Quit menu, left-click restores the window) so the app is reachable without the main window open. Remaining: capture-mode entries directly on the tray menu (region/window/screen) and a recent-captures submenu — today the tray only shows/quits, so a capture still has to go through the global shortcuts or the main window.
 
 ### 18. Recent-captures persistence + management
-Currently `recentCaptures` is in-memory only (verify against `editor.svelte.ts` if implementing). Persist to disk, add pagination, search by filename, and delete-from-list.
+**Persistence and delete-from-list are done.** The document store
+(`src-tauri/src/documents.rs` + `src/lib/documentStore.svelte.ts`) persists the
+strip across restarts, with retention/eviction of clean documents, and
+`editor.closeDocument` removes an entry from the list and disk. Remaining:
+pagination and search by filename for the strip.
 
 ### 19. Color palette / swatches
 The color picker now keeps auto-recents in the `ToolProperties` panel. Remaining gap: a saved/pinned palette for colors users want to keep across sessions.

@@ -74,6 +74,13 @@ ScreenPick is an open-source cross-platform screenshot, annotation, and screen u
   failure can read 0% if it grabbed dark frame chrome). Capture a known
   GPU-composited window (Task Manager, Settings); this is how the v26.6.23
   blank-capture fix was confirmed.
+- **Post-release commits need a version bump.** A commit landing after a release
+  tag without bumping the CalVer version silently ships in the *next* build while
+  the titlebar still shows the old number. When a just-released feature "doesn't
+  work", check `git log <latest-tag>..HEAD` before debugging: if the feature
+  commit sits after the tag, the installed build simply predates it — it needs a
+  version bump + rebuild, not a code fix. The titlebar version alone never proves
+  a feature is present in the running build.
 
 ## Platform Notes
 
