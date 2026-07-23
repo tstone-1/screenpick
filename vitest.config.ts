@@ -23,6 +23,19 @@ import { defineConfig } from "vitest/config";
 // — the per-file comment is the simpler of the two for a single test suffix.
 export default defineConfig({
   plugins: [svelte()],
+  // Vite's dependency prebundling is a dev-server feature Vitest doesn't need
+  // (its module runner loads ESM/CJS deps directly), and with the `conditions:
+  // ["browser"]` override below it can't work at all: when the optimizer
+  // decides to prebundle a dependency, rolldown's injected CJS-interop runtime
+  // (`import { createRequire } from 'node:module'`) fails to resolve node
+  // builtins under browser conditions. That surfaced as a cold-start-only CI
+  // flake — "Could not resolve 'node:module' in \0rolldown/runtime.js" killed
+  // the v26.7.5 release run's test job while the same commit passed ci.yml and
+  // every warm local run. Turning discovery off makes startup deterministic.
+  optimizeDeps: {
+    noDiscovery: true,
+    include: []
+  },
   resolve: {
     // Without the SvelteKit plugin (deliberately skipped above), `$lib` isn't
     // resolved automatically — components under test import it directly
