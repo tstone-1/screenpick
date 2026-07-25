@@ -4,8 +4,13 @@
   import { capture } from "$lib/captureOrchestration.svelte";
   import { unlockCaptureSound } from "$lib/captureSound";
   import { acceleratorFromKeyboardEvent } from "$lib/shortcutRecording";
+  import { update } from "$lib/updateState.svelte";
 
   let recordingShortcut = $state<string | null>(null);
+  // Resolved from the backend (see UpdateState.loadTransition); null until it
+  // lands, and on a failed load, so the row degrades to a bare "Version" label
+  // rather than printing "Version null".
+  const version = $derived(update.currentVersion);
 
   function shortcutSlot(modeId: string, index: number) {
     return `${modeId}:${index}`;
@@ -118,6 +123,49 @@
       <button type="button" class="quit-button" onclick={() => void capture.quitApp()}>
         Quit ScreenPick
       </button>
+    </div>
+  {/if}
+
+  <div class="settings-row">
+    <span class="setting-label">Check for updates at startup</span>
+    <button
+      type="button"
+      class="toggle-switch"
+      class:active={capture.settings.checkForUpdatesOnStartup}
+      onclick={() => void capture.toggleSetting("checkForUpdatesOnStartup")}
+      role="switch"
+      aria-label={capture.settings.checkForUpdatesOnStartup
+        ? "Disable update check at startup"
+        : "Enable update check at startup"}
+      aria-checked={capture.settings.checkForUpdatesOnStartup}
+    >
+      <span class="toggle-track"></span>
+    </button>
+  </div>
+
+  <div class="settings-row">
+    <span class="setting-label">
+      {#if version}
+        Version {version}
+      {:else}
+        Version
+      {/if}
+    </span>
+    <button
+      type="button"
+      class="check-updates-button"
+      disabled={update.busy}
+      onclick={() => void update.check("manual")}
+    >
+      {update.busy ? "Checking..." : "Check for updates"}
+    </button>
+  </div>
+
+  {#if update.phase.kind === "upToDate" || update.phase.kind === "error"}
+    <div class="settings-row">
+      <span class="update-result">
+        {update.phase.kind === "upToDate" ? "ScreenPick is up to date." : update.phase.message}
+      </span>
     </div>
   {/if}
 
@@ -419,6 +467,33 @@
     color: #ffffff;
     background: #b42318;
     border-color: #b42318;
+  }
+
+  .check-updates-button {
+    min-height: 30px;
+    padding: 5px 10px;
+    color: #1c7c6d;
+    background: rgba(28, 124, 109, 0.08);
+    border: 1px solid rgba(28, 124, 109, 0.3);
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .check-updates-button:hover:not(:disabled) {
+    color: #ffffff;
+    background: #1c7c6d;
+    border-color: #1c7c6d;
+  }
+
+  .check-updates-button:disabled {
+    opacity: 0.6;
+  }
+
+  .update-result {
+    color: #5b6673;
+    font-size: 11px;
+    line-height: 16px;
   }
 
   .reset-shortcuts {

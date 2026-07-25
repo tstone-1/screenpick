@@ -6,7 +6,10 @@ use tauri::{
     AppHandle,
 };
 
+use tauri_specta::Event;
+
 use crate::capture::restore_main_window;
+use crate::events::UpdateCheckRequested;
 
 // Stable id so a re-run of setup can't leave two icons behind.
 const TRAY_ID: &str = "main-tray";
@@ -53,9 +56,16 @@ fn try_build(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("no default window icon available for the tray")?;
 
     let show = MenuItem::with_id(app, "show", "Show ScreenPick", true, None::<&str>)?;
+    let check_updates = MenuItem::with_id(
+        app,
+        "check-updates",
+        "Check for Updates...",
+        true,
+        None::<&str>,
+    )?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit ScreenPick", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &separator, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &check_updates, &separator, &quit])?;
 
     #[allow(unused_mut)]
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
@@ -66,6 +76,15 @@ fn try_build(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => restore_main_window(app),
+            "check-updates" => {
+                // Show the window first: the check reports itself through the
+                // in-app banner, so running it against a hidden window would
+                // look like the menu item did nothing.
+                restore_main_window(app);
+                if let Err(err) = UpdateCheckRequested.emit(app) {
+                    log::warn!("failed to emit update check request: {err}");
+                }
+            }
             "quit" => app.exit(0),
             _ => {}
         })

@@ -67,6 +67,31 @@ launches normally with a double-click.
 SmartScreen shows a **"Windows protected your PC"** dialog for unsigned apps.
 Click **More info → Run anyway** to install.
 
+## Updates
+
+From **26.7.6** onward ScreenPick updates itself. It checks for a new version
+shortly after launch, and offers it in a banner with an **Install and restart**
+button. You can also check on demand from **Settings → Check for updates** or
+the tray menu.
+
+Every update is cryptographically signed, and ScreenPick verifies that
+signature before installing — so an update can only come from this project,
+even though the app itself ships unsigned.
+
+- **Turn it off:** Settings → *Check for updates at startup*. Manual checks
+  still work. The automatic check contacts GitHub, which is the only network
+  request ScreenPick makes.
+- **Installed a version before 26.7.6?** Those builds have no updater. Install
+  the latest release manually once; updates are automatic after that.
+- **Windows portable `.exe`:** cannot self-update — download a new one, or use
+  the installer.
+- **macOS:** because ScreenPick is unsigned, macOS treats each update as a new
+  app and drops its Screen Recording permission. After an update, if captures
+  come out black, go to **System Settings → Privacy & Security → Screen &
+  System Audio Recording**, **remove ScreenPick from the list and add it
+  again** — the switch often still looks enabled. ScreenPick shows a banner
+  explaining this when it detects the situation.
+
 ## Build from source
 
 Prerequisites: [Node.js](https://nodejs.org/) 24+ (with npm) and the

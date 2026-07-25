@@ -27,6 +27,7 @@ export const commands = {
 	getSettings: () => __TAURI_INVOKE<CaptureSettings>("get_settings"),
 	updateSettings: (settings: CaptureSettings) => typedError<CaptureSettings, string>(__TAURI_INVOKE("update_settings", { settings })),
 	resetShortcutSettings: () => typedError<CaptureSettings, string>(__TAURI_INVOKE("reset_shortcut_settings")),
+	updateTransition: () => __TAURI_INVOKE<UpdateTransition>("update_transition"),
 	autostartEnabled: () => typedError<boolean, string>(__TAURI_INVOKE("autostart_enabled")),
 	setAutostart: (enabled: boolean) => typedError<boolean, string>(__TAURI_INVOKE("set_autostart", { enabled })),
 	startRegionSelection: () => typedError<null, string>(__TAURI_INVOKE("start_region_selection")),
@@ -64,6 +65,7 @@ export const events = {
 	captureCompleted: makeEvent<CaptureCompleted>("capture-completed"),
 	captureShortcut: makeEvent<CaptureShortcut>("capture-shortcut"),
 	shortcutRegistration: makeEvent<ShortcutRegistration>("shortcut-registration"),
+	updateCheckRequested: makeEvent<UpdateCheckRequested>("update-check-requested"),
 };
 
 /* Types */
@@ -105,6 +107,8 @@ export type CaptureSettings = {
 	autoOpenEditor?: boolean,
 	bringToFrontOnHotkeyCapture?: boolean,
 	closeToTray?: boolean,
+	checkForUpdatesOnStartup?: boolean,
+	lastRunVersion?: string | null,
 	shortcutOverrides?: { [key in string]: string[] },
 };
 
@@ -141,6 +145,14 @@ export type ShortcutStatus = {
 	mode: string,
 	state: ShortcutState,
 	error: string | null,
+};
+
+export type UpdateCheckRequested = null;
+
+export type UpdateTransition = {
+	previousVersion: string | null,
+	currentVersion: string,
+	updated: boolean,
 };
 
 export type WindowBounds = {

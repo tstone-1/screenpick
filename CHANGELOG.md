@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [CalVer](https://calver.org/) `YY.M.MICRO` versioning
 (see [BUILD.md](BUILD.md#version-management)).
 
+## [26.7.6] - Unreleased
+
+### Added
+
+- **In-app updater.** ScreenPick checks GitHub Releases for a newer version,
+  verifies the download's signature, installs it and restarts. A banner offers
+  the update; a "Check for updates" button and an opt-out toggle live in
+  Settings, and the tray menu has a "Check for Updates..." item. Update
+  payloads are signed and verified before install.
+- Settings now shows the running version.
+
+### Note for existing installs
+
+Builds before 26.7.6 have no updater and cannot be reached by it — install this
+version manually, once. Updates from 26.7.6 onward are offered in-app.
+
 ## [26.7.5] - 2026-07-23
 
 ### Fixed

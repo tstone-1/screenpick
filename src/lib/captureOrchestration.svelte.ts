@@ -18,6 +18,7 @@ const defaultSettings: CaptureSettings = {
   autoOpenEditor: true,
   bringToFrontOnHotkeyCapture: false,
   closeToTray: false,
+  checkForUpdatesOnStartup: true,
   shortcutOverrides: {}
 };
 
@@ -231,6 +232,7 @@ export class CaptureOrchestration {
       | "autoOpenEditor"
       | "bringToFrontOnHotkeyCapture"
       | "closeToTray"
+      | "checkForUpdatesOnStartup"
   ) {
     const previous = this.appliedSettings;
     const next = { ...this.settings, [key]: !this.settings[key] };

@@ -5,6 +5,7 @@ mod export_validation;
 mod monitor_pairing;
 mod path_utils;
 mod shortcut_config;
+mod updates;
 
 // Windows Rust unit-test harnesses do not get Tauri's generated GUI manifest.
 // Keep pure tests runnable without linking the desktop stack that imports
@@ -55,7 +56,9 @@ mod tray;
 mod window_picker;
 
 #[cfg(not(all(test, target_os = "windows")))]
-use events::{CaptureCancelled, CaptureCompleted, CaptureShortcut, ShortcutRegistration};
+use events::{
+    CaptureCancelled, CaptureCompleted, CaptureShortcut, ShortcutRegistration, UpdateCheckRequested,
+};
 #[cfg(not(all(test, target_os = "windows")))]
 use region::RegionPickerSession;
 #[cfg(not(all(test, target_os = "windows")))]
@@ -68,6 +71,8 @@ use shortcuts::ShortcutRegistry;
 use tauri::Manager;
 #[cfg(not(all(test, target_os = "windows")))]
 use tauri_specta::{collect_commands, collect_events, Builder};
+#[cfg(not(all(test, target_os = "windows")))]
+use updates::UpdateTransition;
 #[cfg(not(all(test, target_os = "windows")))]
 use window_picker::WindowPickerSession;
 
@@ -104,6 +109,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             settings::get_settings,
             settings::update_settings,
             settings::reset_shortcut_settings,
+            settings::update_transition,
             autostart::autostart_enabled,
             autostart::set_autostart,
             region::start_region_selection,
@@ -125,6 +131,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             ShortcutRegistration,
             CaptureCompleted,
             CaptureCancelled,
+            UpdateCheckRequested,
         ])
 }
 
@@ -280,6 +287,11 @@ pub fn run() {
             Some(vec![AUTOSTART_HIDDEN_FLAG]),
         ))
         .plugin(tauri_plugin_notification::init())
+        // The updater does its HTTP work in Rust (reqwest), not the webview, so
+        // the `connect-src` CSP in tauri.conf.json deliberately says nothing
+        // about GitHub — adding it there would be cargo-culting.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(ShortcutRegistry::default())
         .manage(RegionPickerSession::default())
         .manage(ScreenPickerSession::default())
@@ -304,6 +316,22 @@ pub fn run() {
                 .flatten();
             #[cfg(desktop)]
             let settings = settings_state.get();
+
+            // Do this before `manage` hands the state away: the answer is needed
+            // once, at startup, and stashing it as its own state keeps the
+            // "did we just update?" question answerable after the settings file
+            // has already been rewritten with the new version.
+            let current_version = app.package_info().version.to_string();
+            let previous_version = settings_state
+                .record_run_version(&current_version)
+                .unwrap_or_else(|err| {
+                    // A failed write is not worth blocking startup over — the
+                    // only consequence is the post-update notice reappearing on
+                    // the next launch.
+                    log::warn!("failed to record run version: {err}");
+                    None
+                });
+            app.manage(UpdateTransition::new(previous_version, current_version));
             app.manage(settings_state);
 
             capture::seed_capture_sequence(app.handle());
