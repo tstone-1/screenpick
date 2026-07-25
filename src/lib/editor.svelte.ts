@@ -139,6 +139,24 @@ export const PEN_WIDTH_MAX = 20;
 // discarded instead of committed to history.
 const MIN_COMMITTED_ANNOTATION_PX = 4;
 
+// The annotations placed by a rectangle drag. `arrow` is excluded on purpose —
+// it is a two-point drag, not a rect (see the rectangle-tools section below).
+type RectDragAnnotation = ShapeAnnotation | HighlightAnnotation | BlurAnnotation;
+
+// What one rectangle tool has to supply to share the drag implementation: where
+// its draft lives, how to build one, and whether placing it selects it. The
+// accessors are closures rather than field names so the `$state` fields stay
+// directly reactive and the whole thing stays type-safe per annotation kind.
+type RectDragSpec<A extends RectDragAnnotation> = {
+  tool: Tool;
+  getDraft: () => A | null;
+  setDraft: (draft: A | null) => void;
+  getStart: () => Point | null;
+  setStart: (start: Point | null) => void;
+  makeDraft: (start: Point, id: number) => A;
+  selectOnPlace: boolean;
+};
+
 export const SHAPE_FILL_OPACITY_MIN = 0;
 export const SHAPE_FILL_OPACITY_MAX = 1;
 export const SHAPE_FILL_OPACITY_STEP = 0.05;
@@ -533,10 +551,18 @@ export class EditorState {
   // outgoing one's write (run while `this.document` still points at the outgoing
   // document, inside `#saveCurrentWorkspace`).
   #flushDocumentSave() {
+    void this.flushPendingSave();
+  }
+
+  // Awaitable flush, for callers that must know the write landed rather than
+  // merely that it was started — specifically the exit handshake, where the
+  // process is about to end and a fire-and-forget write would lose the race.
+  // Resolves immediately when nothing is pending.
+  async flushPendingSave(): Promise<void> {
     if (!this.#saveTimer) return;
     clearTimeout(this.#saveTimer);
     this.#saveTimer = null;
-    void this.#persistCurrentDocument();
+    await this.#persistCurrentDocument();
   }
 
   // Write the current document's annotation layer + a freshly flattened
@@ -1081,148 +1107,173 @@ export class EditorState {
     this.arrowDraft = null;
   }
 
-  startShapeDrag(event: PointerEvent) {
-    if (!this.document || this.activeTool !== "shape") return;
+  // --- Rectangle tools (shape / highlight / blur) -------------------------
+  //
+  // These three are one gesture with three payloads. They differ only in the
+  // draft they construct and whether placing one selects it; the primary-button
+  // filter, pointer capture, rect normalisation, minimum-size discard, and
+  // history recording are identical, and used to be written out three times.
+  // `arrow` deliberately does NOT participate: it is a two-point drag with a
+  // distance threshold, not a rectangle, and forcing it in here would cost more
+  // than the duplication it removes.
+
+  #shapeRectDrag(): RectDragSpec<ShapeAnnotation> {
+    return {
+      tool: "shape",
+      getDraft: () => this.shapeDraft,
+      setDraft: (draft) => {
+        this.shapeDraft = draft;
+      },
+      getStart: () => this.shapeDragStart,
+      setStart: (start) => {
+        this.shapeDragStart = start;
+      },
+      makeDraft: (start, id) => ({
+        kind: "shape",
+        id,
+        shape: this.shapeKind,
+        rect: { x: start.x, y: start.y, width: 0, height: 0 },
+        color: this.penColor,
+        width: this.penWidth,
+        fill: this.shapeFill,
+        fillOpacity: this.shapeFillOpacity
+      }),
+      selectOnPlace: true
+    };
+  }
+
+  #highlightRectDrag(): RectDragSpec<HighlightAnnotation> {
+    return {
+      tool: "highlight",
+      getDraft: () => this.highlightDraft,
+      setDraft: (draft) => {
+        this.highlightDraft = draft;
+      },
+      getStart: () => this.highlightDragStart,
+      setStart: (start) => {
+        this.highlightDragStart = start;
+      },
+      makeDraft: (start, id) => ({
+        kind: "highlight",
+        id,
+        rect: { x: start.x, y: start.y, width: 0, height: 0 },
+        color: this.penColor,
+        opacity: this.highlightOpacity
+      }),
+      // Highlighting is a repeat action — auto-selecting after each one would
+      // knock the user out of the tool between strokes.
+      selectOnPlace: false
+    };
+  }
+
+  #blurRectDrag(): RectDragSpec<BlurAnnotation> {
+    return {
+      tool: "blur",
+      getDraft: () => this.blurDraft,
+      setDraft: (draft) => {
+        this.blurDraft = draft;
+      },
+      getStart: () => this.blurDragStart,
+      setStart: (start) => {
+        this.blurDragStart = start;
+      },
+      makeDraft: (start, id) => ({
+        kind: "blur",
+        id,
+        rect: { x: start.x, y: start.y, width: 0, height: 0 },
+        radius: this.blurRadius
+      }),
+      selectOnPlace: false
+    };
+  }
+
+  #startRectDrag<A extends RectDragAnnotation>(spec: RectDragSpec<A>, event: PointerEvent) {
+    if (!this.document || this.activeTool !== spec.tool) return;
     if (event.button !== 0) return;
     const start = this.#pointInImage(event);
     if (!start) return;
     event.preventDefault();
     this.imageFrame?.setPointerCapture(event.pointerId);
-    this.shapeDragStart = start;
-    this.shapeDraft = {
-      kind: "shape",
-      id: this.#nextAnnotationId++,
-      shape: this.shapeKind,
-      rect: { x: start.x, y: start.y, width: 0, height: 0 },
-      color: this.penColor,
-      width: this.penWidth,
-      fill: this.shapeFill,
-      fillOpacity: this.shapeFillOpacity
-    };
+    spec.setStart(start);
+    spec.setDraft(spec.makeDraft(start, this.#nextAnnotationId++));
+  }
+
+  #updateRectDrag<A extends RectDragAnnotation>(spec: RectDragSpec<A>, event: PointerEvent) {
+    const draft = spec.getDraft();
+    const start = spec.getStart();
+    if (!draft || !start || this.activeTool !== spec.tool) return;
+    const point = this.#pointInImage(event);
+    if (!point) return;
+    spec.setDraft({ ...draft, rect: this.#rectFromPoints(start, point) });
+  }
+
+  #finishRectDrag<A extends RectDragAnnotation>(spec: RectDragSpec<A>, event: PointerEvent) {
+    const draft = spec.getDraft();
+    if (!draft || this.activeTool !== spec.tool) return;
+    this.imageFrame?.releasePointerCapture(event.pointerId);
+    spec.setDraft(null);
+    spec.setStart(null);
+    if (
+      draft.rect.width < MIN_COMMITTED_ANNOTATION_PX ||
+      draft.rect.height < MIN_COMMITTED_ANNOTATION_PX
+    )
+      return;
+    this.#recordHistory();
+    this.annotations = [...this.annotations, draft];
+    if (spec.selectOnPlace) this.#selectPlacedAnnotation(draft.id);
+  }
+
+  #cancelRectDrag<A extends RectDragAnnotation>(spec: RectDragSpec<A>) {
+    spec.setDraft(null);
+    spec.setStart(null);
+  }
+
+  startShapeDrag(event: PointerEvent) {
+    this.#startRectDrag(this.#shapeRectDrag(), event);
   }
 
   updateShapeDrag(event: PointerEvent) {
-    if (!this.shapeDraft || !this.shapeDragStart || this.activeTool !== "shape") return;
-    const point = this.#pointInImage(event);
-    if (!point) return;
-    this.shapeDraft = {
-      ...this.shapeDraft,
-      rect: this.#rectFromPoints(this.shapeDragStart, point)
-    };
+    this.#updateRectDrag(this.#shapeRectDrag(), event);
   }
 
   finishShapeDrag(event: PointerEvent) {
-    if (!this.shapeDraft || this.activeTool !== "shape") return;
-    this.imageFrame?.releasePointerCapture(event.pointerId);
-    const shape = this.shapeDraft;
-    this.shapeDraft = null;
-    this.shapeDragStart = null;
-    if (
-      shape.rect.width < MIN_COMMITTED_ANNOTATION_PX ||
-      shape.rect.height < MIN_COMMITTED_ANNOTATION_PX
-    )
-      return;
-    this.#recordHistory();
-    this.annotations = [...this.annotations, shape];
-    this.#selectPlacedAnnotation(shape.id);
+    this.#finishRectDrag(this.#shapeRectDrag(), event);
   }
 
   cancelShapeDrag() {
-    this.shapeDraft = null;
-    this.shapeDragStart = null;
+    this.#cancelRectDrag(this.#shapeRectDrag());
   }
 
   startHighlightDrag(event: PointerEvent) {
-    if (!this.document || this.activeTool !== "highlight") return;
-    if (event.button !== 0) return;
-    const start = this.#pointInImage(event);
-    if (!start) return;
-    event.preventDefault();
-    this.imageFrame?.setPointerCapture(event.pointerId);
-    this.highlightDragStart = start;
-    this.highlightDraft = {
-      kind: "highlight",
-      id: this.#nextAnnotationId++,
-      rect: { x: start.x, y: start.y, width: 0, height: 0 },
-      color: this.penColor,
-      opacity: this.highlightOpacity
-    };
+    this.#startRectDrag(this.#highlightRectDrag(), event);
   }
 
   updateHighlightDrag(event: PointerEvent) {
-    if (!this.highlightDraft || !this.highlightDragStart || this.activeTool !== "highlight") return;
-    const point = this.#pointInImage(event);
-    if (!point) return;
-    this.highlightDraft = {
-      ...this.highlightDraft,
-      rect: this.#rectFromPoints(this.highlightDragStart, point)
-    };
+    this.#updateRectDrag(this.#highlightRectDrag(), event);
   }
 
   finishHighlightDrag(event: PointerEvent) {
-    if (!this.highlightDraft || this.activeTool !== "highlight") return;
-    this.imageFrame?.releasePointerCapture(event.pointerId);
-    const highlight = this.highlightDraft;
-    this.highlightDraft = null;
-    this.highlightDragStart = null;
-    if (
-      highlight.rect.width < MIN_COMMITTED_ANNOTATION_PX ||
-      highlight.rect.height < MIN_COMMITTED_ANNOTATION_PX
-    )
-      return;
-    this.#recordHistory();
-    this.annotations = [...this.annotations, highlight];
+    this.#finishRectDrag(this.#highlightRectDrag(), event);
   }
 
   cancelHighlightDrag() {
-    this.highlightDraft = null;
-    this.highlightDragStart = null;
+    this.#cancelRectDrag(this.#highlightRectDrag());
   }
 
   startBlurDrag(event: PointerEvent) {
-    if (!this.document || this.activeTool !== "blur") return;
-    if (event.button !== 0) return;
-    const start = this.#pointInImage(event);
-    if (!start) return;
-    event.preventDefault();
-    this.imageFrame?.setPointerCapture(event.pointerId);
-    this.blurDragStart = start;
-    this.blurDraft = {
-      kind: "blur",
-      id: this.#nextAnnotationId++,
-      rect: { x: start.x, y: start.y, width: 0, height: 0 },
-      radius: this.blurRadius
-    };
+    this.#startRectDrag(this.#blurRectDrag(), event);
   }
 
   updateBlurDrag(event: PointerEvent) {
-    if (!this.blurDraft || !this.blurDragStart || this.activeTool !== "blur") return;
-    const point = this.#pointInImage(event);
-    if (!point) return;
-    this.blurDraft = {
-      ...this.blurDraft,
-      rect: this.#rectFromPoints(this.blurDragStart, point)
-    };
+    this.#updateRectDrag(this.#blurRectDrag(), event);
   }
 
   finishBlurDrag(event: PointerEvent) {
-    if (!this.blurDraft || this.activeTool !== "blur") return;
-    this.imageFrame?.releasePointerCapture(event.pointerId);
-    const blur = this.blurDraft;
-    this.blurDraft = null;
-    this.blurDragStart = null;
-    if (
-      blur.rect.width < MIN_COMMITTED_ANNOTATION_PX ||
-      blur.rect.height < MIN_COMMITTED_ANNOTATION_PX
-    )
-      return;
-    this.#recordHistory();
-    this.annotations = [...this.annotations, blur];
+    this.#finishRectDrag(this.#blurRectDrag(), event);
   }
 
   cancelBlurDrag() {
-    this.blurDraft = null;
-    this.blurDragStart = null;
+    this.#cancelRectDrag(this.#blurRectDrag());
   }
 
   startTextDraft(event: PointerEvent) {

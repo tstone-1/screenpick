@@ -338,6 +338,14 @@ pub(crate) fn save_document(
     if !dir.is_dir() {
         return Err("Document not found.".to_string());
     }
+    // Two atomic writes, deliberately not atomic *as a pair*. A crash between
+    // them leaves new annotations beside a stale `current.png`, and that is
+    // survivable by construction: `annotations.json` is the source of truth and
+    // the editor re-applies it over `base.png` when the document is opened,
+    // while `current.png` is only the strip's rendered thumbnail (see
+    // `list_documents`). The result is a briefly stale thumbnail, corrected by
+    // the next save — not a torn document. A real transaction here would buy
+    // nothing.
     document_store::write_atomic(&dir.join("annotations.json"), annotations.as_bytes())?;
     document_store::write_atomic(&dir.join("current.png"), &current_png)?;
 

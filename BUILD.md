@@ -3,13 +3,16 @@
 ScreenPick is a Tauri 2 (Rust) + SvelteKit 5 (TypeScript) desktop app targeting
 **macOS** (Apple Silicon + Intel) and **Windows** (x64).
 
-> **Distribution model:** ScreenPick is distributed **unsigned** — no Apple
-> Developer ID, no notarization, no Windows Authenticode cert. Builds are
-> ad-hoc-signed (`bundle.macOS.signingIdentity: "-"` in `tauri.conf.json`) so
-> they launch on Apple Silicon, but end users must bypass Gatekeeper /
-> SmartScreen on first launch. The user-facing steps live in the **Install**
-> section of [`README.md`](README.md). Signing/notarization remains deferred in
-> [`ROADMAP.md`](ROADMAP.md) under **P0 #1**.
+> **Distribution model:** **macOS release builds are signed with a Developer ID
+> identity and notarized by Apple** (since 26.7.6) — users open them normally.
+> **Windows is still unsigned**, with no Authenticode cert, so SmartScreen warns
+> on first launch; those user-facing steps live in the **Install** section of
+> [`README.md`](README.md).
+>
+> Signing is applied by CI when the Apple secrets are present. **Local builds
+> stay ad-hoc-signed** (`bundle.macOS.signingIdentity: "-"` in
+> `tauri.conf.json`) unless you export `APPLE_SIGNING_IDENTITY` yourself — see
+> [macOS code signing and notarization](#macos-code-signing-and-notarization).
 >
 > **The updater is the exception.** Update payloads *are* signed, with a
 > minisign key that is unrelated to OS code signing — see
@@ -23,8 +26,9 @@ ScreenPick is a Tauri 2 (Rust) + SvelteKit 5 (TypeScript) desktop app targeting
 - **Rust** latest stable via [rustup](https://rustup.rs/).
 - **ripgrep** (`rg`) — used by the release-checklist verification commands.
 - **macOS**: Xcode Command Line Tools (`xcode-select --install`). No signing
-  certificate is required — builds are ad-hoc-signed. For a universal binary,
-  add both Rust targets: `rustup target add aarch64-apple-darwin x86_64-apple-darwin`.
+  certificate is required for a local build — those stay ad-hoc-signed. For a
+  universal binary, add both Rust targets:
+  `rustup target add aarch64-apple-darwin x86_64-apple-darwin`.
 - **Windows**: Visual Studio Build Tools with the "Desktop development with C++"
   workload. WebView2 runtime (ships with Windows 11 and recent Windows 10).
 
@@ -195,10 +199,10 @@ title reads the new version; and the follow-up check reports no update.
 
 ## macOS code signing and notarization
 
-**Status: in progress.** Apple Developer Program enrolment (Individual, $99/yr)
-was completed 2026-07-25; the certificate and API key below are not created yet,
-so releases still ship ad-hoc-signed. Track the remaining steps in
-[ROADMAP.md](ROADMAP.md) P0 #1.
+**Status: done, 2026-07-25.** Certificate issued, notarization key created, and
+both wired into `release.yml`; verified end to end on a local universal build
+(notarization Accepted, stapled, `spctl` reports `source=Notarized Developer
+ID`). Ships from 26.7.6.
 
 The motivation is not Gatekeeper friction — it is that ad-hoc signing makes the
 macOS Screen Recording grant die on every update (ROADMAP P0 #1 has the TCC
@@ -213,22 +217,125 @@ purpose, different failure mode. See [Updater signing key](#updater-signing-key)
 
 | Thing | Where it lives | Recoverable if lost? |
 |---|---|---|
-| Developer ID Application cert + private key | this Mac's login keychain; `.p12` export in KeePass | Yes — revoke and reissue (limit 5) |
-| App Store Connect API key (`.p8`) | `~/.appstoreconnect/private_keys/`, KeePass | Yes — revoke and generate another |
+| Developer ID Application cert + private key | this Mac's login keychain; `.p12` export attached to a KeePass entry (authoritative), second copy in iCloud Drive → `Developer/signing/` | Yes — revoke and reissue (limit 5) |
+| The `.p12` export password | the same KeePass entry as the `.p12`. Inside an encrypted vault that co-location is fine; **in iCloud it is not** — iCloud is not sole-custody storage, so the password must never sit there next to the file | No — without it the `.p12` is inert |
+| App Store Connect API key (`.p8`) | `~/.appstoreconnect/private_keys/`, KeePass attachment (it is an *unencrypted* private key — it does not go in iCloud) | Yes — revoke and generate another |
 | Key ID, Issuer ID, Team ID | KeePass | Yes — readable in the portal |
+
+The identity in use is `Developer ID Application: Timo Stein (NVX72G8SJ8)`; Team ID
+`NVX72G8SJ8`, G2 sub-CA, **valid to 2031-07-26**.
+
+On expiry — or if the key is ever compromised — repeat *Setup* for a new
+certificate and update `APPLE_CERTIFICATE` / `APPLE_CERTIFICATE_PASSWORD` /
+`APPLE_SIGNING_IDENTITY`. Releases already published keep working: notarization
+tickets stay valid after the signing certificate expires, and the Team ID in the
+Designated Requirement does not change, so **the Screen Recording grant survives
+a certificate renewal** as long as the Team ID does. Renewing is not the same
+class of event as losing the updater's minisign key, which is unrecoverable.
 
 ### Setup
 
 1. **CSR** — Keychain Access → *Certificate Assistant → Request a Certificate
    From a Certificate Authority*; leave CA Email blank, choose *Saved to disk*.
 2. **Certificate** — developer.apple.com → Certificates → **+** → *Developer ID
-   Application* → upload the CSR → download the `.cer` → double-click to install
-   into the **login** keychain. Confirm with
+   Application* → profile type *G2 Sub-CA* → upload the CSR → download the
+   `.cer` → double-click to install into the **login** keychain. Confirm with
    `security find-identity -v -p codesigning`; the full
    `Developer ID Application: <Name> (TEAMID)` string is `APPLE_SIGNING_IDENTITY`.
 3. **Notarization key** — App Store Connect → Users and Access → Integrations →
    *Team Keys* → generate with the **Developer** role. The `.p8` downloads
    **once, ever**. Store at `~/.appstoreconnect/private_keys/`, `chmod 600`.
+4. **Prove the notarization credentials before relying on them** — one cheap call,
+   rather than discovering a bad Issuer ID at the end of a build:
+
+   ```sh
+   xcrun notarytool history --key ~/.appstoreconnect/private_keys/AuthKey_<KEYID>.p8 \
+     --key-id <KEYID> --issuer <ISSUER-UUID>
+   ```
+
+   `No submission history` is **success** on a fresh account — it means the call
+   authenticated. An auth failure looks nothing like it.
+
+(Prerequisite for all three: an active Apple Developer Program membership,
+Individual or Organization. The portal will not offer *Developer ID Application*
+until enrolment is fully activated, which can lag payment by a day.)
+
+> **Two import traps, both hit on 2026-07-25.** Double-clicking the `.cer` failed
+> with `Unable to import … Error: -25294` (`errSecNoSuchKeychain`) even though
+> `security default-keychain` was correctly set to `login.keychain-db`. That is a
+> Keychain Access GUI failure, not a bad certificate — import from the CLI
+> instead: `security import <file>.cer -k ~/Library/Keychains/login.keychain-db`.
+>
+> Then `find-identity -v -p codesigning` still reported **0 valid identities**,
+> while bare `find-identity` listed the identity as `CSSMERR_TP_NOT_TRUSTED` —
+> so the private key matched fine and only the chain was broken. macOS does not
+> ship the **G2 intermediate**, and without it a Developer ID cert can never
+> validate. Fetch and import it once per machine:
+> ```sh
+> curl -fsSLO https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+> security import DeveloperIDG2CA.cer -k ~/Library/Keychains/login.keychain-db
+> ```
+> Read the two commands as a pair: `-v` filtering an identity out means *chain*,
+> bare `find-identity` showing nothing at all means *missing private key*.
+
+Smoke-test the identity before trusting a release to it — signing any throwaway
+binary proves the key, the chain, and keychain access in one shot:
+
+```sh
+cp /bin/echo /tmp/signtest
+codesign --force --options runtime --timestamp -s "$APPLE_SIGNING_IDENTITY" /tmp/signtest
+codesign -dv --verbose=4 /tmp/signtest 2>&1 | grep -E 'Authority|TeamIdentifier|flags'
+```
+
+Expect three `Authority=` lines ending at `Apple Root CA` and
+`flags=0x10000(runtime)`. The first `codesign` triggers a keychain dialog —
+answer **Always Allow**, or every subsequent build blocks on the same prompt
+(and in a non-interactive build, fails).
+
+### Backing up the identity
+
+Export the identity to a `.p12` the moment it exists — a login keychain is one
+disk failure from costing a revoke-and-reissue cycle:
+
+```sh
+security export -k ~/Library/Keychains/login.keychain-db \
+  -t identities -f pkcs12 -P "$(pbpaste)" \
+  -o "$HOME/Library/Mobile Documents/com~apple~CloudDocs/Developer/signing/screenpick-devid.p12"
+```
+
+Generate the export password in KeePass, copy it, and let `"$(pbpaste)"` expand
+it — the value never appears in the command text, shell history, or an agent
+transcript. Two traps around that:
+
+- **Omitting `-P` hangs forever without a TTY.** `security export` then wants to
+  prompt for the passphrase, and under an agent tool call or any non-interactive
+  shell there is no terminal to prompt on, so it blocks until killed. Same shape
+  as the `tauri signer generate` failure. Always pass `-P`.
+- **KeePass clears the clipboard ~12s after a copy**, which is shorter than a
+  copy-then-run round trip. Start the command *first* with a short poll loop
+  waiting for the clipboard to become non-empty, then copy — don't copy and then
+  go looking for the command.
+
+Verify the backup actually restores, rather than trusting that a file appeared:
+
+```sh
+KC=/tmp/verify.keychain
+security create-keychain -p "$(openssl rand -base64 24)" "$KC"
+security import <the>.p12 -k "$KC" -P "$(pbpaste)" -A
+security find-identity "$KC"        # must list the identity, same SHA-1
+security delete-keychain "$KC"
+```
+
+> **`openssl pkcs12` reports a valid Apple `.p12` as unopenable.** Apple encrypts
+> the cert bag with 40-bit RC2 (OID `1.2.840.113549.1.12.1.6`), which OpenSSL 3.x
+> moved to the legacy provider and refuses by default — the error reads like a
+> wrong password or a corrupt file. Pass **`-legacy`**
+> (`openssl pkcs12 -legacy -in … -nokeys -noout -passin pass:…`), or use the
+> keychain-import check above, which is better evidence anyway since it exercises
+> the same Security framework path a real restore would.
+
+Then attach the `.p12` to the KeePass entry alongside its password, and clear the
+clipboard.
 
 ### Building signed locally
 
@@ -239,6 +346,23 @@ export APPLE_API_ISSUER=<ISSUER-UUID>
 export APPLE_API_KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_<KEYID>.p8"
 npx tauri build --target universal-apple-darwin
 ```
+
+**Budget real time for notarization, and keep the machine awake.** Apple's notary
+service is not fast and not predictable: the 2026-07-25 run took ~50 minutes for
+a 16 MB payload, against single-digit minutes on other days. The compile is the
+short part. `notarytool --wait` holds an open poll for the whole duration, so an
+idle-sleep partway through drops it — and on a laptop the default battery idle
+sleep can be **1 minute**. Hold a power assertion for the build's lifetime:
+
+```sh
+npx tauri build --target universal-apple-darwin &
+caffeinate -dimsu -w $!     # releases itself when the build exits
+```
+
+Note `caffeinate` does **not** defeat a lid close, only idle sleep. Once the
+payload has finished uploading (`notarytool` reports the submission id and starts
+polling) the submission survives on Apple's side regardless — a lost poll then
+costs a `stapler staple`, not a rebuild.
 
 `APPLE_SIGNING_IDENTITY` (env) **overrides** `bundle.macOS.signingIdentity` in
 `tauri.conf.json` — verified in `tauri-cli`'s `interface/rust.rs`, which reads
@@ -265,26 +389,90 @@ spctl -a -vvv -t exec "$APP"    # "source=Notarized Developer ID"
 
 Expect `Authority=Developer ID Application: …` and `flags=…(runtime)`.
 
-**Updates inherit the signature automatically.** The app bundler signs →
-notarizes → staples the `.app`, and the updater bundler tars *that* already
-stapled bundle (`updater_bundle.rs` archives the existing `.app`, it does not
-re-sign). So the `.app.tar.gz` an installed copy downloads is notarized too —
-which is what makes the TCC grant survive updates. Confirm once on the first
-signed release by extracting the tarball and running `stapler validate` on it.
+> **The bundler does NOT notarize the DMG — only the `.app` inside it.** After a
+> signed build the DMG carries a Developer ID signature but no ticket, and
+> `spctl -a -t open --context context:primary-signature <dmg>` rejects it as
+> `Unnotarized Developer ID`. Since the DMG is the thing users download, opening
+> it would still raise "Apple cannot check it for malicious software" —
+> most of the benefit lost, on an artifact that verifies clean if you only ever
+> check the `.app`. `release.yml` therefore notarizes and staples the DMG in a
+> separate step and re-uploads it over the asset `tauri-action` published
+> (`gh release upload --clobber`). Verify a release DMG with the `-t open` form
+> above, not just `-t exec` on the app.
+
+**Updates inherit the signature automatically — verified 2026-07-25.** The app
+bundler signs → notarizes → staples the `.app`, and the updater bundler tars
+*that* already stapled bundle (`updater_bundle.rs` archives the existing `.app`,
+it does not re-sign). The staple ticket lives at `Contents/CodeResources`, an
+ordinary file inside the bundle rather than an extended attribute, which is
+*why* it survives being tarred — an xattr-based ticket would not, since the Rust
+`tar` crate does not carry xattrs. Confirmed by round-tripping the stapled
+bundle: the extracted copy still passes `stapler validate` and `spctl` still
+reports `source=Notarized Developer ID`. That is what makes the TCC grant
+survive updates.
 
 ### CI
 
-Secrets on the repo, macOS leg only:
-`APPLE_CERTIFICATE` (base64 `.p12`), `APPLE_CERTIFICATE_PASSWORD`,
-`APPLE_SIGNING_IDENTITY`, `APPLE_API_KEY`, `APPLE_API_ISSUER`, and the `.p8`
-contents (decoded to a file in the workflow, with `APPLE_API_KEY_PATH` pointed
-at it). Set them with `printf '%s' … | gh secret set …` — `echo` appends a
-newline, and a trailing newline in `APPLE_CERTIFICATE_PASSWORD` surfaces as a
-wrong-password error that reads like a corrupt certificate.
+Six repo secrets, consumed by the macOS leg only:
 
-Export the vars from a step that skips them when the secrets are empty, so a
-fork without the secrets still builds ad-hoc instead of failing on an empty
-signing identity.
+| Secret | Value |
+|---|---|
+| `APPLE_CERTIFICATE` | base64 of the `.p12` (`openssl base64 -A -in …`) |
+| `APPLE_CERTIFICATE_PASSWORD` | the `.p12` export password |
+| `APPLE_SIGNING_IDENTITY` | `Developer ID Application: Timo Stein (NVX72G8SJ8)` |
+| `APPLE_API_KEY` | the Key ID, `T87S5KZQ4J` |
+| `APPLE_API_ISSUER` | the Issuer UUID |
+| `APPLE_API_KEY_P8` | the `.p8` contents; the workflow writes it to `$RUNNER_TEMP` and points `APPLE_API_KEY_PATH` at it |
+
+Set them with `printf '%s' … | gh secret set …` — `echo` appends a newline, and a
+trailing newline in `APPLE_CERTIFICATE_PASSWORD` surfaces at the *end* of a
+release build as a wrong-password error that reads like a corrupt certificate.
+Verify a candidate password against the `.p12` (`openssl pkcs12 -legacy -in … 
+-nokeys -noout -passin pass:…`) before storing it.
+
+The Tauri CLI imports the certificate itself from `APPLE_CERTIFICATE` /
+`APPLE_CERTIFICATE_PASSWORD` — no manual `security create-keychain` step, and it
+sets the key partition list so `codesign` never blocks on a prompt.
+
+> **The signing vars must be exported via `$GITHUB_ENV`, never listed in the
+> build step's `env:` block.** A fork has none of these secrets; `env:` would
+> then pass an **empty** `APPLE_SIGNING_IDENTITY`, which the CLI reads as "sign
+> with this identity" and fails on. A conditional export step leaves them
+> genuinely unset, so the CLI falls back to the ad-hoc `"-"` and the fork builds.
+
+`release.yml` ends the macOS leg with a verification step that greps for
+`Authority=Developer ID Application`, the `runtime` flag, a successful
+`stapler validate`, and `source=Notarized Developer ID` — because a skipped
+notarization exits 0 (see above), and without a gate an unnotarized release
+ships looking green.
+
+### Gotcha: local signing dies with `errSecInternalComponent`
+
+On a dev Mac, `codesign` can start failing with `errSecInternalComponent` on
+*every* signature — including a `/bin/echo` copy that signed minutes earlier —
+while `security find-identity -v -p codesigning` still reports the identity as
+valid. It is not the certificate or the chain: it is the private key's ACL. The
+earlier successes came from an interactive "Allow" that does not persist, and a
+non-interactive shell has no TTY for the prompt to reappear on, so it fails hard
+instead of asking. Grant persistent access once:
+
+```sh
+security unlock-keychain ~/Library/Keychains/login.keychain-db
+security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
+  -k "$(pbpaste)" ~/Library/Keychains/login.keychain-db
+```
+
+**Ignore that command's exit code — judge it by a test signature.** It walks
+every key in the keychain and returns non-zero if any unrelated key fails, after
+having already updated the one you care about. Confirm with a real signature and
+a timeout, so a hidden prompt shows up as a hang rather than a mystery:
+
+```sh
+perl -e 'alarm 25; exec @ARGV' codesign --force --options runtime --timestamp \
+  -s "$APPLE_SIGNING_IDENTITY" /tmp/signtest    # macOS has no `timeout(1)`
+```
+
+This does not affect CI, which builds in a fresh keychain each run.
 
 ## Release Procedure
 
@@ -294,6 +482,14 @@ signing identity.
 - [ ] `rustup update stable`
 - [ ] `cargo update --manifest-path src-tauri/Cargo.toml` — review major bumps against changelogs.
 - [ ] `npm update && npm outdated` — review remaining majors individually.
+- [ ] **Majors are a decision to put to the maintainer, not one to make silently.**
+      `npm update` / `cargo update` only move within the allowed range, so anything
+      still listed by `npm outdated` is a held-back major. Do not apply them
+      unprompted and do not quietly skip them either: for each one, say what it is,
+      what it would take, and **whether anything is actually blocking the upgrade**
+      (a breaking API in use here, a peer-dep conflict, an unported plugin) — then
+      ask whether to take it in this cycle or defer. "Two majors held back, both
+      clean, want them?" is the answer being looked for; a bare list is not.
 - [ ] `cargo audit -f src-tauri/Cargo.lock` (install: `cargo install cargo-audit`) — run from
       `src-tauri/` so it picks up `.cargo/audit.toml`. Expect a **clean exit** (only the
       pre-triaged "allowed warnings" — unmaintained gtk3-family crates, `paste`, `anyhow`
@@ -342,28 +538,22 @@ signing identity.
 npx tauri build
 ```
 
-### 3. Verify the unsigned build
+### 3. Verify the build
 
-No signing or notarization step — the bundle is ad-hoc-signed by the build.
-Sanity-check the macOS bundle:
+A plain local `npx tauri build` is **ad-hoc-signed** — `codesign -dv` shows a
+`Signature=adhoc` line, and `spctl` correctly rejects it with
+`Unnotarized Developer ID`. That is expected for a dev build and proves nothing
+about the release.
 
-```sh
-# Should report the binary is ad-hoc signed (the "Signature=adhoc" line).
-codesign -dv src-tauri/target/<target>/release/bundle/macos/ScreenPick.app
+The release artifacts are produced by `release.yml`, which signs and notarizes
+them and then gates on the result. Verify a **signed** bundle (locally with the
+env vars exported, or by downloading the release DMG) with the commands in
+[macOS code signing and notarization](#macos-code-signing-and-notarization):
+`Authority=Developer ID Application`, `stapler validate`, and `spctl` reporting
+`source=Notarized Developer ID`.
 
-# Expected to FAIL with "rejected / Unnotarized Developer ID" — that is correct
-# for an unsigned app. Distribution relies on the user's Gatekeeper bypass, not
-# on passing spctl.
-spctl -a -vv src-tauri/target/<target>/release/bundle/macos/ScreenPick.app || true
-```
-
-> Do not strip the ad-hoc signature. On Apple Silicon an unsigned (not even
-> ad-hoc) arm64 binary will be killed on launch.
-
-> Once Developer ID signing lands, this step is replaced by the verification in
-> [macOS code signing and notarization](#macos-code-signing-and-notarization) —
-> `spctl` passing becomes the expected result rather than the failure documented
-> above.
+> Do not strip the ad-hoc signature on a local build. On Apple Silicon an
+> unsigned (not even ad-hoc) arm64 binary is killed on launch.
 
 ### 4. Git Commit and Tag
 
@@ -453,8 +643,11 @@ only goes live when the release does.
       covers `tauri-action`'s generated manifest and the GitHub endpoint; the
       local recipe above cannot.
 - [ ] **macOS after that update:** captures still work, or the post-update
-      banner correctly explains the remove-and-re-add fix. Ad-hoc signing means
-      every update invalidates the Screen Recording grant (ROADMAP P0 #1).
+      banner correctly explains the remove-and-re-add fix. From 26.7.6 the
+      Developer ID identity is stable, so the grant should now *survive* an
+      update — **updating to 26.7.6 itself is the exception**, because the
+      signing identity changes on that one hop (ROADMAP P0 #1). Treat a lost
+      grant on any later update as a regression, not as expected behaviour.
 
 ## Version Management
 

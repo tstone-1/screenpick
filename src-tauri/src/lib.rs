@@ -57,7 +57,8 @@ mod window_picker;
 
 #[cfg(not(all(test, target_os = "windows")))]
 use events::{
-    CaptureCancelled, CaptureCompleted, CaptureShortcut, ShortcutRegistration, UpdateCheckRequested,
+    AppExiting, CaptureCancelled, CaptureCompleted, CaptureShortcut, ShortcutRegistration,
+    UpdateCheckRequested,
 };
 #[cfg(not(all(test, target_os = "windows")))]
 use region::RegionPickerSession;
@@ -83,11 +84,82 @@ fn app_status() -> &'static str {
     "ready"
 }
 
+// How long the shutdown handshake waits for the webview to flush pending work
+// before exiting regardless. Generous enough for a document save (which writes a
+// freshly flattened PNG), short enough that a wedged — or already destroyed —
+// webview can't make Quit feel broken.
+#[cfg(not(all(test, target_os = "windows")))]
+const EXIT_FLUSH_TIMEOUT_MS: u64 = 2_000;
+
+// False until the webview has flushed (or the timeout gave up). While false, an
+// exit request is intercepted and turned into a flush handshake; once true, exit
+// proceeds untouched — which is also what lets `finish_shutdown`'s own
+// `app.exit(0)` through the re-entrant ExitRequested it raises.
+#[cfg(not(all(test, target_os = "windows")))]
+static EXIT_CONFIRMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+// Ensures the handshake is emitted once even if several exit paths fire (e.g.
+// the user hits the window's close button and then the tray's Quit while the
+// first flush is still in flight).
+#[cfg(not(all(test, target_os = "windows")))]
+static SHUTDOWN_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+// Hold the quit and ask the frontend to flush. Without this, a debounced
+// document save (500 ms) that hasn't fired yet dies with the process, silently
+// losing the user's most recent annotation.
+#[cfg(not(all(test, target_os = "windows")))]
+fn begin_shutdown(app: &tauri::AppHandle) {
+    use std::sync::atomic::Ordering;
+    use tauri_specta::Event as _;
+
+    if SHUTDOWN_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    if AppExiting.emit(app).is_err() {
+        // Nothing is listening — the webview was never mounted, or is already
+        // gone. There is no pending write anyone can flush, so don't make the
+        // user wait out the timeout for a reply that isn't coming.
+        log::warn!("no webview to flush before exit; exiting immediately");
+        finish_shutdown(app);
+        return;
+    }
+    // Info, not debug: when a user reports "it lost my last annotation", the
+    // first question is whether the handshake ran at all, and a release build
+    // logs info and above. A silent handshake is indistinguishable from no
+    // handshake — which is exactly the ambiguity this line removes.
+    log::info!("holding exit while the frontend flushes pending work");
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(EXIT_FLUSH_TIMEOUT_MS));
+        if !EXIT_CONFIRMED.load(Ordering::SeqCst) {
+            log::warn!("exit flush did not complete within {EXIT_FLUSH_TIMEOUT_MS}ms; exiting anyway");
+            finish_shutdown(&app);
+        }
+    });
+}
+
+#[cfg(not(all(test, target_os = "windows")))]
+fn finish_shutdown(app: &tauri::AppHandle) {
+    EXIT_CONFIRMED.store(true, std::sync::atomic::Ordering::SeqCst);
+    app.exit(0);
+}
+
+// Called by the frontend once it has flushed. Releases the hold `begin_shutdown`
+// placed on the quit.
+#[cfg(not(all(test, target_os = "windows")))]
+#[tauri::command]
+#[specta::specta]
+fn confirm_exit(app: tauri::AppHandle) {
+    log::info!("frontend flushed; releasing the exit");
+    finish_shutdown(&app);
+}
+
 #[cfg(not(all(test, target_os = "windows")))]
 fn specta_builder() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new()
         .commands(collect_commands![
             app_status,
+            confirm_exit,
             capture::list_capture_modes,
             shortcuts::shortcut_status,
             shortcuts::effective_shortcut_accelerators,
@@ -132,6 +204,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             CaptureCompleted,
             CaptureCancelled,
             UpdateCheckRequested,
+            AppExiting,
         ])
 }
 
@@ -199,6 +272,17 @@ fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
             api.prevent_close();
             let _ = window.hide();
             notify_first_hide(window.app_handle());
+            return;
+        }
+        // Otherwise this close destroys the only window, which quits the app and
+        // takes the webview — and any debounced document save still sitting in
+        // its timer — with it. Hold the close instead and let the frontend flush
+        // first; `confirm_exit` performs the actual exit. Handled here rather
+        // than in ExitRequested alone because by the time that fires the webview
+        // is already gone and there is nothing left to ask.
+        if !EXIT_CONFIRMED.load(std::sync::atomic::Ordering::SeqCst) {
+            api.prevent_close();
+            begin_shutdown(window.app_handle());
         }
     }
 }
@@ -383,12 +467,24 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
-        .run(|_app, _event| {
+        .run(|app, event| {
             // On macOS, clicking the dock icon while the window is hidden to the
             // tray emits Reopen with no window to activate — bring ours back.
             #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen { .. } = _event {
-                capture::restore_main_window(_app);
+            if let tauri::RunEvent::Reopen { .. } = &event {
+                capture::restore_main_window(app);
+            }
+
+            // Covers the exit paths that never touch a window close: the tray's
+            // Quit (`app.exit(0)`) and macOS Cmd-Q. `prevent_exit` is honoured
+            // even when a code was supplied — Tauri only ignores it for a
+            // restart (tauri/src/app.rs, `prevent_exit`) — so the tray path is
+            // held here just like the close path.
+            if let tauri::RunEvent::ExitRequested { api, .. } = &event {
+                if !EXIT_CONFIRMED.load(std::sync::atomic::Ordering::SeqCst) {
+                    api.prevent_exit();
+                    begin_shutdown(app);
+                }
             }
         });
 }

@@ -35,6 +35,7 @@
   import { confirmDiscard } from "$lib/editorCommands";
   import { unlockCaptureSound } from "$lib/captureSound";
   import { update, RELEASES_URL } from "$lib/updateState.svelte";
+  import { listenForExit } from "$lib/shutdown";
   import { suppressMiddleClickAutoscroll, targetIsEditable } from "$lib/domUtils";
   import EditorStage from "$lib/EditorStage.svelte";
   import SettingsPanel from "$lib/SettingsPanel.svelte";
@@ -409,6 +410,9 @@
       () => capture.settings.checkForUpdatesOnStartup !== false
     );
     const teardownTrayChecks = update.listenForTrayChecks();
+    // Quit is held until the debounced document save has landed — without this
+    // an annotation drawn within 500ms of quitting dies with the process.
+    const teardownExit = listenForExit(() => editor.flushPendingSave());
 
     return () => {
       window.removeEventListener("keydown", handleKeydown);
@@ -419,6 +423,7 @@
       teardownCapture();
       teardownUpdateCheck();
       teardownTrayChecks();
+      teardownExit();
     };
   });
 </script>

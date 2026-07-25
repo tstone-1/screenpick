@@ -161,10 +161,16 @@ export class UpdateState {
 
     this.phase = { kind: "downloading", version: update.version, downloaded: 0, total: null };
     try {
-      await update.download((downloaded, total) => {
-        this.phase = { kind: "downloading", version: update.version, downloaded, total };
+      await update.downloadAndInstall({
+        onProgress: (downloaded, total) => {
+          this.phase = { kind: "downloading", version: update.version, downloaded, total };
+        },
+        // Fires between download and install, so the state is shown while the
+        // install is actually happening rather than after it already finished.
+        onInstalling: () => {
+          this.phase = { kind: "installing", version: update.version };
+        }
       });
-      this.phase = { kind: "installing", version: update.version };
       await relaunch();
     } catch (error) {
       logError("Update install failed", error);

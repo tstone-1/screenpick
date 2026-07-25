@@ -6,6 +6,7 @@ import * as __TAURI_EVENT from "@tauri-apps/api/event";
 /** Commands */
 export const commands = {
 	appStatus: () => __TAURI_INVOKE<string>("app_status"),
+	confirmExit: () => __TAURI_INVOKE<void>("confirm_exit"),
 	listCaptureModes: () => __TAURI_INVOKE<CaptureMode[]>("list_capture_modes"),
 	shortcutStatus: () => __TAURI_INVOKE<ShortcutStatus[]>("shortcut_status"),
 	effectiveShortcutAccelerators: () => __TAURI_INVOKE<{ [key in string]: string[] }>("effective_shortcut_accelerators"),
@@ -61,6 +62,7 @@ export const commands = {
 
 /** Events */
 export const events = {
+	appExiting: makeEvent<AppExiting>("app-exiting"),
 	captureCancelled: makeEvent<CaptureCancelled>("capture-cancelled"),
 	captureCompleted: makeEvent<CaptureCompleted>("capture-completed"),
 	captureShortcut: makeEvent<CaptureShortcut>("capture-shortcut"),
@@ -69,6 +71,8 @@ export const events = {
 };
 
 /* Types */
+export type AppExiting = null;
+
 export type CapturableMonitor = {
 	id: number,
 	name: string,
