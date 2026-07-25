@@ -500,11 +500,23 @@ This does not affect CI, which builds in a fresh keychain each run.
       release must not ship with an unreviewed red `cargo audit`.
 - [ ] `npm audit`.
 
-**Code quality:**
+**Code quality — these are the *exact* commands `ci.yml` runs.** Run them verbatim,
+not an approximation: a weaker local variant passes while CI goes red, which is
+how v26.7.6 shipped with a red `main` (the checklist omitted `cargo fmt`
+entirely, and its clippy line lacked `--all-targets -- -D warnings`).
+- [ ] `cargo fmt --manifest-path src-tauri/Cargo.toml --check` — **formatting is a
+      CI gate.** It is the cheapest one to fail and the easiest to forget after
+      hand-editing Rust; `cargo fmt` (without `--check`) fixes it.
+- [ ] `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings`
+      — note `--all-targets` (covers test code) and `-D warnings` (a warning is a
+      failure). Plain `cargo clippy` is *not* equivalent and will let a CI
+      failure through.
 - [ ] `npm run check` passes.
-- [ ] `cargo clippy --manifest-path src-tauri/Cargo.toml` is clean.
 - [ ] `npm run test` passes (frontend checks + unit + Rust tests run via `cargo test` on
       Windows).
+- [ ] `cargo test --manifest-path src-tauri/Cargo.toml --locked` — `--locked` fails
+      if `Cargo.lock` would have to change, catching a lockfile that was never
+      committed after a `cargo update`.
 - [ ] **macOS bindings drift guard — hard gate, cannot be skipped:**
       `cargo test --manifest-path src-tauri/Cargo.toml export_typescript_bindings` run on
       **macOS** (or any non-Windows box/CI runner). This is the only test that actually
