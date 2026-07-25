@@ -34,6 +34,7 @@
   import { editor, type RecentCapture, type Tool } from "$lib/editor.svelte";
   import { confirmDiscard } from "$lib/editorCommands";
   import { unlockCaptureSound } from "$lib/captureSound";
+  import { update, RELEASES_URL } from "$lib/updateState.svelte";
   import { suppressMiddleClickAutoscroll, targetIsEditable } from "$lib/domUtils";
   import EditorStage from "$lib/EditorStage.svelte";
   import SettingsPanel from "$lib/SettingsPanel.svelte";
@@ -398,6 +399,16 @@
     // opens empty; clicking a tab loads that document with its saved annotations).
     void editor.loadPersistedDocuments();
     const teardownCapture = capture.setup();
+    // Resolves the running version and whether this launch follows an update —
+    // the latter changes what the Screen Recording notice tells the user to do.
+    void update.loadTransition();
+    // Evaluated when the timer fires, not now: `capture.setup()` loads the
+    // persisted settings asynchronously, so reading the flag here would see the
+    // default and check for updates even for a user who opted out.
+    const teardownUpdateCheck = update.scheduleStartupCheck(
+      () => capture.settings.checkForUpdatesOnStartup !== false
+    );
+    const teardownTrayChecks = update.listenForTrayChecks();
 
     return () => {
       window.removeEventListener("keydown", handleKeydown);
@@ -406,6 +417,8 @@
       window.removeEventListener("keydown", maybeUnlock);
       editor.teardownResize();
       teardownCapture();
+      teardownUpdateCheck();
+      teardownTrayChecks();
     };
   });
 </script>
@@ -439,12 +452,28 @@
             <X size={14} />
           </button>
         </div>
-        <p>
-          macOS hasn't granted ScreenPick permission to record the screen, so
-          captures can't run. Enable it under Privacy &amp; Security &gt; Screen &amp;
-          System Audio Recording, then return here (relaunch ScreenPick if
-          captures still don't work).
-        </p>
+        {#if update.justUpdated}
+          <!-- Distinct copy after an update, because the fix is different and
+               the generic text sends users somewhere that looks already-correct.
+               ScreenPick is ad-hoc signed, so every release has a new code
+               signature and macOS treats it as a different app: the existing
+               entry stays switched ON while capture is denied. Toggling it does
+               nothing; the entry has to be removed and re-added. -->
+          <p>
+            ScreenPick was updated, and macOS revoked its Screen Recording
+            permission as a result. Under Privacy &amp; Security &gt; Screen &amp;
+            System Audio Recording, <strong>remove ScreenPick from the list and
+            add it again</strong> — the switch may already look enabled, but the
+            entry belongs to the previous version.
+          </p>
+        {:else}
+          <p>
+            macOS hasn't granted ScreenPick permission to record the screen, so
+            captures can't run. Enable it under Privacy &amp; Security &gt; Screen &amp;
+            System Audio Recording, then return here (relaunch ScreenPick if
+            captures still don't work).
+          </p>
+        {/if}
         <button
           type="button"
           class="notice-action"
@@ -452,6 +481,59 @@
         >
           Open Screen Recording settings
         </button>
+      </div>
+    {/if}
+
+    {#if update.showBanner}
+      <div class="update-notice" role="status">
+        <div class="notice-header">
+          <Download size={16} />
+          <span>
+            {#if update.phase.kind === "available"}
+              Version {update.phase.version} is available
+            {:else if update.phase.kind === "downloading"}
+              Downloading {update.phase.version}
+            {:else if update.phase.kind === "installing"}
+              Installing {update.phase.version}
+            {:else}
+              Update failed
+            {/if}
+          </span>
+          <button
+            type="button"
+            aria-label="Dismiss update notice"
+            onclick={() => update.dismiss()}
+          >
+            <X size={14} />
+          </button>
+        </div>
+
+        {#if update.phase.kind === "available"}
+          <button
+            type="button"
+            class="notice-action"
+            onclick={() => void update.installAndRestart()}
+          >
+            Install and restart
+          </button>
+          <a class="notice-link" href={RELEASES_URL} target="_blank" rel="noreferrer">
+            Release notes
+          </a>
+        {:else if update.phase.kind === "downloading"}
+          <!-- `total` is null until the Started event lands, and some servers
+               omit the content length entirely — fall back to an indeterminate
+               bar rather than showing a bogus 0%. -->
+          <progress
+            class="update-progress"
+            max={update.phase.total ?? undefined}
+            value={update.phase.total === null ? undefined : update.phase.downloaded}
+          ></progress>
+        {:else if update.phase.kind === "error"}
+          <p>{update.phase.message}</p>
+          <a class="notice-link" href={RELEASES_URL} target="_blank" rel="noreferrer">
+            Download from GitHub
+          </a>
+        {/if}
       </div>
     {/if}
 
@@ -951,6 +1033,67 @@
     color: #3c4652;
     font-size: 11px;
     line-height: 17px;
+  }
+
+  /* Informational, not a warning: an available update is good news, so this
+     deliberately does not borrow the red of .permission-notice. */
+  .update-notice {
+    display: grid;
+    gap: 9px;
+    padding: 12px;
+    background: #f2f8f7;
+    border: 1px solid #a8cfc8;
+    border-radius: 8px;
+  }
+
+  .update-notice .notice-header {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    color: #1c7c6d;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .update-notice .notice-header button {
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    margin-left: auto;
+    padding: 0;
+    color: #1c7c6d;
+    background: transparent;
+    border: 0;
+    border-radius: 4px;
+  }
+
+  .update-notice .notice-header button:hover {
+    background: rgba(28, 124, 109, 0.08);
+  }
+
+  .update-notice p {
+    margin: 0;
+    color: #3c4652;
+    font-size: 11px;
+    line-height: 17px;
+  }
+
+  .update-progress {
+    width: 100%;
+    height: 6px;
+  }
+
+  .notice-link {
+    color: #1c7c6d;
+    font-size: 11px;
+    font-weight: 600;
+    text-align: center;
+    text-decoration: none;
+  }
+
+  .notice-link:hover {
+    text-decoration: underline;
   }
 
   .notice-action {

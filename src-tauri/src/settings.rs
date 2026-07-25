@@ -16,6 +16,7 @@ use tauri::{AppHandle, Manager};
 // module is not itself part of the pure-module family.
 use crate::document_store;
 use crate::path_utils::strip_verbatim_prefix;
+use crate::updates::UpdateTransition;
 
 /// Current on-disk schema for `capture-settings.json`. Bump when an
 /// incompatible change lands. Adding a new field with `#[serde(default)]`
@@ -48,6 +49,14 @@ pub(crate) struct CaptureSettings {
     pub(crate) bring_to_front_on_hotkey_capture: bool,
     #[serde(default)]
     pub(crate) close_to_tray: bool,
+    #[serde(default = "default_check_for_updates_on_startup")]
+    pub(crate) check_for_updates_on_startup: bool,
+    // Version of the last build that ran. Written by Rust at startup, not by the
+    // frontend, so the UI can tell "we just updated" from "same build as before"
+    // and re-check the macOS Screen Recording grant, which an ad-hoc-signed
+    // update invalidates (see ROADMAP P0 #1). `None` on a first run.
+    #[serde(default)]
+    pub(crate) last_run_version: Option<String>,
     #[serde(default)]
     pub(crate) shortcut_overrides: HashMap<String, Vec<String>>,
 }
@@ -57,6 +66,10 @@ fn default_version() -> u32 {
 }
 
 fn default_auto_open_editor() -> bool {
+    true
+}
+
+fn default_check_for_updates_on_startup() -> bool {
     true
 }
 
@@ -70,6 +83,8 @@ impl Default for CaptureSettings {
             auto_open_editor: true,
             bring_to_front_on_hotkey_capture: false,
             close_to_tray: false,
+            check_for_updates_on_startup: true,
+            last_run_version: None,
             shortcut_overrides: HashMap::new(),
         }
     }
@@ -130,6 +145,28 @@ impl SettingsState {
         current.shortcut_overrides.clear();
         self.save(&current)?;
         Ok(current.clone())
+    }
+
+    /// Records `version` as the build that ran, returning the version it
+    /// replaced. A `Some(previous)` that differs from `version` means the app
+    /// was updated since the last launch — which on macOS is exactly when the
+    /// Screen Recording grant needs re-checking. A first run returns `None`, so
+    /// callers can tell "fresh install" from "upgraded" and stay quiet on the
+    /// former.
+    pub(crate) fn record_run_version(&self, version: &str) -> Result<Option<String>, String> {
+        let mut current = self
+            .settings
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous = current.last_run_version.clone();
+        if previous.as_deref() == Some(version) {
+            // Unchanged: skip the write so an ordinary relaunch doesn't rewrite
+            // the settings file for nothing.
+            return Ok(previous);
+        }
+        current.last_run_version = Some(version.to_string());
+        self.save(&current)?;
+        Ok(previous)
     }
 
     pub(crate) fn remember_capture_file(&self, path: &Path) {
@@ -358,6 +395,15 @@ fn sanitize_settings(mut settings: CaptureSettings) -> CaptureSettings {
 #[specta::specta]
 pub(crate) fn get_settings(state: tauri::State<'_, SettingsState>) -> CaptureSettings {
     state.get()
+}
+
+// Resolved once during setup (see lib.rs) and handed out unchanged, so the
+// "did we just update?" answer survives the settings file already having been
+// rewritten with the current version.
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn update_transition(state: tauri::State<'_, UpdateTransition>) -> UpdateTransition {
+    state.inner().clone()
 }
 
 #[tauri::command]

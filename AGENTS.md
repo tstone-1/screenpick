@@ -74,6 +74,32 @@ ScreenPick is an open-source cross-platform screenshot, annotation, and screen u
   failure can read 0% if it grabbed dark frame chrome). Capture a known
   GPU-composited window (Task Manager, Settings); this is how the v26.6.23
   blank-capture fix was confirmed.
+- **The updater's minisign private key is the most safety-critical secret here.**
+  It lives in KeePass and in the `TAURI_SIGNING_PRIVATE_KEY` /
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` repo secrets; the public key is committed
+  in `tauri.conf.json`. Losing it permanently orphans every installed copy — a
+  new key cannot sign for clients holding the old public key, so each user would
+  have to reinstall by hand. It is unrelated to OS code signing and is not fixed
+  by adding an Apple Developer ID. Never print, echo, or paste the private key
+  into a tool call; regeneration and rotation live in
+  [BUILD.md](BUILD.md#updater-signing-key).
+- **A release with no `latest.json` updates nobody, and looks green.** When the
+  signing secret is missing or empty, `tauri-action` logs "Signature not found
+  for the updater JSON. Skipping upload..." and still succeeds. The release
+  ships with installers and no manifest, and the failure only surfaces as users
+  silently never updating. BUILD.md's post-publish checks exist for this.
+- **A signed-but-not-notarized macOS build also looks green.** If notarization
+  credentials are missing or malformed the bundler logs `skipping app
+  notarization` and succeeds; Gatekeeper then rejects the app on any machine
+  that has never seen it. Never treat a successful signed build as verified —
+  run `xcrun stapler validate` and `spctl`. Note this is a *different* key from
+  the updater's minisign key, and losing it is recoverable. Setup, env-var
+  precedence, and verification live in
+  [BUILD.md](BUILD.md#macos-code-signing-and-notarization).
+- **The release matrix must stay `max-parallel: 1`.** `tauri-action` builds
+  `latest.json` by read-modify-write against the release asset, so parallel legs
+  can clobber each other's platform entries and produce a manifest that updates
+  only one OS. Nothing fails; the manifest is just incomplete.
 - **Post-release commits need a version bump.** A commit landing after a release
   tag without bumping the CalVer version silently ships in the *next* build while
   the titlebar still shows the old number. When a just-released feature "doesn't

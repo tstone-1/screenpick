@@ -11,7 +11,11 @@ Live forward-looking plan for ScreenPick. Shipped work is tracked in the [CHANGE
 
 ## In flight
 
-_(nothing currently in flight — move items here from the priority sections as they start)_
+- **macOS Developer ID signing + notarization** (part of P0 #1). Apple Developer
+  Program enrolment paid and completed 2026-07-25; waiting on Apple to finish
+  activating the account. Remaining steps and the reason this matters are in
+  P0 #1 below; the how-to is in
+  [BUILD.md](BUILD.md#macos-code-signing-and-notarization).
 
 ---
 
@@ -32,9 +36,32 @@ Silicon; users bypass Gatekeeper / SmartScreen on first launch (steps in
 - ~~Wire CI to build on tag pushes and upload artefacts~~ — done: `release.yml`.
 - Verify the published draft release attaches both the universal macOS `.dmg` and the Windows installers.
 
-**Deferred (revisit if Gatekeeper friction warrants the cost):**
-- macOS: Developer ID Application cert, `notarytool` submission, stapling, hardened runtime.
-- Windows: Authenticode signing cert (EV preferred) for SmartScreen reputation.
+**macOS signing — decision reversed 2026-07-25, in progress.** Apple Developer
+Program enrolment (Individual, $99/yr) is paid; the recurring TCC breakage below
+is what justified the cost, not Gatekeeper. Open steps, in order:
+
+- [ ] Create the Developer ID Application certificate (CSR → portal → install
+      into the login keychain) and export a `.p12` to KeePass.
+- [ ] Generate an App Store Connect API key for notarization (`.p8` downloads
+      once; Key ID + Issuer ID to KeePass).
+- [ ] Build signed + notarized **locally first** and verify with `stapler
+      validate` / `spctl` — notarization failure is a warning, not a build
+      error, so an unverified "successful" build proves nothing.
+- [ ] Add the six repo secrets and wire the macOS leg of `release.yml`, skipping
+      the vars when the secrets are absent so forks still build.
+- [ ] Rewrite `README.md`'s *macOS first launch* section — the `xattr -dr
+      com.apple.quarantine` workaround and the "app is damaged" note stop
+      applying. Do this **after** a signed build is verified, so the docs never
+      describe a release that does not exist.
+- [ ] Warn users in the release notes that this build breaks the Screen
+      Recording grant one last time.
+
+Procedure and gotchas: [BUILD.md](BUILD.md#macos-code-signing-and-notarization).
+
+**Still deferred — Windows:** Authenticode signing cert (EV preferred) for
+SmartScreen reputation. Separate purchase (~$200–400/yr), and OV certs need
+reputation-building before SmartScreen stops warning, so the money buys less
+than the Apple cert does. Windows installs stay unsigned for now.
 
 **Concrete recurring cost of staying ad-hoc-signed — the macOS Screen Recording
 grant dies on every version bump.** macOS TCC keys the Screen Recording
@@ -49,6 +76,14 @@ Gatekeeper first-launch friction — is the main day-to-day reason to revisit th
 deferral, and it's why the #2 permission banner tells users a relaunch may still
 be needed.
 
+**The updater (#3) made this recurring rather than occasional.** Before, a user
+only lost the grant when they went and reinstalled; now every accepted update
+does it, automatically, without them connecting cause and effect. The
+post-update banner variant added in v26.7.6 explains the remove-and-re-add fix,
+but that is a mitigation, not a fix. Signing is what actually removes the
+problem — and the first signed release will itself break the grant one final
+time, since it changes the signature identity.
+
 ### 2. macOS screen-recording permission onboarding
 On macOS, capture silently produces a black/empty image until the user grants Screen Recording permission. First-time users would otherwise see "ScreenPick is broken" and uninstall.
 
@@ -61,12 +96,22 @@ with an actionable banner:
 Remaining: proactive first-run onboarding *before* the first capture attempt (today the banner appears after the first denied capture / on the startup poll), and the relaunch caveat that will disappear once signing is stable (see #1).
 
 ### 3. Auto-update channel
-Without an updater, every released version is the last version a user runs. The first release (v26.7.4) shipped without one, so this is now a retrofit onto an installed base rather than a pre-launch decision — existing users will need to notice a new release and reinstall manually until this lands.
+**Delivered in v26.7.6.** Without an updater, every released version was the last
+version a user ran. Releases v26.7.4/v26.7.5 shipped without one, so this landed
+as a retrofit: those two builds can never be reached by the updater and must be
+replaced manually once.
 
-- Adopt `tauri-plugin-updater`.
-- Sign update manifests with a Tauri update key (store the private key in 1Password, public key in `tauri.conf.json`).
-- Host manifests on GitHub Releases or a static endpoint.
-- UI: passive update banner with "Restart to update"; optional "Check for updates" in settings.
+- ~~Adopt `tauri-plugin-updater`.~~ — done, plus `tauri-plugin-process` for the relaunch.
+- ~~Sign update manifests with a Tauri update key.~~ — done. Private key + password in KeePass and in the `TAURI_SIGNING_PRIVATE_KEY`/`_PASSWORD` repo secrets; public key committed in `tauri.conf.json`.
+- ~~Host manifests on GitHub Releases or a static endpoint.~~ — done. `tauri-action` generates `latest.json` per release; the endpoint is `releases/latest/download/latest.json`, which only resolves once the draft is published.
+- ~~UI: passive update banner; optional "Check for updates" in settings.~~ — done, plus a tray item and a startup-check opt-out.
+
+Verified end-to-end against a local signed manifest before release (the recipe is
+in [BUILD.md](BUILD.md#verifying-the-updater-locally)).
+
+**Remaining:** confirm a real published release updates an installed build on
+both platforms — the one thing a local test cannot prove, since it can't
+exercise `tauri-action`'s `latest.json` generation or the GitHub endpoint.
 
 ---
 

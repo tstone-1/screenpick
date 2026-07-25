@@ -61,6 +61,14 @@ jobs:
     needs: test
     strategy:
       fail-fast: false
+      # SERIAL, deliberately. tauri-action builds the updater's `latest.json` by
+      # read-modify-write against the release asset: download the existing one,
+      # merge this platform's entries, delete it, re-upload. Two legs running at
+      # once can both read the pre-merge state, and the second upload silently
+      # drops the first platform's entry — producing a release that only updates
+      # macOS *or* Windows, with nothing failing to indicate it. Serializing the
+      # two builds costs wall-clock and nothing else.
+      max-parallel: 1
       matrix:
         include:
           # One universal DMG that runs on both Apple Silicon and Intel Macs.
@@ -100,7 +108,19 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Minisign key for the updater. Every update payload is signed with it
+          # and verified against `plugins.updater.pubkey` before install — the
+          # only cryptographic control on the update path. Losing this key
+          # permanently orphans the installed base (a new key cannot sign for
+          # clients holding the old pubkey), so it is backed up outside CI.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
+          # The action defaults this to false, which would put the MSI in
+          # latest.json while README.md points users at the NSIS setup.exe. An
+          # MSI update on top of an NSIS install produces a second, parallel
+          # installation instead of an upgrade.
+          updaterJsonPreferNsis: true
           # Reuse the pushed tag (refs/tags/v26.5.1 -> v26.5.1) as the release
           # tag, so the release lines up with BUILD.md's tagging step.
           tagName: ${{ github.ref_name }}

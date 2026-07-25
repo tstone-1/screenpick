@@ -9,6 +9,8 @@
     "dialog:default",
     "notification:default",
     "drag:default",
-    "log:default"
+    "log:default",
+    "updater:default",
+    "process:allow-restart"
   ]
 }

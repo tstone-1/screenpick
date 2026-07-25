@@ -36,6 +36,14 @@ tauri-plugin-drag = "2"
 # File + stderr logging so packaged builds (where stderr is invisible) leave a
 # diagnosable trail. `log` is the facade the codebase writes through.
 tauri-plugin-log = "2"
+# In-app updater. Fetches the `latest.json` manifest published by release.yml,
+# verifies the payload against `plugins.updater.pubkey` in tauri.conf.json
+# (minisign — the ONLY cryptographic control on the update path, since Windows
+# builds ship unsigned), then installs. `process` supplies `relaunch()`: macOS
+# swaps the .app in place and restarts, Windows hands off to the NSIS installer
+# and exits.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 log = "0.4"
 arboard = "3"
 # Pinned: capture_window_at_point depends on Window::all() returning front-to-back order on macOS,
