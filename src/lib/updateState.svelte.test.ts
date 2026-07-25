@@ -30,11 +30,14 @@ const relaunchMock = vi.mocked(relaunch);
 const transitionMock = vi.mocked(commands.updateTransition);
 const listenMock = vi.mocked(events.updateCheckRequested.listen);
 
-function pending(version = "26.8.0", download?: PendingUpdate["download"]): PendingUpdate {
+function pending(
+  version = "26.8.0",
+  downloadAndInstall?: PendingUpdate["downloadAndInstall"]
+): PendingUpdate {
   return {
     version,
     notes: null,
-    download: download ?? vi.fn().mockResolvedValue(undefined)
+    downloadAndInstall: downloadAndInstall ?? vi.fn().mockResolvedValue(undefined)
   };
 }
 
@@ -122,23 +125,30 @@ describe("UpdateState.check", () => {
 });
 
 describe("UpdateState.installAndRestart", () => {
-  it("reports download progress and relaunches", async () => {
+  it("reports download progress, then installing, then relaunches", async () => {
     const state = new UpdateState();
     const seen: UpdatePhase[] = [];
-    const download = vi.fn(async (onProgress: (d: number, t: number | null) => void) => {
-      onProgress(0, 100);
-      seen.push(state.phase);
-      onProgress(40, 100);
-      seen.push(state.phase);
-    });
-    checkMock.mockResolvedValue(pending("26.8.0", download));
+    const downloadAndInstall = vi.fn<PendingUpdate["downloadAndInstall"]>(
+      async ({ onProgress, onInstalling }) => {
+        onProgress(0, 100);
+        seen.push(state.phase);
+        onProgress(40, 100);
+        seen.push(state.phase);
+        // The install starts here, not after this promise resolves — by then it
+        // has already finished.
+        onInstalling();
+        seen.push(state.phase);
+      }
+    );
+    checkMock.mockResolvedValue(pending("26.8.0", downloadAndInstall));
     await state.check("manual");
 
     await state.installAndRestart();
 
     expect(seen).toEqual([
       { kind: "downloading", version: "26.8.0", downloaded: 0, total: 100 },
-      { kind: "downloading", version: "26.8.0", downloaded: 40, total: 100 }
+      { kind: "downloading", version: "26.8.0", downloaded: 40, total: 100 },
+      { kind: "installing", version: "26.8.0" }
     ]);
     expect(relaunchMock).toHaveBeenCalledTimes(1);
     expect(state.phase).toEqual({ kind: "installing", version: "26.8.0" });
@@ -147,8 +157,8 @@ describe("UpdateState.installAndRestart", () => {
   it("offers a manual download when the install fails", async () => {
     // The realistic macOS failure: the .app is somewhere unwritable, which no
     // amount of retrying the same download can fix.
-    const download = vi.fn().mockRejectedValue(new Error("Permission denied"));
-    checkMock.mockResolvedValue(pending("26.8.0", download));
+    const downloadAndInstall = vi.fn().mockRejectedValue(new Error("Permission denied"));
+    checkMock.mockResolvedValue(pending("26.8.0", downloadAndInstall));
     const state = new UpdateState();
     await state.check("manual");
 

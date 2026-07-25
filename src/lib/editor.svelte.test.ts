@@ -1040,6 +1040,100 @@ describe("EditorState", () => {
 
     expect(state.annotations.map((annotation) => annotation.id)).toEqual([1, 2]);
   });
+
+  // The rectangle tools (shape/highlight/blur) share one drag implementation.
+  // `shape` was already covered above; these pin the other two, including the
+  // behaviour that differs between them — highlight and blur deliberately do
+  // NOT auto-select on placement, where shape does.
+  it("commits a highlight from a rectangle drag without auto-selecting it", () => {
+    const state = new EditorState();
+    state.openCapture(capture("/highlight-drag.png"));
+    state.imageFrame = imageFrame();
+    state.activeTool = "highlight";
+    state.highlightOpacity = 0.4;
+
+    state.startHighlightDrag(pointer(10, 20));
+    state.updateHighlightDrag(pointer(60, 50));
+    state.finishHighlightDrag(pointer(60, 50));
+
+    expect(state.annotations).toHaveLength(1);
+    expect(state.annotations[0]).toMatchObject({
+      kind: "highlight",
+      rect: { x: 10, y: 20, width: 50, height: 30 },
+      opacity: 0.4
+    });
+    expect(state.highlightDraft).toBeNull();
+    expect(state.highlightDragStart).toBeNull();
+    // Unlike shape, placing a highlight leaves the tool active for repeat use.
+    expect(state.selectedAnnotationId).toBeNull();
+    expect(state.activeTool).toBe("highlight");
+  });
+
+  it("commits a blur from a rectangle drag and normalises a backwards drag", () => {
+    const state = new EditorState();
+    state.openCapture(capture("/blur-drag.png"));
+    state.imageFrame = imageFrame();
+    state.activeTool = "blur";
+    state.blurRadius = 7;
+
+    // Dragged up-and-left: the rect must come out normalised, not negative.
+    state.startBlurDrag(pointer(70, 60));
+    state.updateBlurDrag(pointer(20, 10));
+    state.finishBlurDrag(pointer(20, 10));
+
+    expect(state.annotations).toHaveLength(1);
+    expect(state.annotations[0]).toMatchObject({
+      kind: "blur",
+      rect: { x: 20, y: 10, width: 50, height: 50 },
+      radius: 7
+    });
+    expect(state.selectedAnnotationId).toBeNull();
+  });
+
+  it("discards a rectangle drag below the minimum committed size", () => {
+    const state = new EditorState();
+    state.openCapture(capture("/tiny-rect.png"));
+    state.imageFrame = imageFrame();
+
+    state.activeTool = "highlight";
+    state.startHighlightDrag(pointer(40, 40));
+    state.updateHighlightDrag(pointer(41, 41));
+    state.finishHighlightDrag(pointer(41, 41));
+
+    state.activeTool = "blur";
+    state.startBlurDrag(pointer(40, 40));
+    state.updateBlurDrag(pointer(42, 41));
+    state.finishBlurDrag(pointer(42, 41));
+
+    expect(state.annotations).toHaveLength(0);
+  });
+
+  it("cancelling a rectangle drag drops the draft without committing", () => {
+    const state = new EditorState();
+    state.openCapture(capture("/cancel-rect.png"));
+    state.imageFrame = imageFrame();
+    state.activeTool = "blur";
+
+    state.startBlurDrag(pointer(10, 10));
+    state.updateBlurDrag(pointer(60, 60));
+    state.cancelBlurDrag();
+
+    expect(state.blurDraft).toBeNull();
+    expect(state.blurDragStart).toBeNull();
+    expect(state.annotations).toHaveLength(0);
+  });
+
+  it("ignores a rectangle drag started with a non-primary button", () => {
+    const state = new EditorState();
+    state.openCapture(capture("/right-click.png"));
+    state.imageFrame = imageFrame();
+    state.activeTool = "highlight";
+
+    const rightClick = { ...pointer(10, 10), button: 2 } as unknown as PointerEvent;
+    state.startHighlightDrag(rightClick);
+
+    expect(state.highlightDraft).toBeNull();
+  });
 });
 
 describe("slugifyCaptureTitle", () => {

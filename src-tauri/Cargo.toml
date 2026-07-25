@@ -1,6 +1,6 @@
 [package]
 name = "screenpick"
-version = "26.7.5"
+version = "26.7.6"
 description = "Cross-platform screenshot and annotation tool for macOS and Windows."
 authors = ["tstone-1"]
 license = "MIT"

@@ -2,11 +2,22 @@
 //
 // The updater itself lives in `tauri-plugin-updater` and is driven from the
 // frontend; the only thing Rust owns here is the answer to "is this launch the
-// first one after an update?". That matters on macOS: an ad-hoc-signed build
-// gets a fresh cdhash every release, so TCC treats the updated app as a
-// different program and silently withholds the Screen Recording grant (see
-// ROADMAP P0 #1). The frontend uses this to re-check the permission and explain
-// the fix, instead of leaving the user with an app that captures black frames.
+// first one after an update?". That matters on macOS, where TCC keys the Screen
+// Recording grant to the app's code-signature Designated Requirement.
+//
+// This is STILL NEEDED after Developer ID signing landed in 26.7.6, though the
+// reason narrowed — do not delete it on the grounds that the app is signed now:
+//
+//   - Updating *to* 26.7.6 changes the signing identity itself (ad-hoc cdhash ->
+//     Developer ID), so that one update breaks the grant a final time.
+//   - Users still arriving from any pre-26.7.6 build hit the same transition,
+//     and will keep doing so for as long as old builds are in the wild.
+//
+// From 26.7.6 onward the DR is anchored to a stable Team ID, so ordinary
+// update-to-update transitions no longer drop the grant. The frontend uses this
+// flag to re-check the permission and explain the fix, instead of leaving the
+// user with an app that captures black frames. See ROADMAP P0 #1 and
+// BUILD.md#macos-code-signing-and-notarization.
 //
 // Pure module (no `tauri::` imports) so it stays in the ungated family and its
 // tests run on Windows too — same split as `capture_modes` and the command that

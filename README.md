@@ -33,34 +33,38 @@ Download the latest installer from the
 
 ### macOS first launch
 
-ScreenPick is **not signed with an Apple Developer ID** (that costs $99/year),
-so macOS Gatekeeper blocks it the first time. The app is fine — macOS just can't
-verify the publisher. Open it once using either method below; afterwards it
-launches normally with a double-click.
+From **26.7.6** onward the macOS build is signed with an Apple Developer ID and
+notarized by Apple, so there is nothing to bypass:
 
 1. Open the `.dmg` and drag **ScreenPick** into **Applications**.
-2. Clear Gatekeeper, then open:
-
-   **Option A — Terminal (most reliable).** Removes the download quarantine flag:
-
-   ```sh
-   xattr -dr com.apple.quarantine /Applications/ScreenPick.app
-   open /Applications/ScreenPick.app
-   ```
-
-   **Option B — no Terminal.** Double-click ScreenPick. When macOS refuses, go to
-   **System Settings → Privacy & Security**, scroll to the message about
-   ScreenPick being blocked, and click **Open Anyway**. Confirm once more when
-   prompted.
-
-> If you see **"ScreenPick is damaged and can't be opened"**, the app is *not*
-> actually damaged — that is the quarantine message for unsigned apps. Use
-> **Option A** above to clear it.
-
+2. Double-click ScreenPick. It opens normally.
 3. **Grant Screen Recording permission.** On first capture, macOS asks for it
    (or open **System Settings → Privacy & Security → Screen Recording** and
    enable ScreenPick). Relaunch the app afterwards — without this permission,
    captures come out black.
+
+<details>
+<summary>Installing <b>26.7.5 or earlier</b>? Those builds are unsigned and need a Gatekeeper bypass.</summary>
+
+Older releases were not signed, so macOS blocks them on first launch. The app is
+fine — macOS just cannot verify the publisher. After the `.dmg` step above:
+
+**Option A — Terminal (most reliable).** Removes the download quarantine flag:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/ScreenPick.app
+open /Applications/ScreenPick.app
+```
+
+**Option B — no Terminal.** Double-click ScreenPick. When macOS refuses, go to
+**System Settings → Privacy & Security**, scroll to the message about ScreenPick
+being blocked, and click **Open Anyway**. Confirm once more when prompted.
+
+If you see **"ScreenPick is damaged and can't be opened"**, the app is *not*
+actually damaged — that is the quarantine message for unsigned apps. Use
+**Option A** to clear it.
+
+</details>
 
 ### Windows first launch
 
@@ -75,8 +79,9 @@ button. You can also check on demand from **Settings → Check for updates** or
 the tray menu.
 
 Every update is cryptographically signed, and ScreenPick verifies that
-signature before installing — so an update can only come from this project,
-even though the app itself ships unsigned.
+signature before installing — so an update can only come from this project.
+That signature is separate from Apple code signing: it protects the update
+payload itself, on both platforms.
 
 - **Turn it off:** Settings → *Check for updates at startup*. Manual checks
   still work. The automatic check contacts GitHub, which is the only network
@@ -85,12 +90,14 @@ even though the app itself ships unsigned.
   the latest release manually once; updates are automatic after that.
 - **Windows portable `.exe`:** cannot self-update — download a new one, or use
   the installer.
-- **macOS:** because ScreenPick is unsigned, macOS treats each update as a new
-  app and drops its Screen Recording permission. After an update, if captures
-  come out black, go to **System Settings → Privacy & Security → Screen &
-  System Audio Recording**, **remove ScreenPick from the list and add it
-  again** — the switch often still looks enabled. ScreenPick shows a banner
-  explaining this when it detects the situation.
+- **macOS Screen Recording permission across updates:** signed builds keep it.
+  Unsigned builds did not — macOS treated every update as a different app and
+  silently dropped the grant. **Updating *to* 26.7.6 breaks it one last time**,
+  because the app's signing identity itself changes; from then on it survives.
+  If captures come out black after that update, go to **System Settings →
+  Privacy & Security → Screen & System Audio Recording**, **remove ScreenPick
+  from the list and add it again** — the switch often still looks enabled.
+  ScreenPick shows a banner explaining this when it detects the situation.
 
 ## Build from source
 

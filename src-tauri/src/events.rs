@@ -22,3 +22,11 @@ pub(crate) struct CaptureCancelled(pub String);
 // tray can only ask for one — hence an event rather than a command.
 #[derive(Serialize, Deserialize, Clone, Debug, Type, Event)]
 pub(crate) struct UpdateCheckRequested;
+
+// Emitted when the app is about to exit, after the quit has been held. The
+// frontend answers by flushing anything debounced (notably the document save)
+// and then calling `confirm_exit`, which releases the hold. Rust cannot flush
+// this itself: the pending write lives in the webview's timer, and the document
+// payload it would persist is a render only the frontend can produce.
+#[derive(Serialize, Deserialize, Clone, Debug, Type, Event)]
+pub(crate) struct AppExiting;

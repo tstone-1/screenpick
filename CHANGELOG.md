@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [CalVer](https://calver.org/) `YY.M.MICRO` versioning
 (see [BUILD.md](BUILD.md#version-management)).
 
-## [26.7.6] - Unreleased
+## [26.7.6] - 2026-07-25
 
 ### Added
 
@@ -16,6 +16,17 @@ and this project uses [CalVer](https://calver.org/) `YY.M.MICRO` versioning
   Settings, and the tray menu has a "Check for Updates..." item. Update
   payloads are signed and verified before install.
 - Settings now shows the running version.
+- **macOS builds are signed with an Apple Developer ID and notarized by Apple.**
+  No Gatekeeper bypass on first launch, and no more "ScreenPick is damaged"
+  message. Windows remains unsigned.
+
+### Fixed
+
+- **macOS Screen Recording permission now survives updates.** Ad-hoc-signed
+  builds had no stable identity, so macOS treated every update as a different
+  app and silently dropped the grant, leaving captures black. A Developer ID
+  identity is stable across versions, so the grant persists. Updating *to* this
+  version breaks it one final time, because the signing identity itself changes.
 
 ### Note for existing installs
 

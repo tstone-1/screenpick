@@ -11,10 +11,11 @@ Live forward-looking plan for ScreenPick. Shipped work is tracked in the [CHANGE
 
 ## In flight
 
-- **macOS Developer ID signing + notarization** (part of P0 #1). Apple Developer
-  Program enrolment paid and completed 2026-07-25; waiting on Apple to finish
-  activating the account. Remaining steps and the reason this matters are in
-  P0 #1 below; the how-to is in
+- **~~macOS Developer ID signing + notarization~~ — done 2026-07-25.** Certificate
+  issued, notarization key created, `release.yml` signs and notarizes the macOS
+  leg and gates on the result. Verified end to end on a local universal build.
+  Ships with **26.7.6** — which needs a version bump before release, since the
+  version of record still reads 26.7.5. The how-to and the traps are in
   [BUILD.md](BUILD.md#macos-code-signing-and-notarization).
 
 ---
@@ -24,8 +25,9 @@ Live forward-looking plan for ScreenPick. Shipped work is tracked in the [CHANGE
 ### 1. Package and release workflow
 ScreenPick now has published builds — installers ship via tagged GitHub Releases (first cut: v26.7.4). What remains is hardening that release path, not creating it.
 
-**Decision (2026-05-30): ship unsigned.** No $99/year Apple Developer ID and no
-Windows code-signing cert for now. Builds are ad-hoc-signed so they run on Apple
+**Decision (2026-05-30): ship unsigned.** *Superseded for macOS on 2026-07-25 —
+see below; still current for Windows.* No $99/year Apple Developer ID and no
+Windows code-signing cert. Builds are ad-hoc-signed so they run on Apple
 Silicon; users bypass Gatekeeper / SmartScreen on first launch (steps in
 `README.md`). Channel is **GitHub Releases**, built by
 `.github/workflows/release.yml` on tag push. Remaining work below.
@@ -36,25 +38,31 @@ Silicon; users bypass Gatekeeper / SmartScreen on first launch (steps in
 - ~~Wire CI to build on tag pushes and upload artefacts~~ — done: `release.yml`.
 - Verify the published draft release attaches both the universal macOS `.dmg` and the Windows installers.
 
-**macOS signing — decision reversed 2026-07-25, in progress.** Apple Developer
-Program enrolment (Individual, $99/yr) is paid; the recurring TCC breakage below
-is what justified the cost, not Gatekeeper. Open steps, in order:
+**macOS signing — decision reversed 2026-07-25, and now done.** Apple Developer
+Program enrolment (Individual, $99/yr) paid; the recurring TCC breakage below is
+what justified the cost, not Gatekeeper.
 
-- [ ] Create the Developer ID Application certificate (CSR → portal → install
-      into the login keychain) and export a `.p12` to KeePass.
-- [ ] Generate an App Store Connect API key for notarization (`.p8` downloads
-      once; Key ID + Issuer ID to KeePass).
-- [ ] Build signed + notarized **locally first** and verify with `stapler
-      validate` / `spctl` — notarization failure is a warning, not a build
+- [x] Developer ID Application certificate created and installed;
+      `Developer ID Application: Timo Stein (NVX72G8SJ8)`, valid to 2031-07-26.
+- [x] `.p12` exported, restore-tested, and backed up (KeePass + iCloud).
+- [x] App Store Connect API key for notarization created and authenticated.
+- [x] Signed + notarized **locally first** — notarization Accepted, stapled,
+      `spctl` reports `source=Notarized Developer ID`, universal (x86_64 +
+      arm64). Necessary because notarization failure is a *warning*, not a build
       error, so an unverified "successful" build proves nothing.
-- [ ] Add the six repo secrets and wire the macOS leg of `release.yml`, skipping
-      the vars when the secrets are absent so forks still build.
-- [ ] Rewrite `README.md`'s *macOS first launch* section — the `xattr -dr
-      com.apple.quarantine` workaround and the "app is damaged" note stop
-      applying. Do this **after** a signed build is verified, so the docs never
-      describe a release that does not exist.
-- [ ] Warn users in the release notes that this build breaks the Screen
-      Recording grant one last time.
+- [x] Confirmed the updater's `.app.tar.gz` inherits the staple, which is the
+      whole point — that is what makes the TCC grant survive an update.
+- [x] Six repo secrets added; `release.yml` exports them conditionally (forks
+      without secrets still build ad-hoc) and gates the macOS leg on the
+      verified result.
+- [x] `README.md`'s *macOS first launch* section rewritten; the `xattr -dr
+      com.apple.quarantine` workaround is now collapsed under a note for 26.7.5
+      and earlier.
+- [x] Release notes and `README.md` warn that this build breaks the Screen
+      Recording grant one final time, because the signing identity changes.
+
+Remaining before it reaches users: **bump the version to 26.7.6** (`tauri.conf.json`
++ `Cargo.toml` still read 26.7.5) and cut the release.
 
 Procedure and gotchas: [BUILD.md](BUILD.md#macos-code-signing-and-notarization).
 
@@ -63,8 +71,10 @@ SmartScreen reputation. Separate purchase (~$200–400/yr), and OV certs need
 reputation-building before SmartScreen stops warning, so the money buys less
 than the Apple cert does. Windows installs stay unsigned for now.
 
-**Concrete recurring cost of staying ad-hoc-signed — the macOS Screen Recording
-grant dies on every version bump.** macOS TCC keys the Screen Recording
+**~~Concrete recurring cost of staying ad-hoc-signed — the macOS Screen Recording
+grant dies on every version bump.~~ Resolved by signing, from 26.7.6.** Kept here
+because it is the reason the cert was bought and the reason the #2 banner exists.
+macOS TCC keys the Screen Recording
 permission to the app's code-signature Designated Requirement. Under ad-hoc
 signing (`bundle.macOS.signingIdentity: "-"`) that DR is a per-build cdhash, so
 each new release is a *different app* to TCC: System Settings still shows the
@@ -80,9 +90,10 @@ be needed.
 only lost the grant when they went and reinstalled; now every accepted update
 does it, automatically, without them connecting cause and effect. The
 post-update banner variant added in v26.7.6 explains the remove-and-re-add fix,
-but that is a mitigation, not a fix. Signing is what actually removes the
-problem — and the first signed release will itself break the grant one final
-time, since it changes the signature identity.
+but that is a mitigation, not a fix. Signing is what actually removed the
+problem — landing in the same 26.7.6 release, which itself breaks the grant one
+final time since it changes the signature identity. Keep the banner: it is still
+correct for that update, and for anyone arriving from an older unsigned build.
 
 ### 2. macOS screen-recording permission onboarding
 On macOS, capture silently produces a black/empty image until the user grants Screen Recording permission. First-time users would otherwise see "ScreenPick is broken" and uninstall.
