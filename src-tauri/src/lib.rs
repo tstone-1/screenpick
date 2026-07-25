@@ -132,7 +132,9 @@ fn begin_shutdown(app: &tauri::AppHandle) {
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(EXIT_FLUSH_TIMEOUT_MS));
         if !EXIT_CONFIRMED.load(Ordering::SeqCst) {
-            log::warn!("exit flush did not complete within {EXIT_FLUSH_TIMEOUT_MS}ms; exiting anyway");
+            log::warn!(
+                "exit flush did not complete within {EXIT_FLUSH_TIMEOUT_MS}ms; exiting anyway"
+            );
             finish_shutdown(&app);
         }
     });
