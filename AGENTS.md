@@ -96,6 +96,16 @@ ScreenPick is an open-source cross-platform screenshot, annotation, and screen u
   the updater's minisign key, and losing it is recoverable. Setup, env-var
   precedence, and verification live in
   [BUILD.md](BUILD.md#macos-code-signing-and-notarization).
+- **The signing identity is shared with `dblitz`, so rotating it is a two-repo
+  event.** A Developer ID Application certificate certifies the team
+  (`NVX72G8SJ8`), never one app, and Apple caps the account at 5 of them — so
+  `dblitz` reuses this certificate and the same App Store Connect `.p8`
+  notarization key rather than minting its own (since dblitz 26.7.6). Renewing
+  or revoking it means updating `APPLE_CERTIFICATE` /
+  `APPLE_CERTIFICATE_PASSWORD` / `APPLE_SIGNING_IDENTITY` in **both** repos'
+  secrets. Forget one and that repo silently drops to
+  signed-but-unverifiable on its next release — which, per the point above,
+  still looks green.
 - **The release matrix must stay `max-parallel: 1`.** `tauri-action` builds
   `latest.json` by read-modify-write against the release asset, so parallel legs
   can clobber each other's platform entries and produce a manifest that updates
