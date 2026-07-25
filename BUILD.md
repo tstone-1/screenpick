@@ -217,7 +217,7 @@ purpose, different failure mode. See [Updater signing key](#updater-signing-key)
 
 | Thing | Where it lives | Recoverable if lost? |
 |---|---|---|
-| Developer ID Application cert + private key | this Mac's login keychain; `.p12` export attached to a KeePass entry (authoritative), second copy in iCloud Drive → `Developer/signing/` | Yes — revoke and reissue (limit 5) |
+| Developer ID Application cert + private key | this Mac's login keychain; `.p12` export attached to a KeePass entry (authoritative), second copy in iCloud Drive → `Developer/signing/apple-developer-id-NVX72G8SJ8.p12` | Yes — revoke and reissue (limit 5) |
 | The `.p12` export password | the same KeePass entry as the `.p12`. Inside an encrypted vault that co-location is fine; **in iCloud it is not** — iCloud is not sole-custody storage, so the password must never sit there next to the file | No — without it the `.p12` is inert |
 | App Store Connect API key (`.p8`) | `~/.appstoreconnect/private_keys/`, KeePass attachment (it is an *unencrypted* private key — it does not go in iCloud) | Yes — revoke and generate another |
 | Key ID, Issuer ID, Team ID | KeePass | Yes — readable in the portal |
@@ -227,7 +227,8 @@ The identity in use is `Developer ID Application: Timo Stein (NVX72G8SJ8)`; Team
 
 On expiry — or if the key is ever compromised — repeat *Setup* for a new
 certificate and update `APPLE_CERTIFICATE` / `APPLE_CERTIFICATE_PASSWORD` /
-`APPLE_SIGNING_IDENTITY`. Releases already published keep working: notarization
+`APPLE_SIGNING_IDENTITY` **in this repo and in `tstone-1/dblitz`**, which signs
+with the same certificate. Releases already published keep working: notarization
 tickets stay valid after the signing certificate expires, and the Team ID in the
 Designated Requirement does not change, so **the Screen Recording grant survives
 a certificate renewal** as long as the Team ID does. Renewing is not the same
@@ -294,13 +295,21 @@ answer **Always Allow**, or every subsequent build blocks on the same prompt
 
 ### Backing up the identity
 
+**The backup filename is deliberately team-scoped, not app-scoped.** A Developer
+ID Application certificate certifies the *team* (`NVX72G8SJ8`), never one app —
+the friendly name inside the `.p12` is plain "Timo Stein" — and this same file
+signs `dblitz` too. It was originally exported as `screenpick-devid.p12` and
+renamed 2026-07-25, once the second app started using it: an app-scoped name
+invites the next person to export a redundant second certificate against the
+account's limit of five.
+
 Export the identity to a `.p12` the moment it exists — a login keychain is one
 disk failure from costing a revoke-and-reissue cycle:
 
 ```sh
 security export -k ~/Library/Keychains/login.keychain-db \
   -t identities -f pkcs12 -P "$(pbpaste)" \
-  -o "$HOME/Library/Mobile Documents/com~apple~CloudDocs/Developer/signing/screenpick-devid.p12"
+  -o "$HOME/Library/Mobile Documents/com~apple~CloudDocs/Developer/signing/apple-developer-id-NVX72G8SJ8.p12"
 ```
 
 Generate the export password in KeePass, copy it, and let `"$(pbpaste)"` expand
