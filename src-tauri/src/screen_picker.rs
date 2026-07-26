@@ -10,7 +10,7 @@ use crate::capture::{
 use crate::monitor_pairing::{pair_monitor_targets, CapMonitorInfo, TauriMonInfo};
 use crate::picker_session::{
     emit_capture_cancelled, emit_capture_outcome, finish_capture, hide_before_capture,
-    place_overlay, PickerSession,
+    place_overlay, run_capture_off_ui_thread, PickerSession,
 };
 
 const SCREEN_PICKER: &str = "screen-picker";
@@ -30,7 +30,7 @@ impl ScreenPickerSession {
 
 #[tauri::command]
 #[specta::specta]
-pub(crate) fn start_screen_selection(app: AppHandle) -> Result<(), String> {
+pub(crate) async fn start_screen_selection(app: AppHandle) -> Result<(), String> {
     app.state::<ScreenPickerSession>()
         .session()
         .close_existing(&app, SCREEN_PICKER);
@@ -42,7 +42,7 @@ pub(crate) fn start_screen_selection(app: AppHandle) -> Result<(), String> {
     }
 
     if monitors.len() == 1 {
-        return capture_monitor_now(&app, monitors[0].id);
+        return capture_monitor_now(&app, monitors[0].id).await;
     }
 
     // Enumerate displays before hiding the main window or recording a session.
@@ -96,7 +96,7 @@ pub(crate) fn start_screen_selection(app: AppHandle) -> Result<(), String> {
 /// its own hotkey (the `screen-pick` mode) and from the in-app Screen button.
 #[tauri::command]
 #[specta::specta]
-pub(crate) fn capture_screen_under_cursor(app: AppHandle) -> Result<(), String> {
+pub(crate) async fn capture_screen_under_cursor(app: AppHandle) -> Result<(), String> {
     app.state::<ScreenPickerSession>()
         .session()
         .close_existing(&app, SCREEN_PICKER);
@@ -113,7 +113,7 @@ pub(crate) fn capture_screen_under_cursor(app: AppHandle) -> Result<(), String> 
         .or_else(|| monitors.iter().find(|m| m.primary).map(|m| m.id))
         .unwrap_or(monitors[0].id);
 
-    capture_monitor_now(&app, target)
+    capture_monitor_now(&app, target).await
 }
 
 /// Resolve the xcap monitor id of the display containing the mouse cursor.
@@ -142,25 +142,34 @@ fn monitor_id_under_cursor(app: &AppHandle, monitors: &[CapturableMonitor]) -> O
 /// `CaptureCompleted`), hide the main window so ScreenPick isn't in the shot,
 /// capture, then emit the outcome. Shared by the single-display fast path and
 /// the capture-under-cursor hotkey.
-fn capture_monitor_now(app: &AppHandle, monitor_id: u32) -> Result<(), String> {
-    let session = app.state::<ScreenPickerSession>();
-    let id = session.session().next_id();
-    session.session().record(id);
+async fn capture_monitor_now(app: &AppHandle, monitor_id: u32) -> Result<(), String> {
+    let id = {
+        let session = app.state::<ScreenPickerSession>();
+        let id = session.session().next_id();
+        session.session().record(id);
+        id
+    };
 
-    // Deliberately a longer settle than the picker's PICKER_HIDE_DELAY_MS: this
-    // path hides the OPAQUE main editor window (not a translucent overlay), and
-    // it lands in the full-screen shot if it's still compositing — so give it a
-    // touch more time to disappear.
-    if let Some(window) = app.get_webview_window("main") {
-        hide_before_capture(&window, "main window", 180);
-    } else {
-        std::thread::sleep(std::time::Duration::from_millis(180));
-    }
+    let app = app.clone();
+    // Off the UI thread: the settle sleep below would otherwise block the very
+    // thread that has to apply the hide. See run_capture_off_ui_thread.
+    run_capture_off_ui_thread(move || {
+        // Deliberately a longer settle than the picker's PICKER_HIDE_DELAY_MS:
+        // this path hides the OPAQUE main editor window (not a translucent
+        // overlay), and it lands in the full-screen shot if it's still
+        // compositing — so give it a touch more time to disappear.
+        if let Some(window) = app.get_webview_window("main") {
+            hide_before_capture(&window, "main window", 180);
+        } else {
+            std::thread::sleep(std::time::Duration::from_millis(180));
+        }
 
-    let result = capture_monitor_by_id(app, monitor_id);
-    let still_active = end_screen_session(app, Some(id));
+        let result = capture_monitor_by_id(&app, monitor_id);
+        let still_active = end_screen_session(&app, Some(id));
 
-    emit_capture_outcome(app, still_active, result).map(|_| ())
+        emit_capture_outcome(&app, still_active, result).map(|_| ())
+    })
+    .await
 }
 
 /// `(monitor id, overlay position, overlay size)` for one screen-picker overlay window.
@@ -335,7 +344,7 @@ pub(crate) fn list_screens_for_selection() -> Result<Vec<CapturableMonitor>, Str
 
 #[tauri::command]
 #[specta::specta]
-pub(crate) fn finish_screen_selection(
+pub(crate) async fn finish_screen_selection(
     app: AppHandle,
     monitor_id: u32,
 ) -> Result<CaptureResult, String> {
@@ -344,19 +353,24 @@ pub(crate) fn finish_screen_selection(
     // finish_capture owns the hide/settle/end/restore/emit sequence; screen is
     // the one picker that also hides per-display overlays in the hide step.
     let session_id = app.state::<ScreenPickerSession>().session().current();
-    finish_capture(
-        &app,
-        session_id,
-        "Screen capture was already cancelled.",
-        |app| {
-            if let Some(window) = app.get_webview_window(SCREEN_PICKER) {
-                hide_before_capture(&window, "screen picker", 0);
-            }
-            hide_screen_overlays(app);
-        },
-        finish_screen_session,
-        move |app| capture_monitor_by_id(app, monitor_id),
-    )
+    // async + run_capture_off_ui_thread so the overlays' hide is applied before
+    // the shot instead of being blocked behind our own settle sleep.
+    run_capture_off_ui_thread(move || {
+        finish_capture(
+            &app,
+            session_id,
+            "Screen capture was already cancelled.",
+            |app| {
+                if let Some(window) = app.get_webview_window(SCREEN_PICKER) {
+                    hide_before_capture(&window, "screen picker", 0);
+                }
+                hide_screen_overlays(app);
+            },
+            finish_screen_session,
+            move |app| capture_monitor_by_id(app, monitor_id),
+        )
+    })
+    .await
 }
 
 #[tauri::command]

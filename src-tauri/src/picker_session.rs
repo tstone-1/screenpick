@@ -99,6 +99,29 @@ pub(crate) fn hide_before_capture(window: &WebviewWindow, label: &str, delay_ms:
 /// drift (they previously used 150/150/120 independently).
 const PICKER_HIDE_DELAY_MS: u64 = 150;
 
+/// Run a picker's blocking hide -> settle -> capture sequence off the UI thread.
+///
+/// A synchronous `#[tauri::command]` body runs on the main thread (only `async
+/// fn` commands go to the async runtime), and on macOS a window does not leave
+/// the screen at `orderOut:` — the ordering is flushed when the run loop next
+/// turns. Sleeping on the main thread right after `hide()` therefore blocks the
+/// very thread that has to apply the hide, so the overlay is still composited
+/// when the screenshot is taken and its tint lands in every capture.
+///
+/// `spawn_blocking` (not `spawn`) because the sequence sleeps and does image
+/// I/O: it must not be on the main thread, and it must not starve an async
+/// runtime worker either.
+pub(crate) async fn run_capture_off_ui_thread<T, F>(work: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+    T: Send + 'static,
+{
+    match tauri::async_runtime::spawn_blocking(work).await {
+        Ok(result) => result,
+        Err(err) => Err(format!("Capture task failed: {err}")),
+    }
+}
+
 /// Shared finish-capture choreography for every picker (region/window/screen).
 ///
 /// Centralises the order each `finish_*` command must follow — hide the picker

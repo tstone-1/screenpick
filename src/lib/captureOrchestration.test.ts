@@ -188,10 +188,9 @@ describe("formatShortcut", () => {
     // The orchestrator detects macOS via navigator.platform once at construction;
     // we can't easily flip it, so just check the parts are mapped.
     const result = o.formatShortcut("CommandOrControl+Shift+4");
-    expect(result).toContain("Shift");
     expect(result).toContain("4");
-    // Either "Cmd" (mac) or "Ctrl" (other) — both are valid renderings.
-    expect(result === "CmdShift4" || result === "Ctrl+Shift+4").toBe(true);
+    // Either the macOS glyph chord or the spelled-out Windows rendering.
+    expect(result === "⌘⇧4" || result === "Ctrl+Shift+4").toBe(true);
   });
 });
 

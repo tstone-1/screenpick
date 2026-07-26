@@ -209,25 +209,46 @@
         <RotateCcw size={14} />
       </button>
     </div>
+    <!-- Without this the recorder just looks broken: macOS routes its own
+         screenshot chords through the WindowServer, which consumes them before
+         the webview gets a keydown, so pressing one here records nothing and
+         fires Apple's screenshot picker instead. -->
+    {#if capture.isMac}
+      <p class="shortcut-note">
+        macOS keeps ⌘⇧3, ⌘⇧4 and ⌘⇧5 for its own screenshots. It takes those
+        before ScreenPick sees them, so they cannot be recorded here — turn the
+        matching one off under System Settings &rsaquo; Keyboard &rsaquo;
+        Keyboard Shortcuts &rsaquo; Screenshots first.
+      </p>
+    {/if}
     {#each capture.captureModes as mode}
       <div class="shortcut-mode-group">
         <strong>{mode.label}</strong>
         {#each capture.getModeAccelerators(mode.id) as accelerator, i}
           <div class="shortcut-entry">
+            <!-- The field shows the readable chord, not the raw
+                 "CommandOrControl+Shift+Alt+4" accelerator, which does not fit
+                 this column. It is readonly and recording writes state from the
+                 key event, so nothing ever reads this value back. An empty slot
+                 keeps its placeholder rather than rendering "Unavailable". -->
             <input
               type="text"
               readonly
               class="shortcut-input"
               class:recording={recordingShortcut === shortcutSlot(mode.id, i)}
-              value={accelerator}
+              value={accelerator ? capture.formatShortcut(accelerator) : ""}
               placeholder={recordingShortcut === shortcutSlot(mode.id, i)
                 ? "Press a shortcut..."
                 : "Click, then press keys"}
               onkeydown={(event) => handleShortcutKeydown(event, mode.id, i)}
               onkeyup={(event) => handleShortcutKeyup(event, mode.id, i)}
-              onfocus={() => (recordingShortcut = shortcutSlot(mode.id, i))}
+              onfocus={() => {
+                recordingShortcut = shortcutSlot(mode.id, i);
+                void capture.beginShortcutRecording();
+              }}
               onblur={() => {
                 if (recordingShortcut === shortcutSlot(mode.id, i)) recordingShortcut = null;
+                void capture.endShortcutRecording();
               }}
             />
             <button
@@ -285,6 +306,15 @@
 
   .settings-panel {
     display: grid;
+    /* minmax(0, 1fr), not the implicit `auto` track: an auto track is sized to
+       the widest min-content in the WHOLE column, so one wide row (the shortcut
+       inputs, which carry a browser default intrinsic width) stretched the
+       track past the card and every other row with it — buttons and wrapped
+       labels then spilled over the card's right border. The panel column is a
+       fixed 236-264px, so the card cannot grow to absorb that; the contents
+       have to give instead. Every descendant that must be allowed to shrink
+       below its content width carries a matching min-width: 0 below. */
+    grid-template-columns: minmax(0, 1fr);
     gap: 10px;
     padding: 10px;
     background: #ffffff;
@@ -294,8 +324,10 @@
 
   .settings-row {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     align-items: start;
     gap: 6px;
+    min-width: 0;
   }
 
   .setting-label {
@@ -306,7 +338,7 @@
 
   .save-folder-input {
     display: grid;
-    grid-template-columns: 1fr auto;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
     gap: 6px;
     min-height: 32px;
@@ -372,9 +404,18 @@
     gap: 8px;
   }
 
+  .shortcut-note {
+    margin: 0;
+    color: #6b7684;
+    font-size: 11px;
+    line-height: 15px;
+  }
+
   .shortcut-mode-group {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 5px;
+    min-width: 0;
   }
 
   .shortcut-mode-group strong {
@@ -385,11 +426,15 @@
 
   .shortcut-entry {
     display: grid;
-    grid-template-columns: 1fr auto;
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 4px;
+    min-width: 0;
   }
 
   .shortcut-entry input {
+    /* An <input> defaults to a ~20-character intrinsic width, which is wider
+       than this column. This is the row that was widening the whole card. */
+    min-width: 0;
     min-height: 28px;
     padding: 2px 8px;
     color: #20242a;

@@ -165,6 +165,8 @@ fn specta_builder() -> Builder<tauri::Wry> {
             capture::list_capture_modes,
             shortcuts::shortcut_status,
             shortcuts::effective_shortcut_accelerators,
+            shortcuts::suspend_shortcuts,
+            shortcuts::resume_shortcuts,
             capture::crop_capture,
             capture::cutout_capture,
             capture::save_png_bytes,
@@ -349,12 +351,18 @@ pub fn run() {
         // `tauri dev` output intact. Verbose in dev, info+ in release.
         .plugin(
             tauri_plugin_log::Builder::new()
-                .target(tauri_plugin_log::Target::new(
-                    tauri_plugin_log::TargetKind::LogDir { file_name: None },
-                ))
-                .target(tauri_plugin_log::Target::new(
-                    tauri_plugin_log::TargetKind::Stderr,
-                ))
+                // targets(), not two target() calls: the builder already
+                // defaults to [Stdout, LogDir] and target() APPENDS to that.
+                // Adding LogDir and Stderr that way left the effective list as
+                // Stdout + LogDir + LogDir + Stderr, so every record was
+                // written to the log file twice (halving the rotation
+                // threshold) and echoed on both stdout and stderr.
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: None,
+                    }),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stderr),
+                ])
                 .level(if cfg!(debug_assertions) {
                     log::LevelFilter::Debug
                 } else {

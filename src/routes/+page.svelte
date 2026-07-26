@@ -699,7 +699,11 @@
           onclick={handleCopy}
           title="Copy to clipboard"
         >
-          <ClipboardCopy size={17} /> {editor.copyPending ? "Copying..." : "Copy"}
+          <ClipboardCopy size={17} />
+          <span class="swap-label">
+            <span class="swap-sizer" aria-hidden="true">Copying...</span>
+            <span>{editor.copyPending ? "Copying..." : "Copy"}</span>
+          </span>
         </button>
         <button
           type="button"
@@ -707,7 +711,11 @@
           disabled={!editor.document || editor.exportPending}
           onclick={handleExport}
         >
-          <Download size={17} /> {editor.exportPending ? "Exporting..." : "Export"}
+          <Download size={17} />
+          <span class="swap-label">
+            <span class="swap-sizer" aria-hidden="true">Exporting...</span>
+            <span>{editor.exportPending ? "Exporting..." : "Export"}</span>
+          </span>
         </button>
       </div>
     </header>
@@ -954,6 +962,28 @@
     background: #ffffff;
     border: 1px solid #dfe4ea;
     border-radius: 8px;
+  }
+
+  /* Same fixed-width-column discipline as the settings card: an auto track
+     would be sized to the widest button, so a long accelerator label (macOS
+     defaults carry an extra modifier) would push the list past the panel's
+     right border. The mode name truncates; the key hint keeps its size. */
+  .capture-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .capture-list button {
+    min-width: 0;
+  }
+
+  .capture-list button > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .capture-list button kbd {
+    flex-shrink: 0;
   }
 
   .capture-list button:disabled {
@@ -1401,6 +1431,24 @@
     height: 38px;
     padding: 0 12px;
     white-space: nowrap;
+  }
+
+  /* A label that swaps between an idle and a busy string ("Copy" ->
+     "Copying..."). The cluster is grid-auto-columns: max-content, so a longer
+     busy string would widen its button and shove every neighbour sideways for
+     the duration of the action. Both strings share one grid cell and the longer
+     one reserves the width, so the button keeps a single size throughout. */
+  .swap-label {
+    display: grid;
+    justify-items: start;
+  }
+
+  .swap-label > * {
+    grid-area: 1 / 1;
+  }
+
+  .swap-sizer {
+    visibility: hidden;
   }
 
   .window-actions .primary {

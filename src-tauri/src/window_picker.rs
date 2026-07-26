@@ -8,7 +8,8 @@ use crate::capture::{
     CaptureResult, WindowBounds,
 };
 use crate::picker_session::{
-    emit_capture_cancelled, finish_capture, hide_before_capture, place_overlay, PickerSession,
+    emit_capture_cancelled, finish_capture, hide_before_capture, place_overlay,
+    run_capture_off_ui_thread, PickerSession,
 };
 
 const WINDOW_PICKER: &str = "window-selector";
@@ -194,7 +195,7 @@ fn overlay_coords(app: &AppHandle) -> Result<OverlayCoords, String> {
 
 #[tauri::command]
 #[specta::specta]
-pub(crate) fn finish_window_point_selection(
+pub(crate) async fn finish_window_point_selection(
     app: AppHandle,
     x: f64,
     y: f64,
@@ -208,23 +209,28 @@ pub(crate) fn finish_window_point_selection(
     // hide/settle/end/restore/emit sequence.
     let coords = overlay_coords(&app);
 
-    finish_capture(
-        &app,
-        session_id,
-        "Window capture was already cancelled.",
-        |app| {
-            if let Some(window) = app.get_webview_window(WINDOW_PICKER) {
-                hide_before_capture(&window, "window overlay", 0);
-            }
-        },
-        finish_window_session,
-        move |app| {
-            coords.and_then(|coords| {
-                let (point_x, point_y) = coords.to_xcap(x, y);
-                capture_window_at_point(app, point_x, point_y)
-            })
-        },
-    )
+    // async + run_capture_off_ui_thread so the overlay's hide is applied before
+    // the shot instead of being blocked behind our own settle sleep.
+    run_capture_off_ui_thread(move || {
+        finish_capture(
+            &app,
+            session_id,
+            "Window capture was already cancelled.",
+            |app| {
+                if let Some(window) = app.get_webview_window(WINDOW_PICKER) {
+                    hide_before_capture(&window, "window overlay", 0);
+                }
+            },
+            finish_window_session,
+            move |app| {
+                coords.and_then(|coords| {
+                    let (point_x, point_y) = coords.to_xcap(x, y);
+                    capture_window_at_point(app, point_x, point_y)
+                })
+            },
+        )
+    })
+    .await
 }
 
 #[tauri::command]

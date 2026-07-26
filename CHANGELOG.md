@@ -6,6 +6,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [CalVer](https://calver.org/) `YY.M.MICRO` versioning
 (see [BUILD.md](BUILD.md#version-management)).
 
+## [26.7.7] - 2026-07-26
+
+### Fixed
+
+- **macOS: the picker overlay bled into the capture.** Region captures came out
+  with the selection rectangle's teal tint baked in (and the window/screen
+  paths could keep their overlay or the main window in the shot). The pickers
+  hid the overlay and then slept to let it leave the compositor, but a
+  synchronous Tauri command runs on the main thread — the same thread that has
+  to apply the hide — so the sleep blocked the very work it was waiting for.
+  The hide/settle/capture sequence now runs off the UI thread.
+- **macOS: the default capture shortcuts were unusable or harmful.** Region
+  defaulted to `Cmd+Shift+4`, which is the system screenshot hotkey — the
+  WindowServer handles it first, so ScreenPick never saw the press. Screen and
+  window defaulted to `Cmd+Shift+S` and `Cmd+Alt+W`, which a global hotkey takes
+  away from every other app ("Save As", "Close All Windows"). The macOS defaults
+  now add Option: `Cmd+Shift+Alt+4` / `+S` / `+W`, with `Cmd+Shift+Alt+D` for
+  "Pick display". Windows defaults are unchanged, and existing custom shortcut
+  overrides are untouched.
+- The editor's Copy and Export buttons no longer change width while the action
+  runs, which nudged the whole button cluster sideways on every click.
+- **The shortcut recorder could not record a chord ScreenPick already owned.**
+  A registered global shortcut is consumed by the OS system-wide, including
+  while ScreenPick has focus, so the recording field never received a key event
+  for it — pressing a mode's current binding, or one another mode held, did
+  nothing at all. The global shortcuts are now released while a shortcut field
+  has focus and re-armed when it loses focus.
+- **Every log record was written to the log file twice.** `tauri-plugin-log`'s
+  builder defaults to `[Stdout, LogDir]` and `target()` *appends* to that, so
+  adding `LogDir` and `Stderr` that way produced `Stdout + LogDir + LogDir +
+  Stderr` — a doubled log file (halving the rotation threshold) and output on
+  both stdout and stderr. It now uses `targets()`, which replaces the list.
+- **Settings card contents spilled over its right border.** The card is a
+  single-column grid whose track was sized to the widest row in it — the
+  shortcut inputs, which carry a browser default intrinsic width — so every
+  other row inherited that width and overflowed the card, buttons and wrapped
+  labels alike. The card's column is a fixed 236-264px and cannot grow, so its
+  contents now shrink to fit. The capture-mode list is hardened the same way.
+
+### Changed
+
+- macOS renders shortcut chords as modifier glyphs (`⌘⇧⌥4`) instead of running
+  the names together (`CmdShiftOption4`). The shortcut editor shows that
+  rendering too, instead of the raw `CommandOrControl+Shift+Alt+4` accelerator,
+  which did not fit its column.
+- The shortcut editor notes on macOS that `⌘⇧3/4/5` belong to the system
+  screenshot service and cannot be recorded — pressing one there fires Apple's
+  screenshot picker rather than registering, because the WindowServer consumes
+  the chord before ScreenPick receives a key event.
+
 ## [26.7.6] - 2026-07-25
 
 ### Added
