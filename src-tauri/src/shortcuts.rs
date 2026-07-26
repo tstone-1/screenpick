@@ -65,6 +65,33 @@ pub(crate) fn register_shortcuts_with_settings(app: &App, settings: &CaptureSett
     register_shortcut_list(app, &shortcuts);
 }
 
+// Release every global shortcut for the duration of shortcut recording.
+//
+// A global shortcut is consumed by the OS system-wide, including while
+// ScreenPick itself has focus, so the webview never receives a keydown for a
+// chord we already own. Without this, the recorder silently ignores exactly the
+// chords the user is most likely to type: a mode's current binding, or one
+// another mode holds. Paired with `resume_shortcuts` on blur.
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn suspend_shortcuts(app: AppHandle) -> Result<(), String> {
+    unregister_all_shortcuts(&app);
+    Ok(())
+}
+
+// Re-arm the shortcuts released by `suspend_shortcuts`, from the saved
+// settings. Safe to call when nothing was suspended: registration is
+// idempotent because it unregisters first.
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn resume_shortcuts(
+    app: AppHandle,
+    settings: tauri::State<'_, crate::settings::SettingsState>,
+) -> Result<(), String> {
+    let settings = settings.get();
+    re_register_shortcuts(&app, &settings)
+}
+
 pub(crate) fn re_register_shortcuts(
     app: &AppHandle,
     settings: &CaptureSettings,

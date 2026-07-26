@@ -96,18 +96,22 @@ export class CaptureOrchestration {
         switch (part) {
           case "CommandOrControl":
           case "Command":
-            return this.#isMac ? "Cmd" : "Ctrl";
+            return this.#isMac ? "⌘" : "Ctrl";
           case "Control":
-            return "Ctrl";
+            return this.#isMac ? "⌃" : "Ctrl";
           case "Shift":
-            return "Shift";
+            return this.#isMac ? "⇧" : "Shift";
           case "Alt":
           case "Option":
-            return this.#isMac ? "Option" : "Alt";
+            return this.#isMac ? "⌥" : "Alt";
           default:
             return part;
         }
       })
+      // macOS writes chords as unseparated modifier glyphs. Spelling them out
+      // and then joining with nothing produced "CmdShiftOption4"; the defaults
+      // there carry three modifiers, so the glyphs are both idiomatic and the
+      // only rendering that fits the panel. UI-only — never console output.
       .join(this.#isMac ? "" : "+");
   }
 
@@ -198,6 +202,22 @@ export class CaptureOrchestration {
 
   getModeAccelerators(modeId: string): string[] {
     return this.shortcutEditorDrafts[modeId] ?? this.getModeDefaultAccelerators(modeId);
+  }
+
+  // Release the global shortcuts while a shortcut field has focus. The OS
+  // consumes a registered global shortcut before the webview sees it, even when
+  // ScreenPick is the focused app — so without this, the recorder silently
+  // ignores any chord ScreenPick already owns, which is exactly the chord a
+  // user re-entering or moving a binding will press.
+  async beginShortcutRecording() {
+    const result = await commands.suspendShortcuts();
+    if (result.status === "error") this.captureActivity = result.error;
+  }
+
+  async endShortcutRecording() {
+    const result = await commands.resumeShortcuts();
+    if (result.status === "error") this.captureActivity = result.error;
+    await this.refreshShortcutStatuses();
   }
 
   addShortcutEntry(modeId: string) {

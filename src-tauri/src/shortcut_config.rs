@@ -39,13 +39,29 @@ pub(crate) fn effective_accelerators(
 #[cfg(test)]
 mod tests {
     use super::effective_accelerators;
+    use crate::capture_modes::capture_modes;
     use std::collections::HashMap;
+
+    /// The first default accelerator for a mode. Read from `capture_modes()`
+    /// rather than hardcoded, because the defaults are platform-split (macOS
+    /// has to dodge the system screenshot hotkey and the Save As / Close All
+    /// Windows menu equivalents).
+    fn default_accelerator(mode_id: &str) -> String {
+        capture_modes()
+            .iter()
+            .find(|mode| mode.id == mode_id)
+            .expect("mode is defined")
+            .accelerators
+            .first()
+            .expect("mode has a default accelerator")
+            .clone()
+    }
 
     #[test]
     fn uses_defaults_when_no_settings() {
         let result = effective_accelerators(None);
         let region = result.iter().find(|s| s.mode == "region").unwrap();
-        assert_eq!(region.accelerator, "CommandOrControl+Shift+4");
+        assert_eq!(region.accelerator, default_accelerator("region"));
     }
 
     #[test]
@@ -53,7 +69,7 @@ mod tests {
         let overrides = HashMap::new();
         let result = effective_accelerators(Some(&overrides));
         let window = result.iter().find(|s| s.mode == "window").unwrap();
-        assert_eq!(window.accelerator, "CommandOrControl+Shift+W");
+        assert_eq!(window.accelerator, default_accelerator("window"));
     }
 
     #[test]
@@ -63,9 +79,30 @@ mod tests {
         let result = effective_accelerators(Some(&overrides));
         let region = result.iter().find(|s| s.mode == "region").unwrap();
         assert_eq!(region.accelerator, "CmdOrCtrl+Shift+X");
-        assert!(!result
-            .iter()
-            .any(|s| s.accelerator == "CommandOrControl+Shift+4"));
+        let region_default = default_accelerator("region");
+        assert!(!result.iter().any(|s| s.accelerator == region_default));
+    }
+
+    /// Regression guard for the macOS defaults. `Cmd+Shift+3/4/5` belong to the
+    /// system screenshot service: the WindowServer consumes them before any
+    /// `RegisterEventHotKey` client, so a default landing on one of them is
+    /// dead on arrival and looks like a broken app rather than a collision.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_defaults_avoid_system_screenshot_hotkeys() {
+        let reserved = [
+            "CommandOrControl+Shift+3",
+            "CommandOrControl+Shift+4",
+            "CommandOrControl+Shift+5",
+        ];
+        for shortcut in effective_accelerators(None) {
+            assert!(
+                !reserved.contains(&shortcut.accelerator.as_str()),
+                "{} default {} is a macOS system screenshot hotkey",
+                shortcut.mode,
+                shortcut.accelerator
+            );
+        }
     }
 
     #[test]
@@ -89,7 +126,7 @@ mod tests {
         let mut overrides = HashMap::new();
         overrides.insert("region".to_string(), vec![]);
         let result = effective_accelerators(Some(&overrides));
-        let region_default = "CommandOrControl+Shift+4";
+        let region_default = default_accelerator("region");
         assert!(!result
             .iter()
             .any(|s| s.mode == "region" && s.accelerator == region_default));

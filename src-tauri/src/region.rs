@@ -13,7 +13,8 @@ use crate::capture::{
     CaptureResult,
 };
 use crate::picker_session::{
-    emit_capture_cancelled, finish_capture, hide_before_capture, place_overlay, PickerSession,
+    emit_capture_cancelled, finish_capture, hide_before_capture, place_overlay,
+    run_capture_off_ui_thread, PickerSession,
 };
 
 const REGION_WINDOW: &str = "region-selector";
@@ -144,7 +145,7 @@ async fn create_region_window(
 
 #[tauri::command]
 #[specta::specta]
-pub(crate) fn finish_region_selection(
+pub(crate) async fn finish_region_selection(
     app: AppHandle,
     selection: RegionSelection,
 ) -> Result<CaptureResult, String> {
@@ -153,18 +154,23 @@ pub(crate) fn finish_region_selection(
     // overlay is hiding) can't emit a CaptureCompleted on someone else's
     // session. finish_capture owns the hide/settle/end/restore/emit sequence.
     let session_id = app.state::<RegionPickerSession>().session().current();
-    finish_capture(
-        &app,
-        session_id,
-        "Region capture was already cancelled.",
-        |app| {
-            if let Some(window) = app.get_webview_window(REGION_WINDOW) {
-                hide_before_capture(&window, "region overlay", 0);
-            }
-        },
-        finish_region_session,
-        |app| capture_region_selection(app, &selection),
-    )
+    // async + run_capture_off_ui_thread so the overlay's hide is applied before
+    // the shot instead of being blocked behind our own settle sleep.
+    run_capture_off_ui_thread(move || {
+        finish_capture(
+            &app,
+            session_id,
+            "Region capture was already cancelled.",
+            |app| {
+                if let Some(window) = app.get_webview_window(REGION_WINDOW) {
+                    hide_before_capture(&window, "region overlay", 0);
+                }
+            },
+            finish_region_session,
+            |app| capture_region_selection(app, &selection),
+        )
+    })
+    .await
 }
 
 #[tauri::command]
