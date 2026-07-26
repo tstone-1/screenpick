@@ -559,6 +559,15 @@ entirely, and its clippy line lacked `--all-targets -- -D warnings`).
 npx tauri build
 ```
 
+> **This step exits non-zero locally, and that is expected.** Without
+> `TAURI_SIGNING_PRIVATE_KEY` exported, the build writes every bundle — `.app`,
+> DMG, `.app.tar.gz` — and *then* fails on the updater signature with
+> `A public key has been found, but no private key`. The artifacts are complete;
+> only the `.sig` is missing, and the release build in CI is the one that signs.
+> Judge a local smoke build by the bundle paths it prints, not by its exit code.
+> (A stale `.sig` from an earlier build is left in place next to the new
+> tarball, so its presence proves nothing either — check the timestamp.)
+
 ### 3. Verify the build
 
 A plain local `npx tauri build` is **ad-hoc-signed** — `codesign -dv` shows a
