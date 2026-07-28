@@ -20,6 +20,8 @@ const commandsMock = vi.hoisted(() => ({
   appStatus: vi.fn(),
   listCaptureModes: vi.fn(),
   shortcutStatus: vi.fn(),
+  suspendShortcuts: vi.fn(),
+  resumeShortcuts: vi.fn(),
   effectiveShortcutAccelerators: vi.fn(),
   getSettings: vi.fn(),
   updateSettings: vi.fn(),
@@ -110,6 +112,19 @@ function keyEvent(fields: {
   } as unknown as KeyboardEvent;
 }
 
+function sanitize(overrides: Record<string, string[]>): Record<string, string[]> {
+  const result: Record<string, string[]> = {};
+  for (const [mode, accelerators] of Object.entries(overrides)) {
+    if (accelerators.length === 0) {
+      result[mode] = [];
+      continue;
+    }
+    const kept = accelerators.map((a) => a.trim()).filter((a) => a.length > 0);
+    if (kept.length > 0) result[mode] = kept;
+  }
+  return result;
+}
+
 function commandOrControl(o: InstanceType<typeof CaptureOrchestration>) {
   return o.isMac ? { metaKey: true } : { ctrlKey: true };
 }
@@ -132,9 +147,14 @@ beforeEach(() => {
     window: ["CommandOrControl+Shift+W", "CommandOrControl+Alt+W"],
     screen: ["CommandOrControl+Shift+S"]
   });
+  commandsMock.suspendShortcuts.mockResolvedValue({ status: "ok", data: null });
+  commandsMock.resumeShortcuts.mockResolvedValue({ status: "ok", data: null });
   commandsMock.getSettings.mockResolvedValue(settingsHolder.current);
   commandsMock.updateSettings.mockImplementation(async (s: CaptureSettings) => {
-    settingsHolder.current = { ...s };
+    // Mirrors Rust's `sanitize_settings`: blank entries are dropped and a mode
+    // whose entries were all blank disappears. A fake that echoed the payload
+    // back verbatim would let a draft/stored mismatch pass unnoticed.
+    settingsHolder.current = { ...s, shortcutOverrides: sanitize(s.shortcutOverrides ?? {}) };
     return { status: "ok", data: settingsHolder.current };
   });
   commandsMock.resetShortcutSettings.mockImplementation(async () => {
@@ -257,15 +277,158 @@ describe("shortcut draft round-trip", () => {
     ]);
   });
 
-  it("removeShortcutEntry drops the row at the given index", () => {
+  it("removeShortcutEntry drops the row at the given index", async () => {
     const o = new CaptureOrchestration();
     o.captureModes = modes;
     o.addShortcutEntry("window");
-    o.removeShortcutEntry("window", 0);
+    await o.removeShortcutEntry("window", 0);
     expect(o.getModeAccelerators("window")).toEqual([
       "CommandOrControl+Alt+W",
       ""
     ]);
+  });
+
+  // The click that removes a row also blurs the field, and that blur handler
+  // runs first — on the pre-removal draft. So removal cannot wait for a blur of
+  // its own; it has to commit itself or the deletion is silently lost.
+  it("removeShortcutEntry persists without waiting for a blur", async () => {
+    const o = new CaptureOrchestration();
+    o.captureModes = modes;
+    await o.removeShortcutEntry("window", 1);
+    expect(commandsMock.updateSettings).toHaveBeenCalledTimes(1);
+    expect(settingsHolder.current.shortcutOverrides?.window).toEqual([
+      "CommandOrControl+Shift+W"
+    ]);
+  });
+});
+
+describe("blur commits the recorded shortcut", () => {
+  it("saves and re-registers when a chord was recorded", async () => {
+    const o = new CaptureOrchestration();
+    o.captureModes = modes;
+    await o.beginShortcutRecording();
+    o.setShortcutEntry("window", 0, "CommandOrControl+Shift+G");
+    await o.endShortcutRecording();
+
+    expect(commandsMock.updateSettings).toHaveBeenCalledTimes(1);
+    expect(settingsHolder.current.shortcutOverrides?.window).toEqual([
+      "CommandOrControl+Shift+G",
+      "CommandOrControl+Alt+W"
+    ]);
+    expect(o.appliedSettings.shortcutOverrides?.window?.[0]).toBe("CommandOrControl+Shift+G");
+    // update_settings re-registers everything, so a separate resume would be a
+    // redundant unregister/register cycle.
+    expect(commandsMock.resumeShortcuts).not.toHaveBeenCalled();
+  });
+
+  it("only resumes when nothing was recorded", async () => {
+    const o = new CaptureOrchestration();
+    o.captureModes = modes;
+    await o.beginShortcutRecording();
+    await o.endShortcutRecording();
+
+    expect(commandsMock.resumeShortcuts).toHaveBeenCalledTimes(1);
+    expect(commandsMock.updateSettings).not.toHaveBeenCalled();
+  });
+
+  // A blank row is not a change: the backend never stores one, so treating it as
+  // dirty would save-and-re-register on every blur of an untouched field.
+  it("treats a blank placeholder row as no change", async () => {
+    const o = new CaptureOrchestration();
+    o.captureModes = modes;
+    o.appliedSettings = {
+      ...o.appliedSettings,
+      shortcutOverrides: { window: ["CommandOrControl+Shift+W"] }
+    };
+    o.shortcutEditorDrafts = { window: ["CommandOrControl+Shift+W"] };
+    o.addShortcutEntry("window");
+    await o.endShortcutRecording();
+
+    expect(commandsMock.updateSettings).not.toHaveBeenCalled();
+    expect(commandsMock.resumeShortcuts).toHaveBeenCalledTimes(1);
+  });
+
+  // Moving between two shortcut fields fires blur (commit + re-register) before
+  // focus (suspend). If those two land out of order the shortcuts are armed
+  // while the second field is recording, and the OS eats the chord — the exact
+  // failure `suspend_shortcuts` exists to prevent.
+  it("suspends only after the previous field's save has finished", async () => {
+    const order: string[] = [];
+    commandsMock.updateSettings.mockImplementation(async (s: CaptureSettings) => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      order.push("save");
+      settingsHolder.current = { ...s };
+      return { status: "ok", data: settingsHolder.current };
+    });
+    commandsMock.suspendShortcuts.mockImplementation(async () => {
+      order.push("suspend");
+      return { status: "ok", data: null };
+    });
+
+    const o = new CaptureOrchestration();
+    o.captureModes = modes;
+    o.setShortcutEntry("window", 0, "CommandOrControl+Shift+G");
+    const blur = o.endShortcutRecording();
+    const focus = o.beginShortcutRecording();
+    await Promise.all([blur, focus]);
+
+    expect(order).toEqual(["save", "suspend"]);
+  });
+
+  // A save triggered from one mode must not delete a blank row the user just
+  // added under another: the backend strips blanks, so adopting its response
+  // wholesale would make the row disappear mid-edit.
+  it("keeps an unfilled row in another mode across a save", async () => {
+    const o = new CaptureOrchestration();
+    o.captureModes = modes;
+    o.addShortcutEntry("screen");
+    o.setShortcutEntry("window", 0, "CommandOrControl+Shift+G");
+    await o.endShortcutRecording();
+
+    expect(settingsHolder.current.shortcutOverrides?.screen).toEqual([
+      "CommandOrControl+Shift+S"
+    ]);
+    expect(o.getModeAccelerators("screen")).toEqual(["CommandOrControl+Shift+S", ""]);
+  });
+});
+
+describe("shortcutRowState", () => {
+  it("reports the registration state of a committed row", () => {
+    const o = new CaptureOrchestration();
+    o.captureModes = modes;
+    o.shortcutStatusByKey = {
+      "CommandOrControl+Shift+W:window": status("CommandOrControl+Shift+W", "window", "registered"),
+      "CommandOrControl+Alt+W:window": {
+        ...status("CommandOrControl+Alt+W", "window", "failed"),
+        error: "HotKey already registered"
+      }
+    };
+    expect(o.shortcutRowState("window", "CommandOrControl+Shift+W")).toBe("registered");
+    expect(o.shortcutRowState("window", "CommandOrControl+Alt+W")).toBe("failed");
+    expect(o.shortcutRowState("window", "")).toBe("empty");
+    expect(o.shortcutRowState("screen", "CommandOrControl+Shift+S")).toBe("pending");
+  });
+
+  // The collision that started this: the recorder emits Cmd+Alt+Shift+4 while
+  // the region default is spelled Cmd+Shift+Alt+4. Same chord, different string
+  // — so a raw compare misses it and only the OS notices, by refusing the
+  // second registration.
+  it("flags a duplicate chord that differs only in modifier order", () => {
+    const o = new CaptureOrchestration();
+    o.captureModes = modes;
+    o.shortcutStatusByKey = {
+      "CommandOrControl+Shift+W:window": status("CommandOrControl+Shift+W", "window", "registered")
+    };
+    o.shortcutEditorDrafts = {
+      region: ["CommandOrControl+Shift+Alt+4"],
+      window: ["CommandOrControl+Shift+W", "CommandOrControl+Alt+Shift+4"]
+    };
+    expect(o.shortcutRowState("window", "CommandOrControl+Alt+Shift+4")).toBe("duplicate");
+    // Both sides of the collision are flagged; neither is the "right" one.
+    expect(o.shortcutRowState("region", "CommandOrControl+Shift+Alt+4")).toBe("duplicate");
+    // A chord bound once is untouched — the check flags collisions, not any
+    // accelerator that happens to share modifiers with another.
+    expect(o.shortcutRowState("window", "CommandOrControl+Shift+W")).toBe("registered");
   });
 });
 

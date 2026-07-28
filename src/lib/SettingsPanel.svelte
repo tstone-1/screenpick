@@ -254,11 +254,30 @@
             <button
               type="button"
               aria-label={`Remove ${mode.label} shortcut`}
-              onclick={() => capture.removeShortcutEntry(mode.id, i)}
+              onclick={() => void capture.removeShortcutEntry(mode.id, i)}
             >
               <X size={13} />
             </button>
           </div>
+          <!-- Answers "did that work?" on the row itself. Suppressed while the
+               field is focused, where the status still describes the previous
+               binding: recording suspends the global shortcuts, so nothing is
+               registered until blur commits. -->
+          {#if recordingShortcut !== shortcutSlot(mode.id, i)}
+            {@const state = capture.shortcutRowState(mode.id, accelerator)}
+            {#if state === "registered"}
+              <span class="shortcut-state ok">Active</span>
+            {:else if state === "duplicate"}
+              <span class="shortcut-state bad">Already used by another mode</span>
+            {:else if state === "failed"}
+              <span
+                class="shortcut-state bad"
+                title={capture.shortcutRowError(mode.id, accelerator) ?? "Unknown error"}
+              >
+                {capture.friendlyShortcutError(capture.shortcutRowError(mode.id, accelerator))}
+              </span>
+            {/if}
+          {/if}
         {/each}
         <button
           type="button"
@@ -269,13 +288,6 @@
         </button>
       </div>
     {/each}
-    <button
-      type="button"
-      class="apply-shortcuts"
-      onclick={() => void capture.applyShortcutOverrides()}
-    >
-      Apply shortcuts
-    </button>
   </div>
 </section>
 
@@ -478,8 +490,7 @@
     background: rgba(180, 35, 24, 0.08);
   }
 
-  .add-shortcut,
-  .apply-shortcuts {
+  .add-shortcut {
     min-height: 28px;
     padding: 4px 10px;
     color: #5d6875;
@@ -490,11 +501,20 @@
     font-size: 11px;
   }
 
-  .apply-shortcuts {
-    color: #ffffff;
-    background: #1c7c6d;
-    border: 1px solid #1c7c6d;
-    margin-top: 4px;
+  .shortcut-state {
+    /* Sits directly under its row, inside the mode group's grid gap, so it
+       reads as belonging to the entry above rather than to the next one. */
+    margin-top: -2px;
+    font-size: 10px;
+    line-height: 13px;
+  }
+
+  .shortcut-state.ok {
+    color: #1c7c6d;
+  }
+
+  .shortcut-state.bad {
+    color: #b42318;
   }
 
   .quit-button {

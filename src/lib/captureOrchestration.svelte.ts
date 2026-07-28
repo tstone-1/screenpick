@@ -9,7 +9,7 @@ import {
 import { pickDirectory } from "./editorCommands";
 import { editor } from "./editor.svelte";
 import { playCaptureSound } from "./captureSound";
-import { acceleratorMatches } from "./shortcutRecording";
+import { acceleratorKey, acceleratorMatches } from "./shortcutRecording";
 
 const defaultSettings: CaptureSettings = {
   saveDirectory: null,
@@ -78,6 +78,7 @@ export class CaptureOrchestration {
   #captureWatchdog: ReturnType<typeof setTimeout> | null = null;
   #pendingMode: string | null = null;
   #cancelled = false;
+  #shortcutQueue: Promise<void> = Promise.resolve();
   #isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 
   get isMac(): boolean {
@@ -210,16 +211,31 @@ export class CaptureOrchestration {
   // ignores any chord ScreenPick already owns, which is exactly the chord a
   // user re-entering or moving a binding will press.
   async beginShortcutRecording() {
-    const result = await commands.suspendShortcuts();
-    if (result.status === "error") this.captureActivity = result.error;
+    await this.#enqueueShortcutTask(async () => {
+      const result = await commands.suspendShortcuts();
+      if (result.status === "error") this.captureActivity = result.error;
+    });
   }
 
+  // Blur is the commit point: a recorded chord is saved and registered here, so
+  // the user can test it immediately instead of hunting for an Apply button.
+  // Saving re-registers everything from the stored settings, which subsumes the
+  // resume — so resume only runs when there is nothing to save.
   async endShortcutRecording() {
-    const result = await commands.resumeShortcuts();
-    if (result.status === "error") this.captureActivity = result.error;
-    await this.refreshShortcutStatuses();
+    await this.#enqueueShortcutTask(async () => {
+      if (this.#shortcutOverridesDirty()) {
+        await this.#saveAndApplySettings(this.settings, this.appliedSettings);
+        return;
+      }
+      const result = await commands.resumeShortcuts();
+      if (result.status === "error") this.captureActivity = result.error;
+      await this.refreshShortcutStatuses();
+    });
   }
 
+  // A blank row is a placeholder for the chord about to be recorded into it, so
+  // it is deliberately not committed here — the backend drops blank entries, and
+  // saving now would delete the row out from under the user before they typed.
   addShortcutEntry(modeId: string) {
     const current = this.getModeAccelerators(modeId);
     this.#updateModeAccelerators(modeId, [...current, ""]);
@@ -231,9 +247,60 @@ export class CaptureOrchestration {
     this.#updateModeAccelerators(modeId, current);
   }
 
-  removeShortcutEntry(modeId: string, index: number) {
+  // Committed directly rather than on blur: the click that removes a row also
+  // blurs the field, and that blur runs *before* this handler — so it sees the
+  // pre-removal draft and would leave the deletion unsaved.
+  async removeShortcutEntry(modeId: string, index: number) {
     const current = this.getModeAccelerators(modeId);
-    this.#updateModeAccelerators(modeId, current.filter((_, i) => i !== index));
+    this.#updateModeAccelerators(
+      modeId,
+      current.filter((_, i) => i !== index)
+    );
+    await this.#enqueueShortcutTask(async () => {
+      if (this.#shortcutOverridesDirty()) {
+        await this.#saveAndApplySettings(this.settings, this.appliedSettings);
+      }
+    });
+  }
+
+  // Per-row state for the shortcut editor:
+  // - "empty"      blank placeholder row, nothing to report
+  // - "duplicate"  the same physical chord is bound elsewhere in this editor;
+  //                caught here because only the first registration succeeds and
+  //                the loser's failure names no owner
+  // - "registered" live, OS-wide
+  // - "failed"     the OS refused it (another app holds it)
+  // - "pending"    edited but not yet committed, or status not loaded yet
+  shortcutRowState(
+    modeId: string,
+    accelerator: string
+  ): "empty" | "duplicate" | "registered" | "failed" | "pending" {
+    if (!accelerator.trim()) return "empty";
+    if (this.#duplicateAcceleratorKeys().has(acceleratorKey(accelerator, this.#isMac) ?? "")) {
+      return "duplicate";
+    }
+    const status = this.shortcutStatusByKey[`${accelerator}:${modeId}`];
+    if (!status) return "pending";
+    return status.state === "registered" ? "registered" : "failed";
+  }
+
+  shortcutRowError(modeId: string, accelerator: string): string | null {
+    return this.shortcutStatusByKey[`${accelerator}:${modeId}`]?.error ?? null;
+  }
+
+  // Keys bound more than once across the whole editor (drafts, falling back to
+  // each mode's defaults). Both sides of a collision are reported, because
+  // neither is more "correct" than the other.
+  #duplicateAcceleratorKeys(): Set<string> {
+    const counts = new Map<string, number>();
+    for (const mode of this.captureModes) {
+      for (const accelerator of this.getModeAccelerators(mode.id)) {
+        const key = acceleratorKey(accelerator, this.#isMac);
+        if (!key) continue;
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+    }
+    return new Set([...counts.entries()].filter(([, n]) => n > 1).map(([key]) => key));
   }
 
   async pickSaveDirectory() {
@@ -300,10 +367,6 @@ export class CaptureOrchestration {
     } catch (error) {
       this.captureActivity = error instanceof Error ? error.message : "Reset failed.";
     }
-  }
-
-  async applyShortcutOverrides() {
-    await this.#saveAndApplySettings(this.settings, this.appliedSettings);
   }
 
   async refreshShortcutStatuses() {
@@ -566,6 +629,73 @@ export class CaptureOrchestration {
     };
   }
 
+  // Focus/blur arrive as separate async handlers, and moving between two
+  // shortcut fields fires the old field's blur before the new field's focus.
+  // Run them strictly in call order so the blur's re-register can never land
+  // *after* the next field's suspend — which would leave the global shortcuts
+  // armed while recording, and the OS would eat the next chord typed.
+  #enqueueShortcutTask<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.#shortcutQueue.then(task, task);
+    this.#shortcutQueue = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
+  }
+
+  // Mirror of the backend's `sanitize_settings`: trim entries, drop blank ones,
+  // and drop a mode whose entries were *all* blank. An entry that survives as an
+  // empty array is kept — that is a deliberately disabled mode, not an absent
+  // override.
+  #sanitizeOverrides(overrides: Record<string, string[]>): Record<string, string[]> {
+    const result: Record<string, string[]> = {};
+    for (const [mode, accelerators] of Object.entries(overrides)) {
+      if (accelerators.length === 0) {
+        result[mode] = [];
+        continue;
+      }
+      const sanitized = accelerators.map((a) => a.trim()).filter((a) => a.length > 0);
+      if (sanitized.length > 0) result[mode] = sanitized;
+    }
+    return result;
+  }
+
+  #overridesEqual(a: Record<string, string[]>, b: Record<string, string[]>): boolean {
+    const aKeys = Object.keys(a).sort();
+    const bKeys = Object.keys(b).sort();
+    if (aKeys.length !== bKeys.length || aKeys.some((key, i) => key !== bKeys[i])) return false;
+    return aKeys.every((key) => {
+      const left = a[key] ?? [];
+      const right = b[key] ?? [];
+      return left.length === right.length && left.every((value, i) => value === right[i]);
+    });
+  }
+
+  // Compared in sanitized form so a blank placeholder row — which the backend
+  // never stores — does not read as an unsaved change and force a pointless
+  // save-and-re-register on every blur.
+  #shortcutOverridesDirty(): boolean {
+    return !this.#overridesEqual(
+      this.#sanitizeOverrides(this.settings.shortcutOverrides ?? {}),
+      this.appliedSettings.shortcutOverrides ?? {}
+    );
+  }
+
+  // Adopt what the backend stored, but keep a draft row the user is still
+  // filling in: the backend drops blank entries, so a straight overwrite would
+  // make a just-added row vanish the moment an unrelated save ran.
+  #reconcileDrafts(saved: Record<string, string[]>): Record<string, string[]> {
+    const next: Record<string, string[]> = { ...saved };
+    for (const [mode, draft] of Object.entries(this.shortcutEditorDrafts)) {
+      const sanitized = this.#sanitizeOverrides({ [mode]: draft })[mode];
+      const savedEntry = saved[mode];
+      if (savedEntry && sanitized && this.#overridesEqual({ x: sanitized }, { x: savedEntry })) {
+        next[mode] = draft;
+      }
+    }
+    return next;
+  }
+
   #restoreSettings(snapshot: CaptureSettings) {
     this.settings = snapshot;
     this.shortcutEditorDrafts = { ...(snapshot.shortcutOverrides ?? {}) };
@@ -584,7 +714,7 @@ export class CaptureOrchestration {
       }
       this.settings = result.data;
       this.appliedSettings = result.data;
-      this.shortcutEditorDrafts = { ...(result.data.shortcutOverrides ?? {}) };
+      this.shortcutEditorDrafts = this.#reconcileDrafts(result.data.shortcutOverrides ?? {});
       await this.refreshShortcutStatuses();
       return result.data;
     } catch (error) {

@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [CalVer](https://calver.org/) `YY.M.MICRO` versioning
 (see [BUILD.md](BUILD.md#version-management)).
 
+## [26.7.8] - Unreleased
+
+### Changed
+
+- **A recorded shortcut now takes effect when you click away from the field.**
+  Recording used to write to a draft that did nothing until you found the
+  "Apply shortcuts" button at the bottom of the section — so the natural way to
+  check a new binding, pressing it, always failed, and the assignment looked
+  broken rather than unsaved. Blur is now the commit point and the Apply button
+  is gone. Removing a row saves itself, because the click that removes it also
+  blurs the field and that blur runs first, on the pre-removal draft.
+
+### Added
+
+- **Each shortcut row says whether it is live**: `Active` once the OS accepted
+  it, the reason if it refused, or `Already used by another mode` when the same
+  chord is bound twice. The status is hidden while a field is focused, where it
+  would describe the previous binding — recording suspends the global shortcuts,
+  so nothing is registered until blur.
+
+### Fixed
+
+- **A chord bound twice under different modifier spellings now surfaces in the
+  editor** instead of only as a registration failure. `Cmd+Alt+Shift+4` and
+  `Cmd+Shift+Alt+4` are one chord to the OS but two different strings, so a
+  duplicate went unnoticed until the second registration was refused — with an
+  error that names no owner. Accelerators are now compared in a canonical form
+  (modifiers deduplicated and ordered, `CommandOrControl` resolved per platform).
+- **Moving between two shortcut fields could swallow the next chord.** The old
+  field's re-register and the new field's suspend were independent async
+  handlers, so the re-register could land last and leave the global shortcuts
+  armed while recording — at which point the OS consumed the chord instead of
+  the recorder. Those steps now run strictly in order.
+
 ## [26.7.7] - 2026-07-26
 
 ### Fixed
