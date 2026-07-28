@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   acceleratorFromKeyboardEvent,
+  acceleratorKey,
   acceleratorMatches,
   codeFromKeyToken,
   keyTokenFromCode
@@ -112,5 +113,48 @@ describe("acceleratorFromKeyboardEvent", () => {
     expect(acceleratorFromKeyboardEvent(ev("Digit5"), false)).toBeNull();
     expect(acceleratorFromKeyboardEvent(ev("Space"), false)).toBeNull();
     expect(acceleratorFromKeyboardEvent(ev("Enter"), false)).toBeNull();
+  });
+});
+
+describe("acceleratorKey", () => {
+  it("collapses modifier order so the same chord compares equal", () => {
+    expect(acceleratorKey("CommandOrControl+Alt+Shift+4", true)).toBe(
+      acceleratorKey("CommandOrControl+Shift+Alt+4", true)
+    );
+  });
+
+  it("collapses modifier aliases and key case", () => {
+    expect(acceleratorKey("CmdOrCtrl+Option+w", true)).toBe(
+      acceleratorKey("CommandOrControl+Alt+W", true)
+    );
+  });
+
+  it("resolves CommandOrControl per platform", () => {
+    // On macOS the primary modifier IS Command, so the two spellings are one
+    // chord; on Windows CommandOrControl is Control, and they are two.
+    expect(acceleratorKey("CommandOrControl+Shift+W", true)).toBe(
+      acceleratorKey("Command+Shift+W", true)
+    );
+    expect(acceleratorKey("CommandOrControl+Shift+W", false)).not.toBe(
+      acceleratorKey("Command+Shift+W", false)
+    );
+  });
+
+  it("keeps genuinely different chords apart", () => {
+    // Both directions: a missing modifier and an extra one.
+    expect(acceleratorKey("CommandOrControl+Shift+W", true)).not.toBe(
+      acceleratorKey("CommandOrControl+W", true)
+    );
+    expect(acceleratorKey("CommandOrControl+Shift+4", true)).not.toBe(
+      acceleratorKey("CommandOrControl+Shift+Alt+4", true)
+    );
+    expect(acceleratorKey("CommandOrControl+Shift+W", true)).not.toBe(
+      acceleratorKey("CommandOrControl+Shift+S", true)
+    );
+  });
+
+  it("returns null for a string with no chord key", () => {
+    expect(acceleratorKey("", true)).toBeNull();
+    expect(acceleratorKey("CommandOrControl+Shift", true)).toBeNull();
   });
 });

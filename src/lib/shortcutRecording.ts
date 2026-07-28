@@ -73,6 +73,62 @@ export function codeFromKeyToken(token: string): string | null {
   return null;
 }
 
+// Canonical modifier names, keyed by every spelling the global-hotkey parser
+// accepts. Two accelerators that differ only in modifier spelling or order are
+// the same physical chord, so collision checks have to compare canonical forms:
+// the recorder writes "CommandOrControl+Alt+Shift+4" while the built-in default
+// is "CommandOrControl+Shift+Alt+4", and a raw string compare sees two chords
+// where the OS sees one — the duplicate then only surfaces as a registration
+// failure, after the fact.
+const MODIFIER_ALIASES = new Map<string, string>([
+  ["CommandOrControl", "CommandOrControl"],
+  ["CmdOrCtrl", "CommandOrControl"],
+  ["CommandOrCtrl", "CommandOrControl"],
+  ["CmdOrControl", "CommandOrControl"],
+  ["Command", "Command"],
+  ["Cmd", "Command"],
+  ["Super", "Command"],
+  ["Meta", "Command"],
+  ["Control", "Control"],
+  ["Ctrl", "Control"],
+  ["Alt", "Alt"],
+  ["Option", "Alt"],
+  ["Shift", "Shift"]
+]);
+
+// Fixed emission order, so the canonical form is stable regardless of the order
+// the modifiers were recorded or typed in.
+const MODIFIER_ORDER = ["Command", "Control", "Alt", "Shift"];
+
+// Reduce an accelerator to a comparison key: modifiers resolved to their
+// canonical names, deduplicated, sorted, then the chord key uppercased.
+// `CommandOrControl` resolves per platform, so a stored "Command+Shift+W" and a
+// recorded "CommandOrControl+Shift+W" collide on macOS exactly as they do in the
+// OS hotkey table. Returns null for an empty or modifier-only string, which has
+// no chord to collide with.
+export function acceleratorKey(accelerator: string, isMac: boolean): string | null {
+  const parts = accelerator
+    .split("+")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+  if (parts.length === 0) return null;
+
+  const key = parts.at(-1) ?? "";
+  if (MODIFIER_ALIASES.has(key)) return null;
+
+  const mods = new Set<string>();
+  for (const part of parts.slice(0, -1)) {
+    const canonical = MODIFIER_ALIASES.get(part);
+    if (!canonical) return null;
+    mods.add(
+      canonical === "CommandOrControl" ? (isMac ? "Command" : "Control") : canonical
+    );
+  }
+
+  const ordered = MODIFIER_ORDER.filter((mod) => mods.has(mod));
+  return [...ordered, key.toUpperCase()].join("+");
+}
+
 export function acceleratorMatches(
   event: Pick<KeyboardEvent, "code" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey">,
   accelerator: string,
