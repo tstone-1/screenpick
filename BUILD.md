@@ -552,6 +552,15 @@ entirely, and its clippy line lacked `--all-targets -- -D warnings`).
   cargo check --manifest-path src-tauri/Cargo.toml   # refreshes Cargo.lock
   ```
 - [ ] Move the `CHANGELOG.md` entry from `Unreleased` to `[YY.M.MICRO] - YYYY-MM-DD`.
+- [ ] **Re-derive the version from the release date — do not trust the number on
+      the `Unreleased` heading.** That heading is written when the first entry of
+      a cycle lands, so it encodes the month the *work started*, and CalVer
+      encodes the month it *ships*. Cross a month boundary and the two disagree:
+      26.8.0 was cut from a heading that read `[26.7.8] - Unreleased`, because
+      the work began in July and the release went out on 6 August — and MICRO
+      resets to 0 for the first release of a month, so it is not 26.8.8 either.
+      A stale heading is the only place this is recorded, so nothing else
+      catches it.
 
 ### 2. Build Release
 
@@ -567,6 +576,19 @@ npx tauri build
 > Judge a local smoke build by the bundle paths it prints, not by its exit code.
 > (A stale `.sig` from an earlier build is left in place next to the new
 > tarball, so its presence proves nothing either — check the timestamp.)
+
+> **A *different* non-zero exit arrives earlier, and looks the same: a leftover
+> mounted DMG.** `bundle_dmg.sh` attaches a read-write image while it works, and
+> a run that dies leaves it attached — after which every later build fails at
+> `Running bundle_dmg.sh` with nothing but
+> `failed to run .../bundle_dmg.sh`, *before* ever reaching the updater
+> signature. Since the note above trains you to expect a non-zero exit, the
+> reflex is to wave it through; the tell is that the log stops at the DMG step
+> and never prints `A public key has been found, but no private key`. Check
+> `hdiutil info | grep image-path` (or just `ls /Volumes` for a `dmg.*` entry),
+> then `hdiutil detach /Volumes/dmg.XXXXXX -force` and delete the orphaned
+> `bundle/macos/rw.*.dmg`. Hit cutting 26.8.0; the retry succeeded unchanged,
+> which is what proved the failure environmental rather than a packaging break.
 
 ### 3. Verify the build
 
@@ -608,6 +630,23 @@ git push origin vYY.M.MICRO
 **Release hygiene checks:**
 - [ ] `git describe --tags --exact-match` matches the version files.
 - [ ] `git ls-remote --tags origin vYY.M.MICRO` shows the pushed tag.
+- [ ] **A run actually exists for the tag** — a pushed tag is not a triggered
+      build:
+      ```sh
+      gh run list --workflow=release.yml --branch vYY.M.MICRO --limit 1
+      ```
+      An empty result means nothing was queued. Push the tag during a GitHub
+      Actions outage and **no run is ever created, then or later** — Actions
+      does not backfill events it missed, and nothing anywhere reports this:
+      the tag is on the remote, `git push` exited 0, and the release simply
+      never happens. Hit cutting 26.8.0, pushed at 19:26Z into an
+      `Actions: major_outage` window. Check
+      `curl -s https://www.githubstatus.com/api/v2/components.json` when a run
+      fails to appear. **Recovery:** re-create the tag push once Actions is
+      healthy — `git push origin :vYY.M.MICRO && git push origin vYY.M.MICRO`
+      — which is safe while no release references the tag yet. `release.yml`
+      has no `workflow_dispatch` trigger, so re-pushing the tag is the only
+      way to start it.
 
 ### 5. Publish
 
