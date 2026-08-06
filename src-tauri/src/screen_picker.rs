@@ -4,8 +4,8 @@ use tauri::{
 };
 
 use crate::capture::{
-    capture_monitor_by_id, error_message, list_capturable_monitors, restore_main_window,
-    CapturableMonitor, CaptureResult,
+    bring_to_front_on_hotkey_capture, capture_monitor_by_id, error_message,
+    list_capturable_monitors, restore_main_window, CapturableMonitor, CaptureResult,
 };
 use crate::monitor_pairing::{pair_monitor_targets, CapMonitorInfo, TauriMonInfo};
 use crate::picker_session::{
@@ -42,7 +42,9 @@ pub(crate) async fn start_screen_selection(app: AppHandle) -> Result<(), String>
     }
 
     if monitors.len() == 1 {
-        return capture_monitor_now(&app, monitors[0].id).await;
+        // Button/in-app path: the user is looking at ScreenPick, so put the
+        // window back exactly as the multi-display picker does at finish time.
+        return capture_monitor_now(&app, monitors[0].id, MainWindowRestore::Always).await;
     }
 
     // Enumerate displays before hiding the main window or recording a session.
@@ -113,7 +115,38 @@ pub(crate) async fn capture_screen_under_cursor(app: AppHandle) -> Result<(), St
         .or_else(|| monitors.iter().find(|m| m.primary).map(|m| m.id))
         .unwrap_or(monitors[0].id);
 
-    capture_monitor_now(&app, target).await
+    capture_monitor_now(&app, target, MainWindowRestore::HotkeyGated).await
+}
+
+/// Whether an immediate (picker-less) capture puts the main window back.
+///
+/// The two callers of `capture_monitor_now` differ in who asked: the in-app
+/// button ran with ScreenPick in front of the user, while the hotkey may well
+/// have fired with ScreenPick living in the tray. Only the second one is a
+/// "hotkey capture" in the sense the setting means.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum MainWindowRestore {
+    /// Always restore — the in-app button's single-display fast path.
+    Always,
+    /// Restore only if `bring_to_front_on_hotkey_capture` says so, matching
+    /// `capture_active_window`; the window hotkey and the screen hotkey have to
+    /// answer the same setting the same way.
+    HotkeyGated,
+}
+
+/// Restore decision for `capture_monitor_now`, kept pure so both arms are
+/// testable without an AppHandle.
+///
+/// `was_visible` is load-bearing for the gated arm: hiding the main window is
+/// this path's own doing (it would otherwise land in a full-screen shot), so a
+/// window that was on screen still comes back. The setting governs whether a
+/// capture pulls ScreenPick to the FRONT, not whether the app may make its own
+/// window vanish.
+fn should_restore_main(policy: MainWindowRestore, was_visible: bool, bring_to_front: bool) -> bool {
+    match policy {
+        MainWindowRestore::Always => true,
+        MainWindowRestore::HotkeyGated => was_visible || bring_to_front,
+    }
 }
 
 /// Resolve the xcap monitor id of the display containing the mouse cursor.
@@ -142,7 +175,11 @@ fn monitor_id_under_cursor(app: &AppHandle, monitors: &[CapturableMonitor]) -> O
 /// `CaptureCompleted`), hide the main window so ScreenPick isn't in the shot,
 /// capture, then emit the outcome. Shared by the single-display fast path and
 /// the capture-under-cursor hotkey.
-async fn capture_monitor_now(app: &AppHandle, monitor_id: u32) -> Result<(), String> {
+async fn capture_monitor_now(
+    app: &AppHandle,
+    monitor_id: u32,
+    restore: MainWindowRestore,
+) -> Result<(), String> {
     let id = {
         let session = app.state::<ScreenPickerSession>();
         let id = session.session().next_id();
@@ -154,18 +191,34 @@ async fn capture_monitor_now(app: &AppHandle, monitor_id: u32) -> Result<(), Str
     // Off the UI thread: the settle sleep below would otherwise block the very
     // thread that has to apply the hide. See run_capture_off_ui_thread.
     run_capture_off_ui_thread(move || {
+        let main_window = app.get_webview_window("main");
+        // Read visibility BEFORE the hide — see should_restore_main for why the
+        // gated arm needs it.
+        let was_visible = main_window
+            .as_ref()
+            .and_then(|window| window.is_visible().ok())
+            .unwrap_or(false);
         // Deliberately a longer settle than the picker's PICKER_HIDE_DELAY_MS:
         // this path hides the OPAQUE main editor window (not a translucent
         // overlay), and it lands in the full-screen shot if it's still
         // compositing — so give it a touch more time to disappear.
-        if let Some(window) = app.get_webview_window("main") {
-            hide_before_capture(&window, "main window", 180);
+        if let Some(window) = &main_window {
+            hide_before_capture(window, "main window", 180);
         } else {
             std::thread::sleep(std::time::Duration::from_millis(180));
         }
 
         let result = capture_monitor_by_id(&app, monitor_id);
-        let still_active = end_screen_session(&app, Some(id));
+        // The non-restoring teardown, then restore separately: this path is the
+        // one that has a say in whether the main window comes back, so it must
+        // not delegate that to PickerSession::end. Guarded by still_active so a
+        // superseded capture can't yank focus for a session it no longer owns.
+        let still_active = finish_screen_session(&app, Some(id));
+        if still_active
+            && should_restore_main(restore, was_visible, bring_to_front_on_hotkey_capture(&app))
+        {
+            restore_main_window(&app);
+        }
 
         emit_capture_outcome(&app, still_active, result).map(|_| ())
     })
@@ -425,4 +478,40 @@ fn retry_close_screen_overlays(app: AppHandle) {
         tokio::time::sleep(std::time::Duration::from_millis(75)).await;
         close_screen_overlays(&app);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{should_restore_main, MainWindowRestore};
+
+    #[test]
+    fn button_path_always_restores_the_main_window() {
+        // The user clicked in ScreenPick; the hide was only to keep the window
+        // out of the frame, and the hotkey setting has no say here.
+        assert!(should_restore_main(MainWindowRestore::Always, true, false));
+        assert!(should_restore_main(MainWindowRestore::Always, false, false));
+    }
+
+    #[test]
+    fn screen_hotkey_restores_only_when_visible_or_allowed() {
+        // Close-to-tray user with the setting off: the shot must not pop
+        // ScreenPick over whatever was just captured.
+        assert!(!should_restore_main(
+            MainWindowRestore::HotkeyGated,
+            false,
+            false
+        ));
+        // Setting on: same behaviour as the window hotkey.
+        assert!(should_restore_main(
+            MainWindowRestore::HotkeyGated,
+            false,
+            true
+        ));
+        // A window that was on screen comes back either way — we hid it.
+        assert!(should_restore_main(
+            MainWindowRestore::HotkeyGated,
+            true,
+            false
+        ));
+    }
 }

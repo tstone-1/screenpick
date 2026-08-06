@@ -26,9 +26,19 @@ vi.mock("./editorCommands", () => ({
   toAssetUrl: (path: string) => `asset://${path}`
 }));
 
+// renderFlattenedPng needs a real <canvas>, which this suite's node environment
+// doesn't provide; it is the only export documentStore.svelte.ts takes from
+// this module.
+vi.mock("./annotationRendering", () => ({
+  renderFlattenedPng: vi.fn().mockResolvedValue(new Uint8Array())
+}));
+
 const { DocumentStore } = await import("./documentStore.svelte");
+const { saveDocument } = await import("./editorCommands");
 const deleteDocumentMock = commandsMock.deleteDocument;
 const listDocumentsMock = commandsMock.listDocuments;
+const replaceDocumentBaseMock = commandsMock.replaceDocumentBase;
+const saveDocumentMock = vi.mocked(saveDocument);
 
 // How many clean documents DocumentStore.enforceRetention keeps (see the
 // CLEAN_DOCUMENT_RETENTION comment in documentStore.svelte.ts) — not exported,
@@ -171,5 +181,81 @@ describe("DocumentStore.loadPersistedDocuments", () => {
     expect(deleteDocumentMock).toHaveBeenCalledTimes(2);
     expect(deleteDocumentMock).toHaveBeenCalledWith("clean-9");
     expect(deleteDocumentMock).toHaveBeenCalledWith("clean-10");
+  });
+});
+
+// W1 in the 2026-08 code review: persists for one document overlapped freely
+// (debounce timer, exit flush, crop/cut's re-base write, the persist-first rule
+// behind copy-path/reveal), each carrying the layer it was called with — so an
+// older call's save_document could land after a newer one's and leave the stale
+// layer on disk with nothing scheduled to correct it.
+describe("DocumentStore.persistDocument", () => {
+  it("serializes overlapping persists for one document in call order", async () => {
+    const store = new DocumentStore();
+    const doc = capture({ path: "doc.png", documentId: "doc-1" });
+    store.recentCaptures = [doc];
+    // Base already in sync, so neither persist takes the re-base branch and
+    // save_document is the only ordering surface under test.
+    store.recordLastPersistedBasePath("doc-1", "doc.png");
+
+    const releases: Array<() => void> = [];
+    const written: string[] = [];
+    saveDocumentMock.mockImplementation(async (id, annotations) => {
+      await new Promise<void>((resolve) => releases.push(resolve));
+      written.push(annotations);
+      return { status: "ok", data: { ...documentRecord(id, annotations), annotations } };
+    });
+
+    const firstLayer = [penAnnotation(1)];
+    const secondLayer = [penAnnotation(1), penAnnotation(2)];
+    const first = store.persistDocument(doc, firstLayer);
+    const second = store.persistDocument(doc, secondLayer);
+
+    await vi.waitFor(() => expect(releases).toHaveLength(1));
+    // The overlap itself is the defect: while the first write is open the
+    // second must not have been sent, or the two can complete out of order.
+    expect(saveDocumentMock).toHaveBeenCalledOnce();
+
+    releases[0]();
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
+    releases[1]();
+    await Promise.all([first, second]);
+
+    expect(written).toEqual([
+      serializeAnnotations(firstLayer),
+      serializeAnnotations(secondLayer)
+    ]);
+    expect(replaceDocumentBaseMock).not.toHaveBeenCalled();
+  });
+
+  it("settlePersists resolves only once an in-flight write has finished", async () => {
+    const store = new DocumentStore();
+    const doc = capture({ path: "doc.png", documentId: "doc-1" });
+    store.recentCaptures = [doc];
+    store.recordLastPersistedBasePath("doc-1", "doc.png");
+
+    const releases: Array<() => void> = [];
+    saveDocumentMock.mockImplementation(async (id, annotations) => {
+      await new Promise<void>((resolve) => releases.push(resolve));
+      return { status: "ok", data: { ...documentRecord(id, annotations), annotations } };
+    });
+
+    // Nothing queued: the exit path must not stall on an idle store.
+    await store.settlePersists();
+
+    const persist = store.persistDocument(doc, [penAnnotation(1)]);
+    await vi.waitFor(() => expect(releases).toHaveLength(1));
+
+    let settled = false;
+    const drained = store.settlePersists().then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    releases[0]();
+    await drained;
+    expect(settled).toBe(true);
+    await persist;
   });
 });

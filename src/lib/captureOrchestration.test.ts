@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CaptureMode, CaptureSettings, ShortcutStatus } from "./bindings";
+// The corpus `settings.rs` compiles in with include_str!. Editing it exercises
+// both sanitize implementations; see the file's own _readme.
+import sanitizeFixture from "./shortcutSanitizeFixture.json";
 
 // Mock the modules the orchestrator imports BEFORE importing the class
 // itself, so the singleton's constructor never touches a real Tauri IPC.
@@ -71,14 +74,33 @@ vi.mock("./editorCommands", () => ({
 
 vi.mock("./captureSound", () => captureSoundMock);
 
+vi.mock("./diagnosticsLog", () => ({
+  logError: vi.fn(),
+  logWarn: vi.fn()
+}));
+
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn()
 }));
 
+const { logError } = await import("./diagnosticsLog");
+
 // The class lives in a .svelte.ts file but its behavior is testable here:
 // vitest runs through Vite with the Svelte plugin so $state/$derived are
 // real reactivity in this environment.
-const { CaptureOrchestration } = await import("./captureOrchestration.svelte");
+const { CaptureOrchestration, sanitizeShortcutOverrides } = await import(
+  "./captureOrchestration.svelte"
+);
+
+// A started app has answered get_settings, which is what unlocks saving — the
+// gate that stops a toggle writing `defaultSettings` over the stored struct.
+// Tests that exercise a save path construct through this; the gate itself is
+// covered by its own cases below.
+function loadedOrchestration(): InstanceType<typeof CaptureOrchestration> {
+  const o = new CaptureOrchestration();
+  o.settingsLoaded = true;
+  return o;
+}
 
 const modes: CaptureMode[] = [
   { id: "region", label: "Region", accelerators: ["CommandOrControl+Shift+4"] },
@@ -278,7 +300,7 @@ describe("shortcut draft round-trip", () => {
   });
 
   it("removeShortcutEntry drops the row at the given index", async () => {
-    const o = new CaptureOrchestration();
+    const o = loadedOrchestration();
     o.captureModes = modes;
     o.addShortcutEntry("window");
     await o.removeShortcutEntry("window", 0);
@@ -292,7 +314,7 @@ describe("shortcut draft round-trip", () => {
   // runs first — on the pre-removal draft. So removal cannot wait for a blur of
   // its own; it has to commit itself or the deletion is silently lost.
   it("removeShortcutEntry persists without waiting for a blur", async () => {
-    const o = new CaptureOrchestration();
+    const o = loadedOrchestration();
     o.captureModes = modes;
     await o.removeShortcutEntry("window", 1);
     expect(commandsMock.updateSettings).toHaveBeenCalledTimes(1);
@@ -304,7 +326,7 @@ describe("shortcut draft round-trip", () => {
 
 describe("blur commits the recorded shortcut", () => {
   it("saves and re-registers when a chord was recorded", async () => {
-    const o = new CaptureOrchestration();
+    const o = loadedOrchestration();
     o.captureModes = modes;
     await o.beginShortcutRecording();
     o.setShortcutEntry("window", 0, "CommandOrControl+Shift+G");
@@ -322,7 +344,7 @@ describe("blur commits the recorded shortcut", () => {
   });
 
   it("only resumes when nothing was recorded", async () => {
-    const o = new CaptureOrchestration();
+    const o = loadedOrchestration();
     o.captureModes = modes;
     await o.beginShortcutRecording();
     await o.endShortcutRecording();
@@ -334,7 +356,7 @@ describe("blur commits the recorded shortcut", () => {
   // A blank row is not a change: the backend never stores one, so treating it as
   // dirty would save-and-re-register on every blur of an untouched field.
   it("treats a blank placeholder row as no change", async () => {
-    const o = new CaptureOrchestration();
+    const o = loadedOrchestration();
     o.captureModes = modes;
     o.appliedSettings = {
       ...o.appliedSettings,
@@ -365,7 +387,7 @@ describe("blur commits the recorded shortcut", () => {
       return { status: "ok", data: null };
     });
 
-    const o = new CaptureOrchestration();
+    const o = loadedOrchestration();
     o.captureModes = modes;
     o.setShortcutEntry("window", 0, "CommandOrControl+Shift+G");
     const blur = o.endShortcutRecording();
@@ -379,7 +401,7 @@ describe("blur commits the recorded shortcut", () => {
   // added under another: the backend strips blanks, so adopting its response
   // wholesale would make the row disappear mid-edit.
   it("keeps an unfilled row in another mode across a save", async () => {
-    const o = new CaptureOrchestration();
+    const o = loadedOrchestration();
     o.captureModes = modes;
     o.addShortcutEntry("screen");
     o.setShortcutEntry("window", 0, "CommandOrControl+Shift+G");
@@ -434,7 +456,7 @@ describe("shortcutRowState", () => {
 
 describe("toggleSetting", () => {
   it("flips a boolean setting and persists via updateSettings", async () => {
-    const o = new CaptureOrchestration();
+    const o = loadedOrchestration();
     o.settings = { ...o.settings, autoOpenEditor: true };
     o.appliedSettings = { ...o.settings };
     await o.toggleSetting("autoOpenEditor");
@@ -444,7 +466,7 @@ describe("toggleSetting", () => {
   });
 
   it("toggles bring-to-front hotkey capture", async () => {
-    const o = new CaptureOrchestration();
+    const o = loadedOrchestration();
     o.settings = { ...o.settings, bringToFrontOnHotkeyCapture: false };
     o.appliedSettings = { ...o.settings };
     await o.toggleSetting("bringToFrontOnHotkeyCapture");
@@ -458,13 +480,61 @@ describe("toggleSetting", () => {
       status: "error",
       error: "denied"
     });
-    const o = new CaptureOrchestration();
+    const o = loadedOrchestration();
     o.settings = { ...o.settings, copyToClipboard: false };
     o.appliedSettings = { ...o.settings };
     await o.toggleSetting("copyToClipboard");
     expect(o.settings.copyToClipboard).toBe(false);
     expect(o.appliedSettings.copyToClipboard).toBe(false);
     expect(o.captureActivity).toContain("denied");
+  });
+});
+
+// update_settings replaces the whole stored struct, so a save made from the
+// frontend's own defaults writes `saveDirectory: null` and empty overrides over
+// whatever the user had configured. Rust preserves the two fields it owns
+// (last_run_version, version) unconditionally; the rest can only be protected
+// here, by refusing to save a baseline that was never loaded.
+describe("settings-load gate", () => {
+  it("does not save a toggle made before get_settings has answered", async () => {
+    const o = new CaptureOrchestration();
+    o.settings = { ...o.settings, saveDirectory: "/stored/captures", autoOpenEditor: true };
+    o.appliedSettings = { ...o.settings };
+
+    await o.toggleSetting("autoOpenEditor");
+
+    expect(commandsMock.updateSettings).not.toHaveBeenCalled();
+    // The optimistic flip is rolled back, so the switch matches what is stored.
+    expect(o.settings.autoOpenEditor).toBe(true);
+    expect(o.captureActivity).toContain("still loading");
+  });
+
+  it("does not save a shortcut edit made before get_settings has answered", async () => {
+    const o = new CaptureOrchestration();
+    o.captureModes = modes;
+    o.setShortcutEntry("window", 0, "CommandOrControl+Shift+G");
+
+    await o.endShortcutRecording();
+
+    expect(commandsMock.updateSettings).not.toHaveBeenCalled();
+  });
+
+  // Control for the two above: the gate must open, or it would read as a fix
+  // while quietly making every settings change inert.
+  it("opens once setup has loaded the stored settings", async () => {
+    settingsHolder.current = { ...settingsHolder.current, saveDirectory: "/stored/captures" };
+    commandsMock.getSettings.mockResolvedValue(settingsHolder.current);
+    const o = new CaptureOrchestration();
+    const cleanup = o.setup();
+    await vi.waitFor(() => {
+      expect(o.settingsLoaded).toBe(true);
+    });
+
+    await o.toggleSetting("autoOpenEditor");
+
+    expect(commandsMock.updateSettings).toHaveBeenCalledTimes(1);
+    expect(settingsHolder.current.saveDirectory).toBe("/stored/captures");
+    cleanup();
   });
 });
 
@@ -573,6 +643,40 @@ describe("requestCapture", () => {
     await o.requestCapture("region", "button");
     expect(commandsMock.startRegionSelection).not.toHaveBeenCalled();
   });
+
+  // The mode id crosses the IPC boundary as a plain string, so nothing in the
+  // typed contract catches a mode Rust lists and the dispatch table lacks. It
+  // used to land in a silent else: no command, no error, no log — a control
+  // that did nothing. Assert every mode the backend reports is dispatchable.
+  it("dispatches every mode the backend lists", async () => {
+    commandsMock.startRegionSelection.mockResolvedValue({ status: "ok", data: null });
+    commandsMock.startWindowSelection.mockResolvedValue({ status: "ok", data: null });
+    commandsMock.startScreenSelection.mockResolvedValue({ status: "ok", data: null });
+
+    for (const mode of modes) {
+      const o = new CaptureOrchestration();
+      o.captureModes = modes;
+      await o.requestCapture(mode.id, "button");
+      expect(o.captureActivity, `mode ${mode.id}`).not.toContain("not available");
+    }
+
+    expect(logError).not.toHaveBeenCalled();
+  });
+
+  it("logs and clears pending for a mode id with no dispatch entry", async () => {
+    const o = new CaptureOrchestration();
+    o.captureModes = [...modes, { id: "hologram", label: "Hologram", accelerators: [] }];
+
+    await o.requestCapture("hologram", "button");
+
+    expect(logError).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(logError).mock.calls[0][0]).toContain("hologram");
+    expect(o.captureActivity).toContain("hologram");
+    expect(o.capturePending).toBe(false);
+    expect(commandsMock.startRegionSelection).not.toHaveBeenCalled();
+    expect(commandsMock.startWindowSelection).not.toHaveBeenCalled();
+    expect(commandsMock.startScreenSelection).not.toHaveBeenCalled();
+  });
 });
 
 describe("fallback shortcuts", () => {
@@ -660,6 +764,53 @@ describe("capture watchdog", () => {
 
     expect(commandsMock.cancelScreenSelection).toHaveBeenCalledOnce();
     expect(o.capturePending).toBe(false);
+  });
+
+  // Start and cancel now come from one table, so the pairing is worth asserting
+  // per mode: a wrong cancel command leaves the Rust session recorded and its
+  // overlay on screen while the local UI reports itself recovered.
+  it("cancels each mode through that mode's own cancel command", async () => {
+    commandsMock.startRegionSelection.mockResolvedValue({ status: "ok", data: null });
+    commandsMock.startWindowSelection.mockResolvedValue({ status: "ok", data: null });
+    commandsMock.cancelRegionSelection.mockResolvedValue({ status: "ok", data: null });
+    commandsMock.cancelWindowSelection.mockResolvedValue({ status: "ok", data: null });
+
+    const region = new CaptureOrchestration();
+    region.captureModes = modes;
+    await region.requestCapture("region", "button");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(commandsMock.cancelRegionSelection).toHaveBeenCalledOnce();
+    expect(commandsMock.cancelWindowSelection).not.toHaveBeenCalled();
+    expect(commandsMock.cancelScreenSelection).not.toHaveBeenCalled();
+
+    const window = new CaptureOrchestration();
+    window.captureModes = modes;
+    await window.requestCapture("window", "button");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(commandsMock.cancelWindowSelection).toHaveBeenCalledOnce();
+    expect(commandsMock.cancelRegionSelection).toHaveBeenCalledOnce();
+    expect(commandsMock.cancelScreenSelection).not.toHaveBeenCalled();
+  });
+});
+
+// The sanitize rules exist on both sides of the IPC boundary on purpose (a
+// round trip per keystroke would be worse), so the corpus is the pin: this case
+// and `settings.rs`'s `sanitize_settings_agrees_with_the_shared_frontend_fixture`
+// read the same file, and drift fails on whichever side drifted.
+describe("sanitizeShortcutOverrides", () => {
+  it("agrees with the shared fixture the Rust side also reads", () => {
+    // TypeScript widens a JSON import to the union of the literal case shapes,
+    // where each case's absent mode keys are typed `undefined`; the corpus is a
+    // map of mode id to accelerators and is read as one.
+    const cases = sanitizeFixture.cases as {
+      name: string;
+      input: Record<string, string[]>;
+      expected: Record<string, string[]>;
+    }[];
+    expect(cases.length).toBeGreaterThan(0);
+    for (const testCase of cases) {
+      expect(sanitizeShortcutOverrides(testCase.input), testCase.name).toEqual(testCase.expected);
+    }
   });
 });
 

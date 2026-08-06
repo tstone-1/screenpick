@@ -158,6 +158,11 @@ export class DocumentStore {
   // replaceBase=true call that produced them, so trusting only the caller's
   // flag can silently persist an annotation layer against the wrong raster.
   #lastPersistedBasePath = new Map<string, string>();
+  // Tail of the in-flight persist chain for each document (see #enqueuePersist),
+  // keyed by documentId. An entry exists only while that document has work
+  // queued or running — the chain deletes its own key once it drains — so
+  // `settlePersists` can treat an empty map as "everything is on disk".
+  #persistQueues = new Map<string, Promise<void>>();
 
   // --- workspace cache ---
 
@@ -451,13 +456,79 @@ export class DocumentStore {
   // responsible for patching its own `document`/`currentCapture` from the
   // returned record with `recentCapturePatchForRecord`; this method only
   // patches `recentCaptures`.
+  //
+  // Calls for the same document are serialized (#enqueuePersist); calls for
+  // different documents still run concurrently, since they share no disk state.
   async persistDocument(
     capture: RecentCapture,
     annotations: Annotation[],
     options: { replaceBase?: boolean } = {}
   ): Promise<DocumentRecord | null> {
-    if (!capture.documentId) return null;
     const id = capture.documentId;
+    if (!id) return null;
+    return this.#enqueuePersist(id, () =>
+      this.#persistDocumentNow(id, capture, annotations, options)
+    );
+  }
+
+  // Run `task` only after every persist already queued for `id` has finished.
+  //
+  // Persists for one document overlap freely: the debounce timer, the exit
+  // flush, crop/cut's `{ replaceBase: true }` write, and the persist-first rule
+  // behind copy-path/reveal can all be in flight at once. Each one carries the
+  // capture and annotation layer it was called with, so without ordering an
+  // older call's `save_document` can land after a newer one's and leave the
+  // stale layer on disk — with nothing scheduled to correct it, since the newer
+  // call already considers itself done. Same shape (and same reason) as
+  // `#enqueueShortcutTask` in captureOrchestration.svelte.ts: strict call order.
+  //
+  // Deliberately does NOT re-read a live annotation layer at execution time. A
+  // queued persist is bound to the raster it was called for — crop/cut pass the
+  // transformed survivors that belong to their *new* base — so pairing one
+  // call's raster with another call's layer would write a document whose
+  // annotations were never drawn against its image. Correctness rests on order
+  // instead: the newest call runs last, so disk ends on the newest state.
+  #enqueuePersist(
+    id: string,
+    task: () => Promise<DocumentRecord | null>
+  ): Promise<DocumentRecord | null> {
+    const previous = this.#persistQueues.get(id) ?? Promise.resolve();
+    const run = previous.then(task, task);
+    const tail = run.then(
+      () => undefined,
+      () => undefined
+    );
+    this.#persistQueues.set(id, tail);
+    void tail.then(() => {
+      // Only the current tail may clear the slot: a later enqueue has already
+      // replaced it and owns the key until its own tail settles.
+      if (this.#persistQueues.get(id) === tail) this.#persistQueues.delete(id);
+    });
+    return run;
+  }
+
+  // Resolve once every persist in flight has finished writing. The exit
+  // handshake needs this and cannot get it from the debounce timer alone: that
+  // timer is nulled the moment it fires, so a persist started half a second ago
+  // leaves nothing behind for `flushPendingSave` to find (see the comment
+  // there). Drains rather than awaiting a single snapshot of the queues, so a
+  // persist enqueued while we wait is covered too; it terminates because a
+  // persist never enqueues another one.
+  async settlePersists(): Promise<void> {
+    let pending = [...this.#persistQueues.values()];
+    while (pending.length > 0) {
+      await Promise.all(pending);
+      const awaited = new Set(pending);
+      pending = [...this.#persistQueues.values()].filter((entry) => !awaited.has(entry));
+    }
+  }
+
+  async #persistDocumentNow(
+    id: string,
+    capture: RecentCapture,
+    annotations: Annotation[],
+    options: { replaceBase?: boolean }
+  ): Promise<DocumentRecord | null> {
     const dirty = annotations.length > 0;
     const needsRebase = options.replaceBase || this.#lastPersistedBasePath.get(id) !== capture.path;
     try {

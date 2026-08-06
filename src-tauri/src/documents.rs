@@ -177,8 +177,7 @@ fn record_for(app: &AppHandle, meta: DocumentMeta) -> Result<DocumentRecord, Str
     let dir = doc_dir(app, &meta.id)?;
     let base = dir.join(document_store::base_file_name(&meta));
     let current = dir.join("current.png");
-    let annotations =
-        fs::read_to_string(dir.join("annotations.json")).unwrap_or_else(|_| "[]".to_string());
+    let annotations = document_store::read_annotations_from(&dir.join("annotations.json"));
     Ok(DocumentRecord {
         id: meta.id,
         mode: meta.mode,
@@ -333,6 +332,9 @@ pub(crate) fn save_document(
 ) -> Result<DocumentRecord, String> {
     if current_png.len() > MAX_DOCUMENT_PNG_BYTES {
         return Err("Rendered image is too large to save.".to_string());
+    }
+    if !document_store::annotations_within_limit(&annotations) {
+        return Err("Annotation layer is too large to save.".to_string());
     }
     let dir = doc_dir(&app, &id)?;
     if !dir.is_dir() {

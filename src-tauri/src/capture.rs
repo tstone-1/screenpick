@@ -643,14 +643,21 @@ pub(crate) fn capture_active_window(app: AppHandle) -> Result<CaptureResult, Str
     let app_name = window.app_name().unwrap_or_else(|_| "Window".to_string());
     let title = window.title().unwrap_or_default();
     let result = write_window_capture(&app, &window, app_name, title)?;
-    if app
-        .try_state::<crate::settings::SettingsState>()
-        .map(|state| state.get().bring_to_front_on_hotkey_capture)
-        .unwrap_or(false)
-    {
+    if bring_to_front_on_hotkey_capture(&app) {
         restore_main_window(&app);
     }
     Ok(result)
+}
+
+/// Whether a capture fired by a global shortcut may pull the main window to the
+/// front. Every hotkey capture path must ask this one question, or the two
+/// hotkeys disagree about a setting the user set once (the screen hotkey used to
+/// restore unconditionally). `try_state` because the settings state is absent
+/// while the app is still building; default to leaving focus where it is.
+pub(crate) fn bring_to_front_on_hotkey_capture(app: &AppHandle) -> bool {
+    app.try_state::<crate::settings::SettingsState>()
+        .map(|state| state.get().bring_to_front_on_hotkey_capture)
+        .unwrap_or(false)
 }
 
 /// Whether a window passes the picker's capturability filter, fetching the

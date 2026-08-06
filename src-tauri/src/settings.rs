@@ -132,7 +132,8 @@ impl SettingsState {
             .settings
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        *current = sanitize_settings(partial);
+        let merged = preserve_backend_owned_fields(&current, partial);
+        *current = sanitize_settings(merged);
         self.save(&current)?;
         Ok(current.clone())
     }
@@ -362,6 +363,25 @@ fn validate_save_directory_path(
     Ok(Some(strip_verbatim_prefix(&canonical.to_string_lossy())))
 }
 
+/// Overlay the fields Rust owns onto a `CaptureSettings` that arrived from the
+/// frontend. `update_settings` takes the whole struct, so every save round-trips
+/// fields the UI neither shows nor tracks — and its own default object has
+/// `last_run_version: None`. A save that lands before the initial `get_settings`
+/// resolves, or any save after a failed one, would therefore write that default
+/// over the stored value: the next launch would then see `None`, read as a first
+/// run rather than an update, and stay silent about re-checking the macOS Screen
+/// Recording grant — the single question the field exists to answer. `version` is
+/// the on-disk schema number and belongs to whatever code migrates the file, not
+/// to a settings toggle, so it is pinned the same way.
+fn preserve_backend_owned_fields(
+    stored: &CaptureSettings,
+    mut incoming: CaptureSettings,
+) -> CaptureSettings {
+    incoming.version = stored.version;
+    incoming.last_run_version = stored.last_run_version.clone();
+    incoming
+}
+
 fn sanitize_settings(mut settings: CaptureSettings) -> CaptureSettings {
     settings.shortcut_overrides = settings
         .shortcut_overrides
@@ -435,12 +455,32 @@ pub(crate) fn reset_shortcut_settings(
 #[cfg(test)]
 mod tests {
     use super::{
-        load_settings_from, sanitize_settings, validate_save_directory_path, CaptureSettings,
-        CAPTURE_SETTINGS_VERSION, MAX_SETTINGS_BYTES,
+        load_settings_from, preserve_backend_owned_fields, sanitize_settings,
+        validate_save_directory_path, CaptureSettings, CAPTURE_SETTINGS_VERSION,
+        MAX_SETTINGS_BYTES,
     };
     use crate::path_utils::strip_verbatim_prefix;
+    use serde::Deserialize;
     use std::collections::HashMap;
     use std::path::PathBuf;
+
+    // The sanitize rules exist twice by design — see the fixture's own _readme.
+    // Compiled in rather than read at runtime so a moved or deleted fixture is a
+    // build failure here, not a test that quietly stops checking anything.
+    const SHORTCUT_SANITIZE_FIXTURE: &str =
+        include_str!("../../src/lib/shortcutSanitizeFixture.json");
+
+    #[derive(Deserialize)]
+    struct SanitizeCase {
+        name: String,
+        input: HashMap<String, Vec<String>>,
+        expected: HashMap<String, Vec<String>>,
+    }
+
+    #[derive(Deserialize)]
+    struct SanitizeFixture {
+        cases: Vec<SanitizeCase>,
+    }
 
     fn temp_path(label: &str) -> PathBuf {
         let mut path = std::env::temp_dir();
@@ -671,6 +711,69 @@ mod tests {
             sanitized.shortcut_overrides.get("screen").unwrap(),
             &Vec::<String>::new()
         );
+    }
+
+    #[test]
+    fn sanitize_settings_agrees_with_the_shared_frontend_fixture() {
+        let fixture: SanitizeFixture = serde_json::from_str(SHORTCUT_SANITIZE_FIXTURE)
+            .expect("the shared sanitize fixture must parse");
+        assert!(
+            !fixture.cases.is_empty(),
+            "an empty corpus passes without checking anything"
+        );
+        for case in fixture.cases {
+            let settings = CaptureSettings {
+                shortcut_overrides: case.input,
+                ..CaptureSettings::default()
+            };
+            let sanitized = sanitize_settings(settings);
+            assert_eq!(
+                sanitized.shortcut_overrides, case.expected,
+                "shared fixture case: {}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn update_keeps_the_stored_run_version_when_the_frontend_omits_it() {
+        // What the frontend's `defaultSettings` serializes to before its first
+        // get_settings has resolved: no lastRunVersion, everything else default.
+        let stored = CaptureSettings {
+            last_run_version: Some("26.7.7".to_string()),
+            save_directory: Some("/tmp/captures".to_string()),
+            ..CaptureSettings::default()
+        };
+        let incoming = CaptureSettings {
+            copy_to_clipboard: true,
+            ..CaptureSettings::default()
+        };
+
+        let merged = preserve_backend_owned_fields(&stored, incoming);
+
+        assert_eq!(merged.last_run_version, Some("26.7.7".to_string()));
+        assert_eq!(merged.version, stored.version);
+        // Fields the UI does own still take effect — this preserves two fields,
+        // it does not ignore the payload.
+        assert!(merged.copy_to_clipboard);
+    }
+
+    #[test]
+    fn update_ignores_a_frontend_supplied_run_version_and_schema_version() {
+        let stored = CaptureSettings {
+            last_run_version: Some("26.7.7".to_string()),
+            ..CaptureSettings::default()
+        };
+        let incoming = CaptureSettings {
+            last_run_version: Some("0.0.0".to_string()),
+            version: CAPTURE_SETTINGS_VERSION + 41,
+            ..CaptureSettings::default()
+        };
+
+        let merged = preserve_backend_owned_fields(&stored, incoming);
+
+        assert_eq!(merged.last_run_version, Some("26.7.7".to_string()));
+        assert_eq!(merged.version, CAPTURE_SETTINGS_VERSION);
     }
 
     #[test]

@@ -14,8 +14,7 @@ Live forward-looking plan for ScreenPick. Shipped work is tracked in the [CHANGE
 - **~~macOS Developer ID signing + notarization~~ — done 2026-07-25.** Certificate
   issued, notarization key created, `release.yml` signs and notarizes the macOS
   leg and gates on the result. Verified end to end on a local universal build.
-  Ships with **26.7.6** — which needs a version bump before release, since the
-  version of record still reads 26.7.5. The how-to and the traps are in
+  Shipped in **26.7.6** (2026-07-25). The how-to and the traps are in
   [BUILD.md](BUILD.md#macos-code-signing-and-notarization).
 
 ---
@@ -60,9 +59,7 @@ what justified the cost, not Gatekeeper.
       and earlier.
 - [x] Release notes and `README.md` warn that this build breaks the Screen
       Recording grant one final time, because the signing identity changes.
-
-Remaining before it reaches users: **bump the version to 26.7.6** (`tauri.conf.json`
-+ `Cargo.toml` still read 26.7.5) and cut the release.
+- [x] Released to users as **26.7.6** on 2026-07-25.
 
 Procedure and gotchas: [BUILD.md](BUILD.md#macos-code-signing-and-notarization).
 
@@ -213,7 +210,7 @@ Imgur, S3, or a generic POST endpoint. One-click share is what makes CleanShot's
 "Copy text from this screenshot" is a high-value workflow. macOS has Vision framework (free, accurate); Windows has Windows.Media.Ocr. Per-OS implementations behind a single `commands.ocrRegion` command.
 
 ### 17. System tray / menu-bar quick access
-**Delivered in part.** `src-tauri/src/tray.rs` ships an always-present tray icon (Show/Quit menu, left-click restores the window) so the app is reachable without the main window open. Remaining: capture-mode entries directly on the tray menu (region/window/screen) and a recent-captures submenu — today the tray only shows/quits, so a capture still has to go through the global shortcuts or the main window.
+**Delivered in part.** `src-tauri/src/tray.rs` ships an always-present tray icon (Show / Check for Updates... / Quit menu, left-click restores the window) so the app is reachable without the main window open. Remaining: capture-mode entries directly on the tray menu (region/window/screen) and a recent-captures submenu — no capture can be started from the tray today, so it still has to go through the global shortcuts or the main window.
 
 ### 18. Recent-captures persistence + management
 **Persistence and delete-from-list are done.** The document store

@@ -1,0 +1,63 @@
+{
+  "_readme": [
+    "Shared corpus for the shortcut-override sanitize rules, which exist twice on purpose:",
+    "Rust `sanitize_settings` (src-tauri/src/settings.rs) is the storage authority, and the",
+    "frontend `sanitizeShortcutOverrides` (src/lib/captureOrchestration.svelte.ts) has to reach",
+    "the same answer to decide whether a blurred shortcut field is actually dirty. Unifying them",
+    "would mean an IPC round trip per keystroke, so this file is the pin instead: BOTH sides read",
+    "it - a vitest case in captureOrchestration.test.ts and a cargo test in settings.rs - so a case",
+    "added or edited here exercises both implementations, and drift fails on the side that drifted.",
+    "JSON has no comments, hence this key; it carries no cases and both readers ignore it."
+  ],
+  "cases": [
+    {
+      "name": "an already-clean override survives unchanged",
+      "input": { "region": ["CommandOrControl+Shift+4"] },
+      "expected": { "region": ["CommandOrControl+Shift+4"] }
+    },
+    {
+      "name": "surrounding whitespace is trimmed",
+      "input": { "region": ["  CommandOrControl+Shift+4 "] },
+      "expected": { "region": ["CommandOrControl+Shift+4"] }
+    },
+    {
+      "name": "blank entries are dropped, the mode is kept",
+      "input": { "window": ["", "   ", "CommandOrControl+Shift+W"] },
+      "expected": { "window": ["CommandOrControl+Shift+W"] }
+    },
+    {
+      "name": "a mode whose entries are all blank is dropped entirely",
+      "input": { "window": [" ", ""] },
+      "expected": {}
+    },
+    {
+      "name": "an empty array is kept - a deliberately disabled mode, not an absent override",
+      "input": { "screen": [] },
+      "expected": { "screen": [] }
+    },
+    {
+      "name": "entry order is preserved - the dirty check compares positionally",
+      "input": { "window": ["CommandOrControl+Alt+W", " CommandOrControl+Shift+W "] },
+      "expected": { "window": ["CommandOrControl+Alt+W", "CommandOrControl+Shift+W"] }
+    },
+    {
+      "name": "no overrides at all",
+      "input": {},
+      "expected": {}
+    },
+    {
+      "name": "mixed: every rule at once across four modes",
+      "input": {
+        "region": [" CommandOrControl+Shift+4 ", ""],
+        "window": ["  "],
+        "screen": [],
+        "screen-pick": ["CommandOrControl+Shift+Alt+S"]
+      },
+      "expected": {
+        "region": ["CommandOrControl+Shift+4"],
+        "screen": [],
+        "screen-pick": ["CommandOrControl+Shift+Alt+S"]
+      }
+    }
+  ]
+}
