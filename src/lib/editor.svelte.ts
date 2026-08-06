@@ -108,6 +108,13 @@ export const RECENT_COLOR_LIMIT = 8;
 // JSON + a freshly flattened current.png). Coalesces rapid edits into one write.
 const DOCUMENT_SAVE_DEBOUNCE_MS = 500;
 
+// How many snapshots each undo/redo stack retains, so a long session can't grow
+// history without bound (a snapshot holds a whole annotation layer). Both
+// directions share the cap: `historyPast` keeps the newest via `slice(-N)`,
+// `historyFuture` keeps the newest via `slice(0, N)` — it is ordered
+// nearest-first. Every push site must use this, or undo and redo drift apart.
+const HISTORY_LIMIT = 50;
+
 export const ERASER_RADIUS_MIN = 4;
 export const ERASER_RADIUS_MAX = 48;
 export const ERASER_RADIUS_DEFAULT = 16;
@@ -558,11 +565,22 @@ export class EditorState {
   // merely that it was started — specifically the exit handshake, where the
   // process is about to end and a fire-and-forget write would lose the race.
   // Resolves immediately when nothing is pending.
+  //
+  // A null `#saveTimer` does NOT mean nothing is pending: #scheduleDocumentSave
+  // nulls the timer the moment it FIRES, so a debounced persist that started
+  // half a second ago is mid-write with no timer left to find. Returning there
+  // is what let `confirm_exit` reach `app.exit(0)` while the webview was still
+  // writing. The timer only answers "is there work not yet started"; the
+  // store's per-document chains answer "is there work not yet finished", and
+  // the exit path needs both drained — including work started by callers that
+  // never went through the timer at all (crop/cut's re-base persist).
   async flushPendingSave(): Promise<void> {
-    if (!this.#saveTimer) return;
-    clearTimeout(this.#saveTimer);
-    this.#saveTimer = null;
-    await this.#persistCurrentDocument();
+    if (this.#saveTimer) {
+      clearTimeout(this.#saveTimer);
+      this.#saveTimer = null;
+      await this.#persistCurrentDocument();
+    }
+    await this.#documentStore.settlePersists();
   }
 
   // Write the current document's annotation layer + a freshly flattened
@@ -666,7 +684,7 @@ export class EditorState {
     const previous = this.historyPast.at(-1);
     if (!previous) return;
     this.historyPast = this.historyPast.slice(0, -1);
-    this.historyFuture = [this.#snapshot(), ...this.historyFuture].slice(0, 50);
+    this.historyFuture = [this.#snapshot(), ...this.historyFuture].slice(0, HISTORY_LIMIT);
     this.#restore(previous);
     this.#scheduleDocumentSave();
   }
@@ -675,7 +693,7 @@ export class EditorState {
     const next = this.historyFuture[0];
     if (!next) return;
     this.historyFuture = this.historyFuture.slice(1);
-    this.historyPast = [...this.historyPast, this.#snapshot()].slice(-50);
+    this.historyPast = [...this.historyPast, this.#snapshot()].slice(-HISTORY_LIMIT);
     this.#restore(next);
     this.#scheduleDocumentSave();
   }
@@ -1727,7 +1745,7 @@ export class EditorState {
         result.data.height
       );
       const capture = rebasedCapture(this.document.capture, result.data);
-      this.historyPast = [...this.historyPast, beforeCrop].slice(-50);
+      this.historyPast = [...this.historyPast, beforeCrop].slice(-HISTORY_LIMIT);
       this.historyFuture = [];
       this.#installCapture(capture);
       this.annotations = survivors;
@@ -1796,7 +1814,7 @@ export class EditorState {
   }
 
   #recordHistory() {
-    this.historyPast = [...this.historyPast, this.#snapshot()].slice(-50);
+    this.historyPast = [...this.historyPast, this.#snapshot()].slice(-HISTORY_LIMIT);
     this.historyFuture = [];
     // Every committed annotation change funnels through here, so this is the one
     // place to trigger persistence (the debounce reads the post-mutation state).
@@ -1884,7 +1902,7 @@ export class EditorState {
         period: CUT_SEAM_PERIOD_DEFAULT
       };
       const capture = rebasedCapture(this.document.capture, result.data);
-      this.historyPast = [...this.historyPast, beforeCut].slice(-50);
+      this.historyPast = [...this.historyPast, beforeCut].slice(-HISTORY_LIMIT);
       this.historyFuture = [];
       this.#installCapture(capture);
       this.annotations = [seam, ...survivors];

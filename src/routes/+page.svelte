@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import {
     ArrowUpRight,
     Blend,
@@ -75,6 +75,7 @@
     y: number;
     targets: RecentCapture[];
   } | null>(null);
+  let recentMenuEl = $state<HTMLDivElement | null>(null);
 
   // Multi-selection in the Recent list. Keyed the same way as the {#each} block
   // (documentId, falling back to path) so a key survives a capture being
@@ -155,7 +156,11 @@
     void handleCloseRecent(recent);
   }
 
-  function openRecentMenu(event: MouseEvent, recent: RecentCapture) {
+  // Gap kept between the menu and the viewport edge when it has to be pulled
+  // back on-screen.
+  const RECENT_MENU_MARGIN = 8;
+
+  async function openRecentMenu(event: MouseEvent, recent: RecentCapture) {
     event.preventDefault();
     // Right-clicking a member of the multi-selection acts on the whole group;
     // right-clicking anything else acts on just that capture (and doesn't alter
@@ -163,14 +168,28 @@
     const selected = editor.recentCaptures.filter(isRecentSelected);
     const targets =
       selected.length > 1 && isRecentSelected(recent) ? selected : [recent];
-    // Keep the menu fully on-screen. Sizes are upper-bound estimates; clamping
-    // against them avoids overflow off the right/bottom edge (the last Recent
-    // item sits near the viewport bottom). The multi-target menu is shorter.
-    const menuWidth = 210;
-    const menuHeight = targets.length > 1 ? 56 : 176;
-    const x = Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8));
-    const y = Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8));
-    recentMenu = { x, y, targets };
+    // Open at the pointer, then pull the menu back on-screen once it exists and
+    // can be measured — the last Recent item sits near the viewport bottom, so
+    // a menu opened there would otherwise hang off the edge. Measuring rather
+    // than assuming a size is what keeps the clamp honest: the item list is
+    // conditional (a multi-selection menu is one row, a single capture four)
+    // and the row height comes out of the stylesheet, so any hard-coded
+    // estimate goes stale the next time either changes, silently and only for
+    // right-clicks near an edge. `tick()` resolves after the DOM update but
+    // before the browser paints, so the corrected position is the first one
+    // ever drawn.
+    recentMenu = { x: event.clientX, y: event.clientY, targets };
+    await tick();
+    const el = recentMenuEl;
+    const menu = recentMenu;
+    if (!el || !menu) return;
+    const maxX = window.innerWidth - el.offsetWidth - RECENT_MENU_MARGIN;
+    const maxY = window.innerHeight - el.offsetHeight - RECENT_MENU_MARGIN;
+    recentMenu = {
+      ...menu,
+      x: Math.max(RECENT_MENU_MARGIN, Math.min(menu.x, maxX)),
+      y: Math.max(RECENT_MENU_MARGIN, Math.min(menu.y, maxY))
+    };
   }
 
   function closeRecentMenu() {
@@ -612,7 +631,7 @@
             use:suppressMiddleClickAutoscroll
             onauxclick={(event) => handleRecentAuxClick(event, recent)}
             ondragstart={(event) => handleRecentDragStart(event, recent)}
-            oncontextmenu={(event) => openRecentMenu(event, recent)}
+            oncontextmenu={(event) => void openRecentMenu(event, recent)}
           >
             <span class="thumb">
               <img src={recent.assetUrl} alt="" />
@@ -767,7 +786,12 @@
       closeRecentMenu();
     }}
   ></div>
-  <div class="recent-menu" role="menu" style="left: {recentMenu.x}px; top: {recentMenu.y}px;">
+  <div
+    class="recent-menu"
+    role="menu"
+    bind:this={recentMenuEl}
+    style="left: {recentMenu.x}px; top: {recentMenu.y}px;"
+  >
     {#if recentMenu.targets.length > 1}
       <button type="button" role="menuitem" onclick={handleSaveSelected}>
         <Download size={15} /> Save {recentMenu.targets.length} images as...

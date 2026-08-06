@@ -144,6 +144,16 @@ pub(crate) fn finish_capture(
     end_session: impl FnOnce(&AppHandle, Option<u64>) -> bool,
     capture: impl FnOnce(&AppHandle) -> Result<CaptureResult, String>,
 ) -> Result<CaptureResult, String> {
+    if !finish_may_proceed(session_id) {
+        // Nothing was active when this finish started, so it is reporting on a
+        // session that a cancel command or the overlay's Destroyed handler
+        // already tore down (and already emitted a cancellation for). Bail out
+        // BEFORE the hide: the labels this path hides and ends are per-picker,
+        // not per-session, so carrying on would hide and close a newer
+        // session's overlay and capture with this one's stale selection.
+        return Err(cancelled_message.to_string());
+    }
+
     hide(app);
     thread::sleep(Duration::from_millis(PICKER_HIDE_DELAY_MS));
 
@@ -158,6 +168,18 @@ pub(crate) fn finish_capture(
     }
 
     emit_capture_outcome(app, still_active, result)
+}
+
+/// Whether a `finish_*` path may run its hide-and-capture sequence at all.
+///
+/// A finish snapshots `session().current()` before its hide window, and that
+/// snapshot can legitimately be `None` — the session was already ended by a
+/// cancel command or by the overlay's Destroyed handler. `None` must not travel
+/// on to `should_end`, where it means the opposite thing: the unconditional
+/// cancel the explicit cancel commands pass. A stale finish would then end
+/// whichever session happens to be active by the time its settle sleep is over.
+fn finish_may_proceed(session_id: Option<u64>) -> bool {
+    session_id.is_some()
 }
 
 /// Decide whether a finish/cancel may end the active session.
@@ -261,7 +283,19 @@ impl PickerSession {
 
 #[cfg(test)]
 mod tests {
-    use super::{should_end, PickerSession};
+    use super::{finish_may_proceed, should_end, PickerSession};
+
+    #[test]
+    fn finish_without_a_snapshot_is_already_cancelled() {
+        // A finish that saw a live session runs its normal sequence.
+        assert!(finish_may_proceed(Some(1)));
+        // A finish that saw none must not reach should_end, whose None arm is
+        // the unconditional cancel below and would let it end — and capture on
+        // — a session started during its settle sleep.
+        assert!(!finish_may_proceed(None));
+        // That arm stays intact for the cancel commands it belongs to.
+        assert!(should_end(Some(7), None));
+    }
 
     #[test]
     fn should_end_enforces_reentry_guard() {

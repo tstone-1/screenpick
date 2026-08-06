@@ -10,12 +10,14 @@ import {
   cropAnnotations,
   cutoutAnnotations,
   cutSeamPoints,
+  deserializeAnnotations,
   distanceToSegment,
   normalizeHexColor,
   pointInPolygon,
   pointsBounds,
   rectsIntersect,
   rgbToHex,
+  serializeAnnotations,
   shapeHitTest,
   shapeOutlinePoints,
   translateAnnotation,
@@ -561,5 +563,166 @@ describe("annotationsInPaintOrder", () => {
 
     const order = annotationsInPaintOrder([pen1, text, blur, cut, pen2, highlight]).map((a) => a.id);
     expect(order).toEqual([6, 1, 2, 3, 5, 4]);
+  });
+});
+
+// One structurally complete annotation of every kind, i.e. exactly what
+// serializeAnnotations writes. Named per kind so a dropped entry names itself
+// in the failure output.
+const VALID_ANNOTATIONS: Record<Annotation["kind"], Annotation> = {
+  pen: {
+    kind: "pen",
+    id: 1,
+    points: [
+      { x: 1, y: 2 },
+      { x: 3, y: 4 }
+    ],
+    color: "#ff0000",
+    width: 3
+  },
+  erase: {
+    kind: "erase",
+    id: 2,
+    points: [
+      { x: 5, y: 6 },
+      { x: 7, y: 8 }
+    ],
+    width: 24,
+    color: null
+  },
+  arrow: {
+    kind: "arrow",
+    id: 3,
+    start: { x: 0, y: 0 },
+    end: { x: 10, y: 10 },
+    color: "#00ff00",
+    width: 2
+  },
+  shape: {
+    kind: "shape",
+    id: 4,
+    shape: "ellipse",
+    rect: { x: 1, y: 2, width: 30, height: 40 },
+    color: "#0000ff",
+    width: 2,
+    fill: true,
+    fillOpacity: 0.2
+  },
+  text: {
+    kind: "text",
+    id: 5,
+    position: { x: 12, y: 14 },
+    text: "label",
+    color: "#111111",
+    fontSize: 20,
+    background: true,
+    backgroundOpacity: 0.72,
+    measuredWidth: 48
+  },
+  highlight: {
+    kind: "highlight",
+    id: 6,
+    rect: { x: 2, y: 3, width: 20, height: 10 },
+    color: "#f0b429",
+    opacity: 0.35
+  },
+  blur: {
+    kind: "blur",
+    id: 7,
+    rect: { x: 4, y: 5, width: 12, height: 12 },
+    radius: 6
+  },
+  cut: cutSeam({ id: 8 })
+};
+
+function deserializeOne(entry: unknown): Annotation[] {
+  return deserializeAnnotations(JSON.stringify([entry]));
+}
+
+describe("deserializeAnnotations", () => {
+  it("keeps a complete annotation of every kind through a serialize round trip", () => {
+    const layer = Object.values(VALID_ANNOTATIONS);
+
+    expect(deserializeAnnotations(serializeAnnotations(layer))).toEqual(layer);
+  });
+
+  it("keeps a text annotation that was never measured", () => {
+    const { measuredWidth: _measuredWidth, ...unmeasured } = VALID_ANNOTATIONS.text as TextAnnotation;
+
+    expect(deserializeOne(unmeasured)).toEqual([unmeasured]);
+  });
+
+  it("drops entries that are not annotation objects at all", () => {
+    expect(deserializeAnnotations("not json")).toEqual([]);
+    expect(deserializeAnnotations('{"kind":"pen"}')).toEqual([]);
+    expect(deserializeOne(null)).toEqual([]);
+    expect(deserializeOne("pen")).toEqual([]);
+    expect(deserializeOne({ ...VALID_ANNOTATIONS.pen, kind: "sparkle" })).toEqual([]);
+    expect(deserializeOne({ ...VALID_ANNOTATIONS.pen, id: "1" })).toEqual([]);
+  });
+
+  // The reported case: a known kind and a numeric id were the whole check, so
+  // an entry carrying nothing else survived and threw in bounds computation
+  // (and again on every reopen, since it is on disk).
+  it("drops a known-kind entry that carries none of its own fields", () => {
+    for (const kind of Object.keys(VALID_ANNOTATIONS) as Annotation["kind"][]) {
+      expect(deserializeOne({ kind, id: 1 })).toEqual([]);
+    }
+  });
+
+  it.each([
+    ["pen without points", { ...VALID_ANNOTATIONS.pen, points: undefined }],
+    ["pen with an empty stroke", { ...VALID_ANNOTATIONS.pen, points: [] }],
+    ["pen with a half point", { ...VALID_ANNOTATIONS.pen, points: [{ x: 1 }] }],
+    ["pen with a null coordinate", { ...VALID_ANNOTATIONS.pen, points: [{ x: 1, y: null }] }],
+    ["pen with a string width", { ...VALID_ANNOTATIONS.pen, width: "3" }],
+    ["erase with points as an object", { ...VALID_ANNOTATIONS.erase, points: { x: 1, y: 2 } }],
+    ["erase with a numeric color", { ...VALID_ANNOTATIONS.erase, color: 255 }],
+    ["arrow without an end", { ...VALID_ANNOTATIONS.arrow, end: undefined }],
+    ["arrow with a null color", { ...VALID_ANNOTATIONS.arrow, color: null }],
+    ["shape with an unknown shape", { ...VALID_ANNOTATIONS.shape, shape: "hexagon" }],
+    [
+      "shape with a rect missing height",
+      { ...VALID_ANNOTATIONS.shape, rect: { x: 0, y: 0, width: 10 } }
+    ],
+    ["shape with a string fill flag", { ...VALID_ANNOTATIONS.shape, fill: "true" }],
+    ["text with a numeric body", { ...VALID_ANNOTATIONS.text, text: 42 }],
+    ["text without a position", { ...VALID_ANNOTATIONS.text, position: undefined }],
+    ["text with a null measured width", { ...VALID_ANNOTATIONS.text, measuredWidth: null }],
+    ["highlight with a string opacity", { ...VALID_ANNOTATIONS.highlight, opacity: "0.5" }],
+    ["blur without a radius", { ...VALID_ANNOTATIONS.blur, radius: undefined }],
+    ["blur with a rect instead of a number", { ...VALID_ANNOTATIONS.blur, rect: 4 }],
+    ["cut with an unknown orientation", { ...cutSeam({ id: 8 }), orientation: "diagonal" }],
+    // A zero period would make cutSeamPoints derive an infinite tooth count and
+    // hang the render rather than merely draw the seam wrong.
+    ["cut with a zero period", { ...cutSeam({ id: 8 }), period: 0 }],
+    ["cut with a null span", { ...cutSeam({ id: 8 }), span: null }]
+  ])("drops %s", (_label, entry) => {
+    expect(deserializeOne(entry)).toEqual([]);
+  });
+
+  // JSON has no literal for these, but a hand-edited file reaches them anyway:
+  // 1e999 parses to Infinity, which then poisons every bound derived from it.
+  it("drops entries whose numbers overflow to infinity", () => {
+    expect(
+      deserializeAnnotations('[{"kind":"blur","id":1,"rect":{"x":0,"y":0,"width":1e999,"height":10},"radius":4}]')
+    ).toEqual([]);
+    expect(
+      deserializeAnnotations('[{"kind":"pen","id":1e999,"points":[{"x":1,"y":2}],"color":"#fff","width":2}]')
+    ).toEqual([]);
+  });
+
+  it("keeps the valid entries of a mixed layer", () => {
+    const valid = [VALID_ANNOTATIONS.pen, VALID_ANNOTATIONS.highlight, VALID_ANNOTATIONS.cut];
+    const mixed = [
+      { kind: "pen", id: 90 },
+      valid[0],
+      { kind: "shape", id: 91, shape: "rectangle", rect: { x: 0, y: 0, width: 5 } },
+      valid[1],
+      null,
+      valid[2]
+    ];
+
+    expect(deserializeAnnotations(JSON.stringify(mixed))).toEqual(valid);
   });
 });

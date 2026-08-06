@@ -1,6 +1,6 @@
 {
   "name": "screenpick",
-  "version": "26.7.7",
+  "version": "26.8.0",
   "description": "Cross-platform screenshot and annotation tool for macOS and Windows.",
   "type": "module",
   "repository": {
@@ -42,7 +42,7 @@
     "@tauri-apps/cli": "^2.11.4",
     "@testing-library/svelte": "^5.4.2",
     "@types/node": "^24.13.3",
-    "jsdom": "^29.1.1",
+    "jsdom": "^30.0.1",
     "svelte": "^5.0.0",
     "svelte-check": "^4.7.2",
     "typescript": "^6.0.3",

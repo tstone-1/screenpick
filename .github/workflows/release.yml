@@ -24,8 +24,12 @@ permissions:
 
 jobs:
   # Gate: a tag on a broken commit must not produce release artifacts. Runs
-  # the same frontend/Rust test invocations as ci.yml on the two platforms
-  # the release job actually builds on.
+  # ci.yml's correctness gates verbatim — typecheck, Vitest, cargo test — on
+  # the two platforms the release job actually builds on. `cargo fmt` and
+  # clippy are deliberately left out: they cannot change the artifacts, and a
+  # tag is the wrong place to fail on formatting. The typecheck is not
+  # optional, though — `vite build` does not typecheck, so without it a commit
+  # with a type error that still emits valid JS would publish installers.
   test:
     name: Test (${{ matrix.platform }})
     strategy:
@@ -53,6 +57,9 @@ jobs:
 
       - name: Install JS deps
         run: npm ci
+
+      - name: TypeScript / Svelte check
+        run: npm run check
 
       - name: Vitest unit tests
         run: npm run test:unit

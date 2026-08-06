@@ -1220,3 +1220,88 @@ describe("persistError", () => {
     expect(state.persistError).toBeNull();
   });
 });
+
+// W1 in the 2026-08 code review: the exit handshake only covered a debounce
+// timer that had not yet fired. #scheduleDocumentSave nulls the timer the
+// moment it FIRES, so a persist already running left flushPendingSave nothing
+// to find and it resolved into app.exit(0) mid-write.
+describe("flushPendingSave", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function persistedDocument(): RecentCapture {
+    return {
+      ...capture("/w1/base.png", 100, 100),
+      documentId: "doc-w1",
+      currentPath: "/w1/current.png",
+      dirty: false
+    };
+  }
+
+  function documentRecord(annotations: string, dirty: boolean) {
+    return {
+      status: "ok" as const,
+      data: {
+        id: "doc-w1",
+        mode: "region",
+        title: "Region",
+        width: 100,
+        height: 100,
+        createdAt: 0,
+        updatedAt: 1,
+        dirty,
+        basePath: "/w1/base.png",
+        currentPath: "/w1/current.png",
+        annotations
+      }
+    };
+  }
+
+  it("waits for a persist the fired debounce already started", async () => {
+    const state = new EditorState();
+    state.openCapture(persistedDocument());
+    replaceDocumentBaseMock.mockResolvedValue(documentRecord("[]", false));
+
+    // Hold save_document open so the persist is unambiguously still writing
+    // when the flush is called. An array, not a single handle, so the test can
+    // also see whether a second write ever starts.
+    const releases: Array<() => void> = [];
+    saveDocumentMock.mockImplementation(async (_id, annotations, _bytes, dirty) => {
+      await new Promise<void>((resolve) => releases.push(resolve));
+      return documentRecord(annotations, dirty);
+    });
+
+    vi.useFakeTimers();
+    try {
+      state.textDraft = textDraft(1, "note");
+      state.commitTextDraft();
+
+      // Fire the debounce (DOCUMENT_SAVE_DEBOUNCE_MS, 500ms and not exported).
+      // The persist is now in flight with no timer left behind it.
+      await vi.advanceTimersByTimeAsync(500);
+      expect(saveDocumentMock).toHaveBeenCalledOnce();
+      expect(releases).toHaveLength(1);
+
+      let flushed = false;
+      const flush = state.flushPendingSave().then(() => {
+        flushed = true;
+      });
+      // Enough to settle every microtask, so a flush that returned early would
+      // already have run its continuation by now.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(flushed).toBe(false);
+
+      releases[0]();
+      await flush;
+      expect(flushed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // ...and what it waited for is the write carrying the final layer, not an
+    // earlier one.
+    expect(saveDocumentMock).toHaveBeenCalledOnce();
+    expect(saveDocumentMock.mock.calls[0][1]).toContain("note");
+  });
+});

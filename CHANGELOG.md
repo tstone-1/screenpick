@@ -6,7 +6,52 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [CalVer](https://calver.org/) `YY.M.MICRO` versioning
 (see [BUILD.md](BUILD.md#version-management)).
 
-## [26.7.8] - Unreleased
+## [26.8.0] - 2026-08-06
+
+### Fixed
+
+- **Quitting immediately after an edit could lose that edit.** The exit
+  handshake waited only for a document save whose debounce timer had not fired
+  yet; a save already in flight was invisible to it, so quitting during the
+  write let the process die mid-save. Saves for one document could also overlap
+  and land out of order, leaving an older annotation layer on disk. Saves are
+  now serialized per document and the exit handshake waits for all of them.
+- **A finished picker selection could act on the wrong session.** Confirming a
+  selection whose session had already been cancelled (for example via Escape
+  racing the click) was treated as an unconditional cancel — if a new picker
+  session had started in the meantime, the stale confirmation tore it down and
+  captured with the old selection. A finish on a dead session now just reports
+  it was cancelled.
+- **The screen-capture hotkey ignored "Bring to front on hotkey capture".**
+  With ScreenPick closed to the tray and the setting off, capturing the screen
+  under the cursor popped the main window to the foreground anyway; it now
+  honors the setting the same way the window-capture hotkey does. A main window
+  that was visible before the shot still comes back afterwards.
+- **Flipping a setting during the first moments after launch could reset the
+  others.** A settings save that raced the initial settings load wrote built-in
+  defaults over the stored save folder and shortcuts, and could clear the
+  stored "last run" version that drives the macOS screen-recording re-grant
+  notice after updates. The backend now keeps its own fields regardless of what
+  a save sends, and the app refuses to save until settings have loaded.
+- **A hand-edited or truncated annotations file no longer breaks the editor.**
+  Structurally incomplete annotation entries (missing points, malformed
+  geometry) are dropped on load instead of crashing the document open on every
+  attempt; oversized document manifests and annotation layers are set aside and
+  reported the same way corrupt settings already were.
+- **Releases are now type-checked.** The release pipeline ran tests but not the
+  TypeScript/Svelte check, so a type error that still produced valid JavaScript
+  could ship installers while regular CI failed in parallel.
+- **A chord bound twice under different modifier spellings now surfaces in the
+  editor** instead of only as a registration failure. `Cmd+Alt+Shift+4` and
+  `Cmd+Shift+Alt+4` are one chord to the OS but two different strings, so a
+  duplicate went unnoticed until the second registration was refused — with an
+  error that names no owner. Accelerators are now compared in a canonical form
+  (modifiers deduplicated and ordered, `CommandOrControl` resolved per platform).
+- **Moving between two shortcut fields could swallow the next chord.** The old
+  field's re-register and the new field's suspend were independent async
+  handlers, so the re-register could land last and leave the global shortcuts
+  armed while recording — at which point the OS consumed the chord instead of
+  the recorder. Those steps now run strictly in order.
 
 ### Changed
 
@@ -25,20 +70,6 @@ and this project uses [CalVer](https://calver.org/) `YY.M.MICRO` versioning
   chord is bound twice. The status is hidden while a field is focused, where it
   would describe the previous binding — recording suspends the global shortcuts,
   so nothing is registered until blur.
-
-### Fixed
-
-- **A chord bound twice under different modifier spellings now surfaces in the
-  editor** instead of only as a registration failure. `Cmd+Alt+Shift+4` and
-  `Cmd+Shift+Alt+4` are one chord to the OS but two different strings, so a
-  duplicate went unnoticed until the second registration was refused — with an
-  error that names no owner. Accelerators are now compared in a canonical form
-  (modifiers deduplicated and ordered, `CommandOrControl` resolved per platform).
-- **Moving between two shortcut fields could swallow the next chord.** The old
-  field's re-register and the new field's suspend were independent async
-  handlers, so the re-register could land last and leave the global shortcuts
-  armed while recording — at which point the OS consumed the chord instead of
-  the recorder. Those steps now run strictly in order.
 
 ## [26.7.7] - 2026-07-26
 

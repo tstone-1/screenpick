@@ -17,6 +17,26 @@ use std::{
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
+/// Hard ceiling for the size of `index.json` we'll attempt to parse. Mirrors
+/// `settings::MAX_SETTINGS_BYTES` and exists for the same reason: the manifest
+/// is read on the startup restore path, so a corrupted or hostile file must not
+/// be able to OOM the app before anything gets a chance to reject it. Entries
+/// are a few hundred bytes each, so this still allows a five-figure document
+/// count — far past anything the strip can usefully show.
+const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Hard ceiling for one document's `annotations.json`, applied on both the read
+/// and the write side (see `annotations_within_limit`). `list_documents` loads
+/// every document's layer in a single pass at startup, so the same OOM argument
+/// as the manifest applies once per document. A heavy annotation layer — pen
+/// strokes carry a point per sample — is a few hundred KiB, so this is generous
+/// headroom rather than a limit a real document approaches.
+const MAX_ANNOTATIONS_BYTES: u64 = 8 * 1024 * 1024;
+
+/// The empty annotation layer: what a document with no annotation work stores,
+/// and what a read falls back to.
+const EMPTY_ANNOTATIONS: &str = "[]";
+
 /// Persisted metadata for one document, as stored in `index.json`. Paths and
 /// annotation contents are derived/loaded separately (by `documents.rs`, which
 /// has the `AppHandle` needed to resolve them) so the manifest stays small and
@@ -204,6 +224,27 @@ pub(crate) struct ManifestRecovery {
 /// goes on to write a fresh manifest can never do so against a corrupt file
 /// still sitting at the canonical path (the orphaning bug this replaces).
 pub(crate) fn read_manifest_from(path: &Path) -> (Vec<DocumentMeta>, Option<ManifestRecovery>) {
+    // Size-gate before reading. A failed `metadata` call is deliberately NOT
+    // treated as an answer here — it falls through to the read below, which
+    // classifies "missing" and "unreadable" apart from each other.
+    if let Ok(metadata) = fs::metadata(path) {
+        if metadata.len() > MAX_MANIFEST_BYTES {
+            log::error!(
+                "documents manifest at {} is oversized ({} bytes > {} max); renaming aside and starting empty",
+                path.display(),
+                metadata.len(),
+                MAX_MANIFEST_BYTES
+            );
+            let backup_path = backup_corrupt_file(path).map(|p| p.display().to_string());
+            return (
+                Vec::new(),
+                Some(ManifestRecovery {
+                    reason: "was too large to read".to_string(),
+                    backup_path,
+                }),
+            );
+        }
+    }
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return (Vec::new(), None),
@@ -212,7 +253,7 @@ pub(crate) fn read_manifest_from(path: &Path) -> (Vec<DocumentMeta>, Option<Mani
                 "could not read documents manifest at {}: {err}",
                 path.display()
             );
-            let backup_path = backup_corrupt_manifest(path).map(|p| p.display().to_string());
+            let backup_path = backup_corrupt_file(path).map(|p| p.display().to_string());
             return (
                 Vec::new(),
                 Some(ManifestRecovery {
@@ -229,7 +270,7 @@ pub(crate) fn read_manifest_from(path: &Path) -> (Vec<DocumentMeta>, Option<Mani
                 "invalid documents manifest JSON at {}; renaming aside and starting empty: {err}",
                 path.display()
             );
-            let backup_path = backup_corrupt_manifest(path).map(|p| p.display().to_string());
+            let backup_path = backup_corrupt_file(path).map(|p| p.display().to_string());
             (
                 Vec::new(),
                 Some(ManifestRecovery {
@@ -241,11 +282,46 @@ pub(crate) fn read_manifest_from(path: &Path) -> (Vec<DocumentMeta>, Option<Mani
     }
 }
 
-/// Move the unreadable/corrupt manifest aside so the next write doesn't happen
-/// against a file that's still sitting at the canonical path. Best-effort —
-/// returns the backup path on success, or `None` (after logging) if the move
-/// itself failed; the caller proceeds with an empty list either way.
-fn backup_corrupt_manifest(path: &Path) -> Option<PathBuf> {
+/// Read a document's annotation layer, falling back to the empty layer when the
+/// file is missing or unreadable — a document whose overlay can't be loaded must
+/// still open on its base raster rather than disappearing from the strip.
+///
+/// An oversized file is renamed aside first, matching how the manifest treats a
+/// file it can't use: the fallback is followed by the document's next save,
+/// which would otherwise overwrite the very file the user would need to repair
+/// it by hand. Nothing the app writes can reach the ceiling — `save_document`
+/// rejects an over-limit layer through `annotations_within_limit` — so this only
+/// fires for a hand-edited or foreign file.
+pub(crate) fn read_annotations_from(path: &Path) -> String {
+    if let Ok(metadata) = fs::metadata(path) {
+        if metadata.len() > MAX_ANNOTATIONS_BYTES {
+            log::error!(
+                "annotation layer at {} is oversized ({} bytes > {} max); renaming aside and starting empty",
+                path.display(),
+                metadata.len(),
+                MAX_ANNOTATIONS_BYTES
+            );
+            backup_corrupt_file(path);
+            return EMPTY_ANNOTATIONS.to_string();
+        }
+    }
+    fs::read_to_string(path).unwrap_or_else(|_| EMPTY_ANNOTATIONS.to_string())
+}
+
+/// Whether an incoming annotation layer is small enough to store. Checked on the
+/// save path against the same ceiling `read_annotations_from` enforces, so the
+/// store can never hold a layer it will later refuse to read back — an
+/// asymmetric pair would accept an edit and then silently serve an empty layer
+/// on the next open.
+pub(crate) fn annotations_within_limit(annotations: &str) -> bool {
+    annotations.len() as u64 <= MAX_ANNOTATIONS_BYTES
+}
+
+/// Move an unusable file aside so the next write doesn't happen against a file
+/// that's still sitting at the canonical path. Best-effort — returns the backup
+/// path on success, or `None` (after logging) if the move itself failed; the
+/// caller proceeds with its empty default either way.
+fn backup_corrupt_file(path: &Path) -> Option<PathBuf> {
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
@@ -260,7 +336,7 @@ fn backup_corrupt_manifest(path: &Path) -> Option<PathBuf> {
         Ok(()) => Some(backup),
         Err(err) => {
             log::error!(
-                "could not back up corrupt documents manifest at {}: {err}",
+                "could not back up unusable file at {}: {err}",
                 path.display()
             );
             None
@@ -499,5 +575,94 @@ mod tests {
         assert!(backup_path.contains("index.json.corrupt-"));
 
         fs::remove_dir_all(&dir).ok();
+    }
+
+    // The oversized manifest here is VALID JSON (one entry plus padding), so a
+    // missing size gate wouldn't fail the parse and quietly look correct — it
+    // would return the entry and no recovery. Asserting the empty list *and* the
+    // size-specific reason is what separates the two.
+    #[test]
+    fn oversized_manifest_is_backed_up_and_not_parsed() {
+        let dir = temp_dir_for("manifest-oversized");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("index.json");
+        let mut json = serde_json::to_string(&vec![sample_meta("doc-1-1")]).unwrap();
+        // Trailing whitespace keeps the payload parseable while pushing it past
+        // the ceiling.
+        json.push_str(&" ".repeat((MAX_MANIFEST_BYTES as usize) + 1 - json.len()));
+        assert!(json.len() as u64 > MAX_MANIFEST_BYTES);
+        assert!(
+            serde_json::from_str::<Vec<DocumentMeta>>(&json).is_ok(),
+            "the oversized payload must be parseable, or the test proves nothing"
+        );
+        fs::write(&path, json.as_bytes()).unwrap();
+
+        let (manifest, recovery) = read_manifest_from(&path);
+
+        assert!(
+            manifest.is_empty(),
+            "an oversized manifest must not be read"
+        );
+        let recovery = recovery.expect("an oversized manifest should report a recovery");
+        assert_eq!(recovery.reason, "was too large to read");
+        assert!(
+            !path.exists(),
+            "expected the oversized manifest to be renamed aside"
+        );
+        let backup_path = recovery
+            .backup_path
+            .expect("recovery should point at the preserved backup");
+        assert!(PathBuf::from(&backup_path).exists());
+        assert!(backup_path.contains("index.json.corrupt-"));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn annotations_read_falls_back_to_empty_layer_when_missing() {
+        let dir = temp_dir_for("annotations-missing");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("annotations.json");
+        assert_eq!(read_annotations_from(&path), "[]");
+
+        fs::write(&path, br#"[{"kind":"pen","id":1}]"#).unwrap();
+        assert_eq!(read_annotations_from(&path), r#"[{"kind":"pen","id":1}]"#);
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn oversized_annotations_file_is_backed_up_and_not_read() {
+        let dir = temp_dir_for("annotations-oversized");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("annotations.json");
+        fs::write(&path, vec![b'x'; (MAX_ANNOTATIONS_BYTES as usize) + 1]).unwrap();
+
+        assert_eq!(read_annotations_from(&path), "[]");
+        assert!(
+            !path.exists(),
+            "expected the oversized annotation layer to be renamed aside"
+        );
+        let preserved = fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).any(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .contains("annotations.json.corrupt-")
+        });
+        assert!(preserved, "expected the oversized file to be preserved");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    // The save-side half of the ceiling: what `save_document` rejects must be
+    // exactly what `read_annotations_from` would refuse to read back.
+    #[test]
+    fn annotations_within_limit_matches_the_read_ceiling() {
+        assert!(annotations_within_limit("[]"));
+        assert!(annotations_within_limit(
+            &"x".repeat(MAX_ANNOTATIONS_BYTES as usize)
+        ));
+        assert!(!annotations_within_limit(
+            &"x".repeat((MAX_ANNOTATIONS_BYTES as usize) + 1)
+        ));
     }
 }

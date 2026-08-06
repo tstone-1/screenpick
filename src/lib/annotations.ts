@@ -129,27 +129,109 @@ export type Annotation =
 
 export type AnnotationBounds = CropRect;
 
-const ANNOTATION_KINDS = new Set<Annotation["kind"]>([
-  "pen",
-  "arrow",
-  "shape",
-  "text",
-  "highlight",
-  "blur",
-  "erase",
-  "cut"
-]);
-
 // Serialize an annotation layer for persistence (`annotations.json`). Plain
 // `JSON.stringify` — annotations are pure data with no functions/cycles.
 export function serializeAnnotations(annotations: Annotation[]): string {
   return JSON.stringify(annotations);
 }
 
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isPoint(value: unknown): value is Point {
+  if (typeof value !== "object" || value === null) return false;
+  const point = value as Record<string, unknown>;
+  return isFiniteNumber(point.x) && isFiniteNumber(point.y);
+}
+
+// Stroke geometry must be non-empty, not merely an array: the renderer indexes
+// `points[0]` directly for the move-to, and pointsBounds over an empty list
+// returns a degenerate zero rect that hit-testing and crop then treat as a real
+// annotation nobody can ever select or delete.
+function isPointList(value: unknown): value is Point[] {
+  return Array.isArray(value) && value.length > 0 && value.every(isPoint);
+}
+
+function isRect(value: unknown): value is CropRect {
+  if (typeof value !== "object" || value === null) return false;
+  const rect = value as Record<string, unknown>;
+  return (
+    isFiniteNumber(rect.x) &&
+    isFiniteNumber(rect.y) &&
+    isFiniteNumber(rect.width) &&
+    isFiniteNumber(rect.height)
+  );
+}
+
+const SHAPE_KINDS = new Set<ShapeKind>(["rectangle", "ellipse", "triangle", "diamond"]);
+
+// Per-kind structural validation for `deserializeAnnotations`. A known `kind`
+// alone is not enough to make an entry safe to hand downstream: nothing past
+// this point re-checks the payload — `annotationBounds` reads `points`/`rect`
+// unguarded, `cutSeamPoints` divides by `period`, EditorStage renders straight
+// off the fields — so one incomplete entry throws during bounds computation or
+// mid-render, and because it lives on disk it does so again on every reopen,
+// leaving the document permanently unopenable. Validate what each kind's
+// consumers actually dereference, and drop the entry when any of it is missing
+// or the wrong type.
+type AnnotationValidator = (entry: Record<string, unknown>) => boolean;
+
+const ANNOTATION_VALIDATORS: Record<AnnotationKind, AnnotationValidator> = {
+  pen: (entry) =>
+    isPointList(entry.points) && typeof entry.color === "string" && isFiniteNumber(entry.width),
+  // `color: null` is the transparent-hole mode, not a missing field.
+  erase: (entry) =>
+    isPointList(entry.points) &&
+    isFiniteNumber(entry.width) &&
+    (entry.color === null || typeof entry.color === "string"),
+  arrow: (entry) =>
+    isPoint(entry.start) &&
+    isPoint(entry.end) &&
+    typeof entry.color === "string" &&
+    isFiniteNumber(entry.width),
+  shape: (entry) =>
+    SHAPE_KINDS.has(entry.shape as ShapeKind) &&
+    isRect(entry.rect) &&
+    typeof entry.color === "string" &&
+    isFiniteNumber(entry.width) &&
+    typeof entry.fill === "boolean" &&
+    isFiniteNumber(entry.fillOpacity),
+  text: (entry) =>
+    isPoint(entry.position) &&
+    typeof entry.text === "string" &&
+    typeof entry.color === "string" &&
+    isFiniteNumber(entry.fontSize) &&
+    typeof entry.background === "boolean" &&
+    isFiniteNumber(entry.backgroundOpacity) &&
+    // Optional — drafts and pre-measurement documents legitimately lack it.
+    (entry.measuredWidth === undefined || isFiniteNumber(entry.measuredWidth)),
+  highlight: (entry) =>
+    isRect(entry.rect) && typeof entry.color === "string" && isFiniteNumber(entry.opacity),
+  blur: (entry) => isRect(entry.rect) && isFiniteNumber(entry.radius),
+  cut: (entry) =>
+    (entry.orientation === "horizontal" || entry.orientation === "vertical") &&
+    isFiniteNumber(entry.position) &&
+    isFiniteNumber(entry.start) &&
+    isFiniteNumber(entry.span) &&
+    typeof entry.color === "string" &&
+    isFiniteNumber(entry.width) &&
+    isFiniteNumber(entry.amplitude) &&
+    // Strictly positive, not merely finite: cutSeamPoints derives its tooth
+    // count as span/period, so a zero period yields an infinite loop rather
+    // than a bad drawing.
+    isFiniteNumber(entry.period) &&
+    entry.period > 0
+};
+
 // Parse a persisted annotation layer back into `Annotation[]`, defensively:
 // disk data is untrusted (could be hand-edited or written by an older/newer
-// build), so a malformed payload yields an empty layer rather than throwing, and
-// entries without a known `kind` / numeric `id` are dropped.
+// build), so a malformed payload yields an empty layer rather than throwing,
+// and any entry that isn't a structurally complete annotation of a known kind
+// is dropped (see ANNOTATION_VALIDATORS above for what "complete" means per
+// kind). Dropping is deliberate over repairing: a partial entry has no
+// defensible default geometry, and a silently invented one would be indis-
+// tinguishable from work the user actually did.
 export function deserializeAnnotations(json: string): Annotation[] {
   let parsed: unknown;
   try {
@@ -158,13 +240,16 @@ export function deserializeAnnotations(json: string): Annotation[] {
     return [];
   }
   if (!Array.isArray(parsed)) return [];
-  return parsed.filter(
-    (entry): entry is Annotation =>
-      typeof entry === "object" &&
-      entry !== null &&
-      typeof (entry as { id?: unknown }).id === "number" &&
-      ANNOTATION_KINDS.has((entry as { kind?: Annotation["kind"] }).kind as Annotation["kind"])
-  );
+  return parsed.filter((entry): entry is Annotation => {
+    if (typeof entry !== "object" || entry === null) return false;
+    const candidate = entry as Record<string, unknown>;
+    // Finite, not merely numeric: nextAnnotationIdFor maxes over these, so one
+    // Infinity id would push every later id past the safe-integer range.
+    if (!isFiniteNumber(candidate.id)) return false;
+    const kind = candidate.kind;
+    if (typeof kind !== "string" || !(kind in ANNOTATION_VALIDATORS)) return false;
+    return ANNOTATION_VALIDATORS[kind as AnnotationKind](candidate);
+  });
 }
 
 // Next free annotation id for a layer, so ids stay unique after restoring a

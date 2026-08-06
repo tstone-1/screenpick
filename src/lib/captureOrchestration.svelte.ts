@@ -6,9 +6,11 @@ import {
   type CaptureSettings,
   type ShortcutStatus
 } from "./bindings";
+import type { Result } from "./commandResult";
 import { pickDirectory } from "./editorCommands";
 import { editor } from "./editor.svelte";
 import { playCaptureSound } from "./captureSound";
+import { logError } from "./diagnosticsLog";
 import { acceleratorKey, acceleratorMatches } from "./shortcutRecording";
 
 const defaultSettings: CaptureSettings = {
@@ -34,6 +36,108 @@ type CaptureSource = "button" | "shortcut" | "fallback";
 // all capture. This recovers the UI after a generous delay — long enough never
 // to interrupt a normal interactive selection.
 const CAPTURE_WATCHDOG_MS = 60_000;
+
+// The capture modes this build knows how to drive. `CaptureMode.id` crosses the
+// specta boundary as a plain `string`, so the typed-IPC contract cannot check
+// that the frontend handles every mode Rust lists — this union and the table
+// below are the frontend's own check. Adding a mode to `capture_modes.rs`
+// without adding it here now fails at the table (a missing `Record` key is a
+// compile error) instead of shipping a button that silently does nothing.
+type KnownCaptureModeId = "region" | "window" | "screen" | "screen-pick";
+
+// A start either hands the interaction to an overlay — the shot arrives later
+// as a `CaptureCompleted` event, so the pending flag stays up — or captures
+// immediately and resolves with the result. Which of the two a mode does is the
+// table's business; the caller must not re-derive it from the mode id.
+type CaptureStart =
+  | { kind: "pending"; result: Result<null, string> }
+  | { kind: "completed"; result: Result<CaptureResult, string> };
+
+// Everything the two dispatch sites need, per mode, in one place: the status
+// line, the start command (including the shortcut-vs-button split where the two
+// differ), and the cancel command. The start/cancel mapping used to exist twice
+// — `requestCapture` and `#cancelPendingCapture` each held their own if/else —
+// which left the watchdog's cancel able to fall a mode behind the start path,
+// with nothing to fail until a wedged session's overlays needed cleaning up.
+type CaptureModeDispatch = {
+  // Set before the command is awaited, so the status line describes the
+  // interaction that is on screen rather than the request that started it.
+  activity: (source: CaptureSource) => string;
+  start: (source: CaptureSource) => Promise<CaptureStart>;
+  cancel: () => Promise<Result<null, string>>;
+};
+
+const captureDispatch: Record<KnownCaptureModeId, CaptureModeDispatch> = {
+  region: {
+    activity: () => "Region selection active.",
+    start: async () => ({ kind: "pending", result: await commands.startRegionSelection() }),
+    cancel: () => commands.cancelRegionSelection()
+  },
+  window: {
+    // From a global shortcut, capture the active (foreground) window directly
+    // — like the OS Alt+PrintScreen. The in-app button keeps the click-to-pick
+    // overlay, since ScreenPick itself is the foreground window when clicked.
+    activity: (source) =>
+      source === "shortcut" ? "Capturing active window." : "Window selection active.",
+    start: async (source) =>
+      source === "shortcut"
+        ? { kind: "completed", result: await commands.captureActiveWindow() }
+        : { kind: "pending", result: await commands.startWindowSelection() },
+    cancel: () => commands.cancelWindowSelection()
+  },
+  screen: {
+    // From a global shortcut, capture the display under the cursor directly
+    // — no picker, so nothing steals focus and a context menu (or other
+    // transient UI) open at that moment survives and is captured. The in-app
+    // button keeps the picker: ScreenPick is the foreground window when it's
+    // clicked, so there's no background menu to preserve and choosing a
+    // display visually is the more useful behavior.
+    activity: (source) =>
+      source === "shortcut" ? "Capturing screen under cursor." : "Screen selection active.",
+    start: async (source) => ({
+      kind: "pending",
+      result:
+        source === "shortcut"
+          ? await commands.captureScreenUnderCursor()
+          : await commands.startScreenSelection()
+    }),
+    cancel: () => commands.cancelScreenSelection()
+  },
+  "screen-pick": {
+    // Dedicated "choose a display" path (its own hotkey + in-app fallback):
+    // always opens the picker overlays.
+    activity: () => "Screen selection active.",
+    start: async () => ({ kind: "pending", result: await commands.startScreenSelection() }),
+    cancel: () => commands.cancelScreenSelection()
+  }
+};
+
+function isKnownCaptureModeId(modeId: string): modeId is KnownCaptureModeId {
+  return Object.hasOwn(captureDispatch, modeId);
+}
+
+// Mirror of the backend's `sanitize_settings`: trim entries, drop blank ones,
+// and drop a mode whose entries were *all* blank. An entry that survives as an
+// empty array is kept — that is a deliberately disabled mode, not an absent
+// override. Deliberately a second implementation rather than an IPC call: the
+// dirty check runs on every blur of a shortcut field, and a round trip per
+// keystroke would be worse than the duplication. `shortcutSanitizeFixture.json`
+// is the pin — one corpus, read by this module's vitest suite and by
+// `settings.rs`'s, so drift fails on whichever side drifted.
+export function sanitizeShortcutOverrides(
+  overrides: Record<string, string[]>
+): Record<string, string[]> {
+  const result: Record<string, string[]> = {};
+  for (const [mode, accelerators] of Object.entries(overrides)) {
+    if (accelerators.length === 0) {
+      result[mode] = [];
+      continue;
+    }
+    const sanitized = accelerators.map((a) => a.trim()).filter((a) => a.length > 0);
+    if (sanitized.length > 0) result[mode] = sanitized;
+  }
+  return result;
+}
 
 export class CaptureOrchestration {
   captureModes = $state<CaptureMode[]>([]);
@@ -62,6 +166,13 @@ export class CaptureOrchestration {
   autostartEnabled = $state(false);
   settings = $state<CaptureSettings>({ ...defaultSettings });
   appliedSettings = $state<CaptureSettings>({ ...defaultSettings });
+  // True once `get_settings` has answered. `update_settings` replaces the whole
+  // stored struct, so saving from `defaultSettings` — a toggle in the window
+  // between startup and that first answer, or any toggle after a failed one —
+  // would write `saveDirectory: null` and empty overrides over what the user
+  // configured. Rust cannot tell that apart from a deliberate reset, so the
+  // frontend refuses to save a baseline it never loaded (see #saveAndApplySettings).
+  settingsLoaded = $state(false);
   shortcutEditorDrafts = $state<Record<string, string[]>>({});
   failedShortcuts = $derived(
     this.dismissedConflicts
@@ -362,6 +473,9 @@ export class CaptureOrchestration {
       }
       this.settings = result.data;
       this.appliedSettings = result.data;
+      // The backend answered with the stored struct, so we have a real baseline
+      // even if the initial get_settings never did.
+      this.settingsLoaded = true;
       this.shortcutEditorDrafts = { ...(this.settings.shortcutOverrides ?? {}) };
       await this.refreshShortcutStatuses();
     } catch (error) {
@@ -405,63 +519,45 @@ export class CaptureOrchestration {
     this.#setCapturePending(true);
     this.captureActivity = `${mode?.label ?? "Capture"} capture requested from ${source}.`;
 
+    if (!isKnownCaptureModeId(modeId)) {
+      // Rust owns the mode list and `captureDispatch` owns the wiring; a mode in
+      // one and not the other is a build-time wiring mistake that used to reach
+      // the user as a control that did nothing at all — no command, no error, no
+      // log line. Say so where a bug report can find it.
+      logError(`No capture dispatch for mode "${modeId}"; the mode list and the table disagree.`);
+      this.captureActivity = `Capture mode "${modeId}" is not available in this build.`;
+      this.#setCapturePending(false);
+      return;
+    }
+    const dispatch = captureDispatch[modeId];
+
     try {
-      let result;
-      if (modeId === "region") {
-        this.captureActivity = "Region selection active.";
-        result = await commands.startRegionSelection();
-      } else if (modeId === "window") {
-        // From a global shortcut, capture the active (foreground) window directly
-        // — like the OS Alt+PrintScreen. The in-app button keeps the click-to-pick
-        // overlay, since ScreenPick itself is the foreground window when clicked.
-        if (source === "shortcut") {
-          this.captureActivity = "Capturing active window.";
-          const active = await commands.captureActiveWindow();
-          if (active.status === "error") {
-            this.captureActivity = active.error || "Capture failed.";
-            this.#setCapturePending(false);
-            void this.#reassertScreenRecordingAfterFailure();
-          } else {
-            this.#ingestCompletedCapture(active.data);
-          }
+      this.captureActivity = dispatch.activity(source);
+      const started = await dispatch.start(source);
+      if (started.kind === "completed") {
+        if (started.result.status === "error") {
+          this.#failCapture(started.result.error);
           return;
         }
-        this.captureActivity = "Window selection active.";
-        result = await commands.startWindowSelection();
-      } else if (modeId === "screen") {
-        // From a global shortcut, capture the display under the cursor directly
-        // — no picker, so nothing steals focus and a context menu (or other
-        // transient UI) open at that moment survives and is captured. The in-app
-        // button keeps the picker: ScreenPick is the foreground window when it's
-        // clicked, so there's no background menu to preserve and choosing a
-        // display visually is the more useful behavior.
-        if (source === "shortcut") {
-          this.captureActivity = "Capturing screen under cursor.";
-          result = await commands.captureScreenUnderCursor();
-        } else {
-          this.captureActivity = "Screen selection active.";
-          result = await commands.startScreenSelection();
-        }
-      } else if (modeId === "screen-pick") {
-        // Dedicated "choose a display" path (its own hotkey + in-app fallback):
-        // always opens the picker overlays.
-        this.captureActivity = "Screen selection active.";
-        result = await commands.startScreenSelection();
-      } else {
-        this.#setCapturePending(false);
+        this.#ingestCompletedCapture(started.result.data);
         return;
       }
-
-      if (result.status === "error") {
-        this.captureActivity = result.error || "Capture failed.";
-        this.#setCapturePending(false);
-        void this.#reassertScreenRecordingAfterFailure();
+      if (started.result.status === "error") {
+        this.#failCapture(started.result.error);
       }
     } catch (error) {
-      this.captureActivity = error instanceof Error ? error.message : "Capture failed.";
-      this.#setCapturePending(false);
-      void this.#reassertScreenRecordingAfterFailure();
+      this.#failCapture(error instanceof Error ? error.message : null);
     }
+  }
+
+  // Every failed start ends the same way: report it, drop the pending flag so
+  // the UI unblocks, and re-query the macOS Screen Recording grant — a revoked
+  // grant is the most common cause and the banner has to come back even after
+  // the user dismissed it.
+  #failCapture(message: string | null) {
+    this.captureActivity = message || "Capture failed.";
+    this.#setCapturePending(false);
+    void this.#reassertScreenRecordingAfterFailure();
   }
 
   // Route a finished capture (from the completion event or a direct command like
@@ -562,6 +658,7 @@ export class CaptureOrchestration {
         this.settings = loadedSettings;
         this.appliedSettings = loadedSettings;
         this.shortcutEditorDrafts = { ...(loadedSettings.shortcutOverrides ?? {}) };
+        this.settingsLoaded = true;
       }
 
       try {
@@ -643,23 +740,6 @@ export class CaptureOrchestration {
     return run;
   }
 
-  // Mirror of the backend's `sanitize_settings`: trim entries, drop blank ones,
-  // and drop a mode whose entries were *all* blank. An entry that survives as an
-  // empty array is kept — that is a deliberately disabled mode, not an absent
-  // override.
-  #sanitizeOverrides(overrides: Record<string, string[]>): Record<string, string[]> {
-    const result: Record<string, string[]> = {};
-    for (const [mode, accelerators] of Object.entries(overrides)) {
-      if (accelerators.length === 0) {
-        result[mode] = [];
-        continue;
-      }
-      const sanitized = accelerators.map((a) => a.trim()).filter((a) => a.length > 0);
-      if (sanitized.length > 0) result[mode] = sanitized;
-    }
-    return result;
-  }
-
   #overridesEqual(a: Record<string, string[]>, b: Record<string, string[]>): boolean {
     const aKeys = Object.keys(a).sort();
     const bKeys = Object.keys(b).sort();
@@ -676,7 +756,7 @@ export class CaptureOrchestration {
   // save-and-re-register on every blur.
   #shortcutOverridesDirty(): boolean {
     return !this.#overridesEqual(
-      this.#sanitizeOverrides(this.settings.shortcutOverrides ?? {}),
+      sanitizeShortcutOverrides(this.settings.shortcutOverrides ?? {}),
       this.appliedSettings.shortcutOverrides ?? {}
     );
   }
@@ -687,7 +767,7 @@ export class CaptureOrchestration {
   #reconcileDrafts(saved: Record<string, string[]>): Record<string, string[]> {
     const next: Record<string, string[]> = { ...saved };
     for (const [mode, draft] of Object.entries(this.shortcutEditorDrafts)) {
-      const sanitized = this.#sanitizeOverrides({ [mode]: draft })[mode];
+      const sanitized = sanitizeShortcutOverrides({ [mode]: draft })[mode];
       const savedEntry = saved[mode];
       if (savedEntry && sanitized && this.#overridesEqual({ x: sanitized }, { x: savedEntry })) {
         next[mode] = draft;
@@ -705,6 +785,15 @@ export class CaptureOrchestration {
     nextSettings: CaptureSettings = this.settings,
     rollbackSettings: CaptureSettings = this.appliedSettings
   ): Promise<CaptureSettings | null> {
+    // One gate for every mutation path (toggles, save folder, shortcut edits),
+    // because they all end here and they all send the whole struct.
+    if (!this.settingsLoaded) {
+      // Same rollback as a rejected save: callers flip their field optimistically
+      // and the switch must not sit in a position nothing stored.
+      this.#restoreSettings(rollbackSettings);
+      this.captureActivity = "Settings are still loading — try that again in a moment.";
+      return null;
+    }
     try {
       const result = await commands.updateSettings(nextSettings);
       if (result.status === "error") {
@@ -773,12 +862,11 @@ export class CaptureOrchestration {
   async #cancelPendingCapture() {
     const mode = this.#pendingMode;
     try {
-      if (mode === "region") {
-        await commands.cancelRegionSelection();
-      } else if (mode === "window") {
-        await commands.cancelWindowSelection();
-      } else if (mode === "screen" || mode === "screen-pick") {
-        await commands.cancelScreenSelection();
+      // Same table `requestCapture` started from, so a mode can never be
+      // startable and uncancellable — the failure a hand-maintained second
+      // copy of the mapping would produce, silently, on the next mode added.
+      if (mode !== null && isKnownCaptureModeId(mode)) {
+        await captureDispatch[mode].cancel();
       }
     } catch {
       // The watchdog is a recovery path. A failed cancel still must unblock the
