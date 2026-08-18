@@ -47,6 +47,7 @@ import {
   DocumentStore,
   rebasedCapture,
   recentCapturePatchForRecord,
+  recentThumbnailUrl,
   workspaceKeyFor,
   type CaptureWorkspaceState,
   type EditorSnapshot,
@@ -81,7 +82,9 @@ export type {
   ShapeKind,
   TextAnnotation
 };
-export { slugifyCaptureTitle };
+// Re-exported (like slugifyCaptureTitle) so +page.svelte keeps taking its
+// editor surface from this one module rather than reaching into the store.
+export { slugifyCaptureTitle, recentThumbnailUrl };
 
 export type AnnotationStylePatch =
   | Partial<Pick<PenStroke, "color" | "width">>
@@ -788,8 +791,14 @@ export class EditorState {
 
   // Start a native OS drag of one or more Recent captures so they can be
   // dropped into other apps as real image files. See editorExport.ts.
+  //
+  // The flush is passed in rather than awaited here: the drag has to start
+  // inside the gesture, so editorExport fires this and hands the paths over in
+  // the same tick (the drop reads the bytes later, so a write racing the drag
+  // usually wins). +page.svelte flushes on pointerdown as well, which is where
+  // the annotate-then-drag race is actually won.
   dragCaptures(captures: RecentCapture[]): void {
-    dragCapturesOp(captures);
+    dragCapturesOp(captures, () => this.flushPendingSave());
   }
 
   // Copy the flattened capture (crop + annotations, exactly as shown) to the

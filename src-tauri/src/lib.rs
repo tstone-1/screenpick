@@ -36,8 +36,15 @@ mod updates;
 mod autostart;
 #[cfg(not(all(test, target_os = "windows")))]
 mod capture;
+// Root lookup only; the policy it feeds is pure and ungated in `capture_trust`.
+#[cfg(not(all(test, target_os = "windows")))]
+mod capture_trust_roots;
 #[cfg(not(all(test, target_os = "windows")))]
 mod documents;
+// Pure, but every consumer is one of the modules gated above, so leaving it
+// compiled into the Windows test build only makes it dead code.
+#[cfg(not(all(test, target_os = "windows")))]
+mod errors;
 #[cfg(not(all(test, target_os = "windows")))]
 mod events;
 #[cfg(not(all(test, target_os = "windows")))]
@@ -437,6 +444,12 @@ pub fn run() {
             // default $APPCACHE asset scope — widen it so the editor can render
             // each document's base/current image.
             documents::extend_asset_scope(app.handle());
+            // Sweep document folders no manifest entry references (a
+            // create_document that failed before appending its entry). Startup
+            // only; it reads the manifest through the same corruption-recovery
+            // path the commands use and refuses to delete anything unless that
+            // read succeeded — see the safety rules on the function.
+            documents::sweep_orphan_document_folders(app.handle());
 
             #[cfg(desktop)]
             shortcuts::register_shortcuts_with_settings(app, &settings);

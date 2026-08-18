@@ -30,8 +30,9 @@
   } from "@lucide/svelte";
 
   import { commands } from "$lib/bindings";
-  import { capture } from "$lib/captureOrchestration.svelte";
-  import { editor, type RecentCapture, type Tool } from "$lib/editor.svelte";
+  import { capture, settingsStore } from "$lib/captureOrchestration.svelte";
+  import { statusLine } from "$lib/statusLine.svelte";
+  import { editor, recentThumbnailUrl, type RecentCapture, type Tool } from "$lib/editor.svelte";
   import { confirmDiscard } from "$lib/editorCommands";
   import { unlockCaptureSound } from "$lib/captureSound";
   import { update, RELEASES_URL } from "$lib/updateState.svelte";
@@ -132,6 +133,23 @@
     editor.openCapture(recent);
   }
 
+  // Pressing a Recent card is the gesture that precedes every drag out of the
+  // strip, and it is the last moment at which a save can still be started
+  // without blocking anything: `dragstart` must hand the OS its paths
+  // synchronously (see startFileDrag in editorCommands.ts), so it cannot await
+  // a persist. Flushing here gives the debounced save the whole press-and-move
+  // to land in, which is what makes "highlight something, immediately drag it
+  // out" deliver the annotated `current.png` rather than the previous render.
+  //
+  // Fire-and-forget by design: nothing in this gesture reads the result, and
+  // `flushPendingSave` resolves immediately when nothing is pending. Guarded to
+  // the open document because that is the only one the flush can persist.
+  function handleRecentPointerDown(recent: RecentCapture) {
+    const openId = editor.document?.capture.documentId;
+    if (recent.documentId == null || recent.documentId !== openId) return;
+    void editor.flushPendingSave();
+  }
+
   // Native drag-out: dragging a Recent thumbnail hands the OS the flattened
   // image file(s) so they can be dropped into other apps. Dragging a member of
   // the multi-selection drags the whole group; dragging anything else drags just
@@ -201,7 +219,7 @@
     closeRecentMenu();
     if (!recent) return;
     const error = await editor.revealCapture(recent);
-    if (error) capture.setActivity(error);
+    if (error) statusLine.set(error);
   }
 
   async function handleSaveRecent() {
@@ -209,7 +227,7 @@
     closeRecentMenu();
     if (!recent) return;
     const error = await editor.exportRecentCapture(recent);
-    if (error) capture.setActivity(error);
+    if (error) statusLine.set(error);
   }
 
   // "Save N images as..." for a multi-selection: save every selected capture
@@ -220,7 +238,7 @@
     closeRecentMenu();
     if (targets.length === 0) return;
     const message = await editor.exportRecentCaptures(targets);
-    if (message) capture.setActivity(message);
+    if (message) statusLine.set(message);
   }
 
   async function handleCopyRecentImage() {
@@ -228,7 +246,7 @@
     closeRecentMenu();
     if (!recent) return;
     const error = await editor.copyCaptureImage(recent);
-    capture.setActivity(error ?? "Copied image to clipboard.");
+    statusLine.set(error ?? "Copied image to clipboard.");
   }
 
   async function handleCopyRecentPath() {
@@ -236,7 +254,7 @@
     closeRecentMenu();
     if (!recent) return;
     const error = await editor.copyCapturePath(recent);
-    capture.setActivity(error ?? "Copied path to the annotated image.");
+    statusLine.set(error ?? "Copied path to the annotated image.");
   }
 
   // Close a Recent tab. Closing ends the annotation process and deletes the
@@ -261,12 +279,12 @@
 
   async function handleExport() {
     const error = await editor.exportCapture();
-    if (error) capture.setActivity(error);
+    if (error) statusLine.set(error);
   }
 
   async function handleCopy() {
     const error = await editor.copyToClipboard();
-    capture.setActivity(error ?? "Copied to clipboard.");
+    statusLine.set(error ?? "Copied to clipboard.");
   }
 
   function handleFitZoom() {
@@ -407,7 +425,7 @@
     // enable the sound never spin up an AudioContext. Persistent (not `once`) so
     // it still fires once the persisted setting finishes loading.
     const maybeUnlock = () => {
-      if (!capture.settings.playCaptureSound) return;
+      if (!settingsStore.settings.playCaptureSound) return;
       unlockCaptureSound();
       window.removeEventListener("pointerdown", maybeUnlock);
       window.removeEventListener("keydown", maybeUnlock);
@@ -426,7 +444,7 @@
     // persisted settings asynchronously, so reading the flag here would see the
     // default and check for updates even for a user who opted out.
     const teardownUpdateCheck = update.scheduleStartupCheck(
-      () => capture.settings.checkForUpdatesOnStartup !== false
+      () => settingsStore.settings.checkForUpdatesOnStartup !== false
     );
     const teardownTrayChecks = update.listenForTrayChecks();
     // Quit is held until the debounced document save has landed — without this
@@ -459,7 +477,7 @@
       </div>
       <div>
         <h1>ScreenPick</h1>
-        <span>{capture.status} • {capture.shortcutStatus}</span>
+        <span>{capture.status} • {settingsStore.shortcutStatus}</span>
       </div>
     </div>
 
@@ -574,7 +592,7 @@
           onclick={() => void capture.requestCapture(mode.id, "button")}
         >
           <span>{mode.label}</span>
-          <kbd>{capture.formatShortcut(capture.activeAccelerator(mode))}</kbd>
+          <kbd>{settingsStore.formatShortcut(capture.activeAccelerator(mode))}</kbd>
         </button>
       {/each}
     </div>
@@ -589,11 +607,11 @@
           </button>
         </div>
         <ul>
-          {#each capture.failedShortcuts as failure (capture.statusKey(failure))}
+          {#each capture.failedShortcuts as failure (settingsStore.statusKey(failure))}
             <li>
-              <kbd>{capture.formatShortcut(failure.accelerator)}</kbd>
+              <kbd>{settingsStore.formatShortcut(failure.accelerator)}</kbd>
               <span class="conflict-mode">{failure.mode}</span>
-              <span class="conflict-error" title={failure.error ?? "Unknown error"}>{capture.friendlyShortcutError(failure.error)}</span>
+              <span class="conflict-error" title={failure.error ?? "Unknown error"}>{settingsStore.friendlyShortcutError(failure.error)}</span>
             </li>
           {/each}
         </ul>
@@ -628,13 +646,14 @@
             class:selected={isRecentSelected(recent)}
             draggable="true"
             onclick={(event) => handleRecentClick(event, recent, recentIndex)}
+            onpointerdown={() => handleRecentPointerDown(recent)}
             use:suppressMiddleClickAutoscroll
             onauxclick={(event) => handleRecentAuxClick(event, recent)}
             ondragstart={(event) => handleRecentDragStart(event, recent)}
             oncontextmenu={(event) => void openRecentMenu(event, recent)}
           >
             <span class="thumb">
-              <img src={recent.assetUrl} alt="" />
+              <img src={recentThumbnailUrl(recent)} alt="" />
             </span>
             <span>
               <strong>{recent.title}</strong>
@@ -764,14 +783,14 @@
   </aside>
 
   <footer class="status-bar" aria-live="polite">
-    <span class="status-message">{capture.captureActivity}</span>
+    <span class="status-message">{statusLine.message}</span>
     {#if editor.persistError}
       <span class="status-persist-error" title={editor.persistError}>
         <TriangleAlert size={13} /> Not saved: {editor.persistError}
       </span>
     {/if}
-    {#if capture.shortcutLog.length > 0}
-      <span class="status-shortcuts">{capture.shortcutLog.at(-1)}</span>
+    {#if settingsStore.shortcutLog.length > 0}
+      <span class="status-shortcuts">{settingsStore.shortcutLog.at(-1)}</span>
     {/if}
   </footer>
 </main>

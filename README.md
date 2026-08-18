@@ -124,8 +124,8 @@ See [BUILD.md](BUILD.md) for the full build, test-gate, and release procedure.
 
 ## Troubleshooting
 
-ScreenPick writes a diagnostic log (failures only by default) to the OS log
-directory. Attach it when reporting a bug:
+ScreenPick writes a diagnostic log (failures and key lifecycle events) to the
+OS log directory. Attach it when reporting a bug:
 
 - **Windows:** `%LOCALAPPDATA%\com.tstone1.screenpick\logs\`
 - **macOS:** `~/Library/Logs/com.tstone1.screenpick/`

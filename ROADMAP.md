@@ -183,12 +183,12 @@ the richer, optional work:
   system notification + log line; an in-app banner would need a new IPC command,
   i.e. a `bindings.ts` regen on macOS).
 
-### 11. Editor state, EditorStage + picker route tests
-The 2026-05-30 review's test-coverage gap is partially closed (`captureOrchestration.test.ts` added) but `editor.svelte.ts`, `EditorStage.svelte` (~780 LOC), and the four picker `+page.svelte` files have limited direct tests. The next regression will land here.
+### 11. Remaining test-coverage leftovers
+The 2026-05-30 review's test-coverage gap is closed: orchestration, editor state, `EditorStage`, and (since 2026-08-18) all four picker routes have direct behavior tests -- `regionSelectorPage` / `screenOverlayPage` / `screenPickerPage` / `windowSelectorPage` `.component.test.ts` mount the real routes with the IPC boundary mocked and cover Escape-cancels, confirm-commits, the `selectionPending` double-submit guard, the region minimum-size rule, the overlay's `monitorId` parse guard, and the window-query single-flight rule. What is left:
 
-- Headless editor-state tests for undo/redo snapshots, the 50-entry history cap, bounded annotation movement, committed text width stamping, stale selection deletion, and color-sample race guards.
-- Component tests for `EditorStage`: pointer-event dispatch into the `Tool` registry, paint-order parity with `annotationsInPaintOrder`, crop overlay geometry.
-- Behavior tests for each picker route: Escape cancels, confirm commits, the `selectionPending` guard prevents double-submit.
+- Color-sample race guards (`#sampleRequestId` staleness in `editor.svelte.ts`) are untested.
+- `EditorStage` has no component-level coverage of paint-order parity with `annotationsInPaintOrder` or crop overlay geometry.
+- The main `+page.svelte` has no component harness (the picker suites are the model), so its Recent-card wiring -- e.g. the pointerdown save-flush that keeps drag-out fresh -- is covered only at the `EditorState` level.
 
 ---
 

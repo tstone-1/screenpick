@@ -183,4 +183,24 @@ describe("drag-out", () => {
     state.dragCaptures([]);
     expect(startFileDragMock).not.toHaveBeenCalled();
   });
+
+  // The annotate-then-drag gesture used to hand out the previous render (or the
+  // bare base): the save is debounced 500 ms plus a render plus an IPC write,
+  // and the drag reads `currentPath` as it stands right now. The drag therefore
+  // asks for a flush — but must not wait for one, because the native drag has
+  // to start inside the gesture (startFileDrag in editorCommands.ts) and an
+  // await here drops it. Both halves of that are the assertion.
+  it("requests a save flush but starts the native drag without awaiting it", () => {
+    const state = new EditorState();
+    // A flush that never settles: had dragCaptures awaited it, startFileDrag
+    // could not have been reached by the time this call returns.
+    const flush = vi
+      .spyOn(state, "flushPendingSave")
+      .mockReturnValue(new Promise<void>(() => {}));
+
+    state.dragCaptures([{ ...capture("/base.png"), currentPath: "/flat.png" }]);
+
+    expect(flush).toHaveBeenCalledOnce();
+    expect(startFileDragMock).toHaveBeenCalledWith(["/flat.png"], "/flat.png");
+  });
 });

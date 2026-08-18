@@ -526,18 +526,24 @@ entirely, and its clippy line lacked `--all-targets -- -D warnings`).
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml --locked` — `--locked` fails
       if `Cargo.lock` would have to change, catching a lockfile that was never
       committed after a `cargo update`.
-- [ ] **macOS bindings drift guard — hard gate, cannot be skipped:**
-      `cargo test --manifest-path src-tauri/Cargo.toml export_typescript_bindings` run on
-      **macOS** (or any non-Windows box/CI runner). This is the only test that actually
-      exercises `export_typescript_bindings`/`specta_builder` — see the comment at the
-      `cfg(not(all(test, target_os = "windows")))` gate atop `src-tauri/src/lib.rs` for why
-      it cannot run on Windows (a `cargo test` binary never gets the Windows GUI manifest
-      `tauri_build` embeds into the real app, so the linked-in Tauri GUI stack fails to even
-      start the test process — verified, not a shortcut). Development and CI both currently
-      happen without this check running automatically, so it is manual and mandatory: **do
-      not tag a release without running it on a Mac and getting a pass.** After an IPC
-      change, run it with `BINDINGS_UPDATE=1` first to regenerate `src/lib/bindings.ts`,
-      commit that, then re-run without the env var to confirm it's back in sync.
+- [ ] **macOS bindings drift guard — hard gate, cannot be skipped:** confirm the
+      macOS CI check is **green on the commit being tagged**. It runs automatically in
+      two places, both on macOS: `ci.yml`'s macOS job on every push and pull request
+      (step "Rust unit tests (includes Specta drift check)"), and `release.yml`'s
+      `test` job on `macos-latest`, which the release build `needs:` — so a tag on
+      drifted bindings fails the gate before any installer is produced. That job is
+      the only thing that actually exercises
+      `export_typescript_bindings`/`specta_builder` — see the comment at the
+      `cfg(not(all(test, target_os = "windows")))` gate atop `src-tauri/src/lib.rs` for
+      why it cannot run on Windows (a `cargo test` binary never gets the Windows GUI
+      manifest `tauri_build` embeds into the real app, so the linked-in Tauri GUI stack
+      fails to even start the test process — verified, not a shortcut). Development
+      happens on Windows, where drift is structurally invisible, so the CI run is the
+      only evidence there is: **do not tag on a red — or missing — macOS run.** A local
+      Mac run is still the *regeneration* path after an IPC change: run
+      `cargo test --manifest-path src-tauri/Cargo.toml export_typescript_bindings` with
+      `BINDINGS_UPDATE=1` first to regenerate `src/lib/bindings.ts`, commit that, then
+      re-run without the env var to confirm it's back in sync.
 - [ ] Manually smoke-tested via `npm run tauri dev`.
 
 **Version & documentation:**
