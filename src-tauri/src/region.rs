@@ -9,9 +9,9 @@ use tauri::{
 use xcap::Monitor;
 
 use crate::capture::{
-    capture_region_image, ensure_screen_capture_access, error_message, primary_monitor,
-    CaptureResult,
+    capture_region_image, ensure_screen_capture_access, primary_monitor, CaptureResult,
 };
+use crate::errors::error_message;
 use crate::picker_session::{
     emit_capture_cancelled, finish_capture, hide_before_capture, place_overlay,
     run_capture_off_ui_thread, PickerSession,

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { capture } from "$lib/captureOrchestration.svelte";
+  import { statusLine } from "$lib/statusLine.svelte";
   import {
     editor,
     type Annotation,
@@ -155,7 +155,7 @@
     }
     if (editor.activeTool === "color") {
       void editor.commitColorSample(event).then((message) => {
-        if (message) capture.setActivity(message);
+        if (message) statusLine.set(message);
       });
       return;
     }

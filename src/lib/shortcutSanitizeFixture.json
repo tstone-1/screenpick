@@ -2,10 +2,10 @@
   "_readme": [
     "Shared corpus for the shortcut-override sanitize rules, which exist twice on purpose:",
     "Rust `sanitize_settings` (src-tauri/src/settings.rs) is the storage authority, and the",
-    "frontend `sanitizeShortcutOverrides` (src/lib/captureOrchestration.svelte.ts) has to reach",
+    "frontend `sanitizeShortcutOverrides` (src/lib/settingsState.svelte.ts) has to reach",
     "the same answer to decide whether a blurred shortcut field is actually dirty. Unifying them",
     "would mean an IPC round trip per keystroke, so this file is the pin instead: BOTH sides read",
-    "it - a vitest case in captureOrchestration.test.ts and a cargo test in settings.rs - so a case",
+    "it - a vitest case in settingsState.test.ts and a cargo test in settings.rs - so a case",
     "added or edited here exercises both implementations, and drift fails on the side that drifted.",
     "JSON has no comments, hence this key; it carries no cases and both readers ignore it."
   ],

@@ -4,9 +4,10 @@ use tauri::{
 };
 
 use crate::capture::{
-    bring_to_front_on_hotkey_capture, capture_monitor_by_id, error_message,
-    list_capturable_monitors, restore_main_window, CapturableMonitor, CaptureResult,
+    bring_to_front_on_hotkey_capture, capture_monitor_by_id, list_capturable_monitors,
+    restore_main_window, CapturableMonitor, CaptureResult,
 };
+use crate::errors::error_message;
 use crate::monitor_pairing::{pair_monitor_targets, CapMonitorInfo, TauriMonInfo};
 use crate::picker_session::{
     emit_capture_cancelled, emit_capture_outcome, finish_capture, hide_before_capture,

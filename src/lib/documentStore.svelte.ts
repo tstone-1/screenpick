@@ -16,7 +16,13 @@ import { commands, type CaptureResult, type DocumentRecord } from "./bindings";
 import { saveDocument as saveDocumentIpc, toAssetUrl } from "./editorCommands";
 import { logError } from "./diagnosticsLog";
 import { renderFlattenedPng } from "./annotationRendering";
-import { deserializeAnnotations, serializeAnnotations, type Annotation, type CropRect } from "./annotations";
+import {
+  annotationLayerForBase,
+  deserializeAnnotationLayer,
+  serializeAnnotations,
+  type Annotation,
+  type CropRect
+} from "./annotations";
 
 // N9: cropCapture/cutoutCapture/copyImageToClipboard/revealInDir are pure
 // `commands.*` pass-throughs used elsewhere (editor.svelte.ts's gesture code,
@@ -40,6 +46,13 @@ export type RecentCapture = CaptureResult & {
   documentId?: string;
   currentPath?: string;
   dirty?: boolean;
+  // Cache-busting revision for the Recent-strip thumbnail. `currentPath` keeps
+  // the same file name (`current.png`) while its bytes are rewritten on every
+  // save, and the webview caches by URL — so without a component that changes
+  // per save, an <img> pointed at it renders the first version forever. Bumped
+  // by `nextThumbnailRevision` from every persisted DocumentRecord; consumed by
+  // `recentThumbnailUrl`. Absent for a capture that has never been persisted.
+  thumbnailRevision?: number;
 };
 
 // View state (zoom/pan/mode) wrapping the capture currently open in the
@@ -109,8 +122,51 @@ export function rebasedCapture(previous: RecentCapture, next: CaptureResult): Re
     assetUrl: toAssetUrl(next.path),
     documentId: previous.documentId,
     currentPath: previous.currentPath,
-    dirty: previous.dirty
+    dirty: previous.dirty,
+    thumbnailRevision: previous.thumbnailRevision
   };
+}
+
+// The next cache-busting revision for a document's `current.png`, given the
+// capture's previous one and the record just written.
+//
+// `record.updatedAt` is the natural key — Rust's save_document sets it to
+// `now_millis()` on every write, so it tracks the file's content exactly — but
+// it is not sufficient alone: it is nullable in the record type, and two saves
+// landing inside the same millisecond would repeat it, which would pin the
+// thumbnail on the older render with nothing left to correct it. Taking
+// `max(updatedAt, previous + 1)` keeps the timestamp's meaning on the normal
+// path while guaranteeing the value STRICTLY increases on every save, so the
+// URL provably changes whenever the bytes do.
+export function nextThumbnailRevision(
+  previous: number | undefined,
+  record: DocumentRecord
+): number {
+  const floor = (previous ?? 0) + 1;
+  const stamp = record.updatedAt ?? 0;
+  return stamp > floor ? stamp : floor;
+}
+
+// The image URL for a capture's Recent-strip thumbnail: the document's
+// flattened `current.png` (annotations baked in — the same artifact copy/
+// export/drag hand out) when one has been persisted, else the un-annotated
+// base raster exactly as before. The strip is therefore accurate "as of the
+// last save": an edit made since the debounced save fired is not in the
+// thumbnail until that save lands. Deliberately not live-rendered — the strip
+// would then re-rasterise every capture on every stroke.
+//
+// The revision is appended as a query component. Tauri's asset protocol reads
+// only `uri().path()` (tauri/src/protocol/asset.rs) and `convertFileSrc`
+// percent-encodes the whole path, so a query can neither collide with the file
+// name nor reach the file lookup — it changes only the webview's cache key.
+// The CORS/asset-boundary discipline documented at `toAssetUrl`/`loadImage` in
+// editorCommands.ts is untouched: the origin is unchanged, and this URL is only
+// ever fed to a plain <img> (no canvas readback), so it needs no crossOrigin.
+export function recentThumbnailUrl(capture: RecentCapture): string {
+  if (!capture.currentPath) return capture.assetUrl;
+  const url = toAssetUrl(capture.currentPath);
+  if (capture.thumbnailRevision === undefined) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}v=${capture.thumbnailRevision}`;
 }
 
 // Reflect a freshly persisted document's metadata (dirty flag, current.png
@@ -127,8 +183,41 @@ export function recentCapturePatchForRecord(
 ): (capture: RecentCapture) => RecentCapture {
   return (capture) =>
     capture.documentId === record.id
-      ? { ...capture, currentPath: record.currentPath, dirty: record.dirty }
+      ? {
+          ...capture,
+          currentPath: record.currentPath,
+          dirty: record.dirty,
+          // The save just rewrote current.png in place; bump the thumbnail's
+          // cache key so the strip repaints from the new bytes rather than the
+          // webview's copy of the previous render (see nextThumbnailRevision).
+          thumbnailRevision: nextThumbnailRevision(capture.thumbnailRevision, record)
+        }
       : capture;
+}
+
+// The base raster's file name out of a record's `basePath` — the identity an
+// annotation layer is stamped with (see `StoredAnnotationLayer` in
+// annotations.ts for why the name, not the path). Splits on both separators
+// because Rust builds the path with `PathBuf::join`, so it arrives with the
+// host's separator: `\` on Windows, `/` on macOS. Stamp and comparison both go
+// through here, so the two can never disagree about where the name starts.
+export function baseFileNameOf(basePath: string): string {
+  const separator = Math.max(basePath.lastIndexOf("/"), basePath.lastIndexOf("\\"));
+  return separator === -1 ? basePath : basePath.slice(separator + 1);
+}
+
+// The annotation layer to restore a persisted document with, and the stamp that
+// was refused if its layer had to be dropped (see `annotationLayerForBase`).
+// Pure — takes only the record — so the drop decision is testable without a
+// store or an IPC layer.
+export function restoredAnnotationLayer(record: DocumentRecord): {
+  annotations: Annotation[];
+  droppedFrom: string | null;
+} {
+  return annotationLayerForBase(
+    deserializeAnnotationLayer(record.annotations),
+    baseFileNameOf(record.basePath)
+  );
 }
 
 export class DocumentStore {
@@ -158,6 +247,17 @@ export class DocumentStore {
   // replaceBase=true call that produced them, so trusting only the caller's
   // flag can silently persist an annotation layer against the wrong raster.
   #lastPersistedBasePath = new Map<string, string>();
+  // The file name of the base raster each document currently holds inside its
+  // own folder, keyed by documentId — distinct from #lastPersistedBasePath,
+  // which holds the SOURCE path the raster was copied from. This is what an
+  // annotation layer gets stamped with on save, so the restore path can tell
+  // whether the layer and the base image on disk still belong together (see
+  // serializeAnnotations). Learned from every DocumentRecord the store sees:
+  // create, re-base, save, and restore all return the current base path.
+  // A document whose base file we have never seen is saved un-stamped rather
+  // than stamped with a guess — an un-stamped layer restores exactly as it
+  // does today, a wrong stamp would throw the layer away.
+  #documentBaseFile = new Map<string, string>();
   // Tail of the in-flight persist chain for each document (see #enqueuePersist),
   // keyed by documentId. An entry exists only while that document has work
   // queued or running — the chain deletes its own key once it drains — so
@@ -320,6 +420,7 @@ export class DocumentStore {
       const id = capture.documentId;
       this.#seededAnnotations.delete(id);
       this.#lastPersistedBasePath.delete(id);
+      this.#documentBaseFile.delete(id);
       deleteDocumentIpc(id)
         .then((result) => {
           if (result.status !== "ok") {
@@ -351,12 +452,21 @@ export class DocumentStore {
     this.#lastPersistedBasePath.set(documentId, path);
   }
 
+  // Note which base raster a document holds, from any record that reports it,
+  // and hand the name back for immediate use as an annotation-layer stamp.
+  #rememberBaseFile(record: DocumentRecord): string {
+    const baseFile = baseFileNameOf(record.basePath);
+    this.#documentBaseFile.set(record.id, baseFile);
+    return baseFile;
+  }
+
   recentFromRecord(record: DocumentRecord): RecentCapture {
     // Restored from disk: `path` IS `record.basePath` (the document's own
     // base raster), so the base is trivially already in sync with it — record
     // that up front, same as create-document identity attachment does for a
     // freshly created document (#persistDocument reads this back).
     this.recordLastPersistedBasePath(record.id, record.basePath);
+    this.#rememberBaseFile(record);
     return {
       mode: record.mode,
       title: record.title,
@@ -366,7 +476,11 @@ export class DocumentStore {
       assetUrl: toAssetUrl(record.basePath),
       documentId: record.id,
       currentPath: record.currentPath,
-      dirty: record.dirty
+      dirty: record.dirty,
+      // Seed the thumbnail cache key from the record's own write timestamp, so
+      // a document restored at launch is keyed to the bytes actually on disk
+      // (a stale cache entry from a previous run is keyed to an older save).
+      thumbnailRevision: nextThumbnailRevision(undefined, record)
     };
   }
 
@@ -387,6 +501,7 @@ export class DocumentStore {
         capture.height
       );
       if (result.status !== "ok") return null;
+      this.#rememberBaseFile(result.data);
       return result.data;
     } catch (error) {
       logError("Failed to persist capture as a document:", error);
@@ -408,7 +523,21 @@ export class DocumentStore {
       const records = result.data;
       this.clearSeededAnnotations();
       const recordDerived = records.map((record) => {
-        this.seedAnnotations(record.id, deserializeAnnotations(record.annotations));
+        // A layer stamped with a base raster the document no longer holds is
+        // dropped, not applied: the crop/cut re-base committed and the matching
+        // save_document did not, so these annotations were drawn on the
+        // pre-crop image and would land offset by the crop origin on this one.
+        // The base image survives; only the overlay is lost, and the next save
+        // rewrites annotations.json against the raster that is actually there.
+        const { annotations, droppedFrom } = restoredAnnotationLayer(record);
+        if (droppedFrom !== null) {
+          logError(
+            `Discarded the annotation layer of document ${record.id}: it was saved against base raster ` +
+              `${droppedFrom}, but the document now holds ${baseFileNameOf(record.basePath)}. ` +
+              "The screenshot itself is intact; its annotations could not be placed and were dropped."
+          );
+        }
+        this.seedAnnotations(record.id, annotations);
         return this.recentFromRecord(record);
       });
       // Merge, don't replace (N3 in the 2026-07 code review): a hotkey capture
@@ -480,7 +609,7 @@ export class DocumentStore {
   // older call's `save_document` can land after a newer one's and leave the
   // stale layer on disk — with nothing scheduled to correct it, since the newer
   // call already considers itself done. Same shape (and same reason) as
-  // `#enqueueShortcutTask` in captureOrchestration.svelte.ts: strict call order.
+  // `#enqueueShortcutTask` in settingsState.svelte.ts: strict call order.
   //
   // Deliberately does NOT re-read a live annotation layer at execution time. A
   // queued persist is bound to the raster it was called for — crop/cut pass the
@@ -531,6 +660,12 @@ export class DocumentStore {
   ): Promise<DocumentRecord | null> {
     const dirty = annotations.length > 0;
     const needsRebase = options.replaceBase || this.#lastPersistedBasePath.get(id) !== capture.path;
+    // The base raster this layer is about to be written against. Read before
+    // the re-base and replaced by the re-base's own record, so the stamp names
+    // the raster save_document actually pairs the layer with — never the one it
+    // superseded. `undefined` (a document the store has no record for) is
+    // carried through as "no stamp"; see #documentBaseFile.
+    let baseFile = this.#documentBaseFile.get(id) ?? null;
     try {
       if (needsRebase) {
         const based = await replaceDocumentBaseIpc(
@@ -545,13 +680,20 @@ export class DocumentStore {
           return null;
         }
         this.recordLastPersistedBasePath(id, capture.path);
+        baseFile = this.#rememberBaseFile(based.data);
       }
       const bytes = await renderFlattenedPng(capture, annotations);
-      const saved = await saveDocumentIpc(id, serializeAnnotations(annotations), bytes, dirty);
+      const saved = await saveDocumentIpc(
+        id,
+        serializeAnnotations(annotations, baseFile),
+        bytes,
+        dirty
+      );
       if (saved.status !== "ok") {
         this.persistError = saved.error || "Could not save this screenshot's changes.";
         return null;
       }
+      this.#rememberBaseFile(saved.data);
       this.applyRecordToRecent(saved.data);
       this.persistError = null;
       return saved.data;

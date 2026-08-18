@@ -1,9 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CaptureMode, CaptureSettings, ShortcutStatus } from "./bindings";
-// The corpus `settings.rs` compiles in with include_str!. Editing it exercises
-// both sanitize implementations; see the file's own _readme.
-import sanitizeFixture from "./shortcutSanitizeFixture.json";
 
 // Mock the modules the orchestrator imports BEFORE importing the class
 // itself, so the singleton's constructor never touches a real Tauri IPC.
@@ -23,14 +20,10 @@ const commandsMock = vi.hoisted(() => ({
   appStatus: vi.fn(),
   listCaptureModes: vi.fn(),
   shortcutStatus: vi.fn(),
-  suspendShortcuts: vi.fn(),
-  resumeShortcuts: vi.fn(),
   effectiveShortcutAccelerators: vi.fn(),
   getSettings: vi.fn(),
   updateSettings: vi.fn(),
-  resetShortcutSettings: vi.fn(),
   autostartEnabled: vi.fn(),
-  setAutostart: vi.fn(),
   startRegionSelection: vi.fn(),
   startWindowSelection: vi.fn(),
   startScreenSelection: vi.fn(),
@@ -88,19 +81,12 @@ const { logError } = await import("./diagnosticsLog");
 // The class lives in a .svelte.ts file but its behavior is testable here:
 // vitest runs through Vite with the Svelte plugin so $state/$derived are
 // real reactivity in this environment.
-const { CaptureOrchestration, sanitizeShortcutOverrides } = await import(
-  "./captureOrchestration.svelte"
-);
-
-// A started app has answered get_settings, which is what unlocks saving — the
-// gate that stops a toggle writing `defaultSettings` over the stored struct.
-// Tests that exercise a save path construct through this; the gate itself is
-// covered by its own cases below.
-function loadedOrchestration(): InstanceType<typeof CaptureOrchestration> {
-  const o = new CaptureOrchestration();
-  o.settingsLoaded = true;
-  return o;
-}
+const { CaptureOrchestration } = await import("./captureOrchestration.svelte");
+// The settings/shortcut half of the old class now lives in its own store,
+// composed as `orchestration.settingsStore` — its own suite is
+// settingsState.test.ts; what is asserted through it here is what the capture
+// side and the startup sequence read and write.
+const { statusLine } = await import("./statusLine.svelte");
 
 const modes: CaptureMode[] = [
   { id: "region", label: "Region", accelerators: ["CommandOrControl+Shift+4"] },
@@ -153,6 +139,9 @@ function commandOrControl(o: InstanceType<typeof CaptureOrchestration>) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The status line is a module singleton shared by every orchestrator, so a
+  // message left by the previous test would satisfy a `toContain` here.
+  statusLine.set("");
   settingsHolder.current = {
     saveDirectory: null,
     copyToClipboard: false,
@@ -169,8 +158,6 @@ beforeEach(() => {
     window: ["CommandOrControl+Shift+W", "CommandOrControl+Alt+W"],
     screen: ["CommandOrControl+Shift+S"]
   });
-  commandsMock.suspendShortcuts.mockResolvedValue({ status: "ok", data: null });
-  commandsMock.resumeShortcuts.mockResolvedValue({ status: "ok", data: null });
   commandsMock.getSettings.mockResolvedValue(settingsHolder.current);
   commandsMock.updateSettings.mockImplementation(async (s: CaptureSettings) => {
     // Mirrors Rust's `sanitize_settings`: blank entries are dropped and a mode
@@ -179,15 +166,7 @@ beforeEach(() => {
     settingsHolder.current = { ...s, shortcutOverrides: sanitize(s.shortcutOverrides ?? {}) };
     return { status: "ok", data: settingsHolder.current };
   });
-  commandsMock.resetShortcutSettings.mockImplementation(async () => {
-    settingsHolder.current = { ...settingsHolder.current, shortcutOverrides: {} };
-    return { status: "ok", data: settingsHolder.current };
-  });
   commandsMock.autostartEnabled.mockResolvedValue({ status: "ok", data: false });
-  commandsMock.setAutostart.mockImplementation(async (enabled: boolean) => ({
-    status: "ok",
-    data: enabled
-  }));
 });
 
 describe("startup", () => {
@@ -197,7 +176,7 @@ describe("startup", () => {
     const cleanup = o.setup();
 
     await vi.waitFor(() => {
-      expect(o.autostartEnabled).toBe(true);
+      expect(o.settingsStore.autostartEnabled).toBe(true);
     });
 
     cleanup();
@@ -212,34 +191,10 @@ describe("startup", () => {
     const cleanup = o.setup();
 
     await vi.waitFor(() => {
-      expect(o.captureActivity).toContain("startup unavailable");
+      expect(statusLine.message).toContain("startup unavailable");
     });
 
     cleanup();
-  });
-});
-
-describe("formatShortcut", () => {
-  it("returns Unavailable for null", () => {
-    const o = new CaptureOrchestration();
-    expect(o.formatShortcut(null)).toBe("Unavailable");
-  });
-
-  it("joins parts with platform-appropriate separator", () => {
-    const o = new CaptureOrchestration();
-    // The orchestrator detects macOS via navigator.platform once at construction;
-    // we can't easily flip it, so just check the parts are mapped.
-    const result = o.formatShortcut("CommandOrControl+Shift+4");
-    expect(result).toContain("4");
-    // Either the macOS glyph chord or the spelled-out Windows rendering.
-    expect(result === "⌘⇧4" || result === "Ctrl+Shift+4").toBe(true);
-  });
-});
-
-describe("statusKey", () => {
-  it("combines accelerator and mode", () => {
-    const o = new CaptureOrchestration();
-    expect(o.statusKey(status("Cmd+1", "region", "registered"))).toBe("Cmd+1:region");
   });
 });
 
@@ -247,316 +202,44 @@ describe("activeAccelerator", () => {
   it("returns the registered accelerator for a mode", () => {
     const o = new CaptureOrchestration();
     o.captureModes = modes;
-    o.registrations = [status("Cmd+Shift+4", "region", "registered")];
+    o.settingsStore.registrations = [status("Cmd+Shift+4", "region", "registered")];
     expect(o.activeAccelerator(modes[0])).toBe("Cmd+Shift+4");
   });
 
   it("falls back to the first declared accelerator when registrations are empty", () => {
     const o = new CaptureOrchestration();
     o.captureModes = modes;
-    o.registrations = [];
+    o.settingsStore.registrations = [];
     expect(o.activeAccelerator(modes[0])).toBe("CommandOrControl+Shift+4");
   });
 
   it("returns null when registrations exist but the mode has none registered", () => {
     const o = new CaptureOrchestration();
     o.captureModes = modes;
-    o.registrations = [status("Cmd+Shift+W", "window", "registered")];
+    o.settingsStore.registrations = [status("Cmd+Shift+W", "window", "registered")];
     expect(o.activeAccelerator(modes[0])).toBeNull();
   });
 });
 
-describe("shortcut draft round-trip", () => {
-  it("addShortcutEntry seeds from defaults and appends a blank row", () => {
-    const o = new CaptureOrchestration();
-    o.captureModes = modes;
-    expect(o.getModeAccelerators("window")).toEqual([
-      "CommandOrControl+Shift+W",
-      "CommandOrControl+Alt+W"
-    ]);
-    o.addShortcutEntry("window");
-    expect(o.getModeAccelerators("window")).toEqual([
-      "CommandOrControl+Shift+W",
-      "CommandOrControl+Alt+W",
-      ""
-    ]);
-    // Drafts preserve blanks; Rust's sanitize_settings drops them at save.
-    expect(o.settings.shortcutOverrides?.window).toEqual([
-      "CommandOrControl+Shift+W",
-      "CommandOrControl+Alt+W",
-      ""
-    ]);
-  });
-
-  it("setShortcutEntry replaces the accelerator at the given index", () => {
-    const o = new CaptureOrchestration();
-    o.captureModes = modes;
-    o.addShortcutEntry("region");
-    o.setShortcutEntry("region", 1, "CommandOrControl+Shift+R");
-    expect(o.getModeAccelerators("region")).toEqual([
-      "CommandOrControl+Shift+4",
-      "CommandOrControl+Shift+R"
-    ]);
-  });
-
-  it("removeShortcutEntry drops the row at the given index", async () => {
-    const o = loadedOrchestration();
-    o.captureModes = modes;
-    o.addShortcutEntry("window");
-    await o.removeShortcutEntry("window", 0);
-    expect(o.getModeAccelerators("window")).toEqual([
-      "CommandOrControl+Alt+W",
-      ""
-    ]);
-  });
-
-  // The click that removes a row also blurs the field, and that blur handler
-  // runs first — on the pre-removal draft. So removal cannot wait for a blur of
-  // its own; it has to commit itself or the deletion is silently lost.
-  it("removeShortcutEntry persists without waiting for a blur", async () => {
-    const o = loadedOrchestration();
-    o.captureModes = modes;
-    await o.removeShortcutEntry("window", 1);
-    expect(commandsMock.updateSettings).toHaveBeenCalledTimes(1);
-    expect(settingsHolder.current.shortcutOverrides?.window).toEqual([
-      "CommandOrControl+Shift+W"
-    ]);
-  });
-});
-
-describe("blur commits the recorded shortcut", () => {
-  it("saves and re-registers when a chord was recorded", async () => {
-    const o = loadedOrchestration();
-    o.captureModes = modes;
-    await o.beginShortcutRecording();
-    o.setShortcutEntry("window", 0, "CommandOrControl+Shift+G");
-    await o.endShortcutRecording();
-
-    expect(commandsMock.updateSettings).toHaveBeenCalledTimes(1);
-    expect(settingsHolder.current.shortcutOverrides?.window).toEqual([
-      "CommandOrControl+Shift+G",
-      "CommandOrControl+Alt+W"
-    ]);
-    expect(o.appliedSettings.shortcutOverrides?.window?.[0]).toBe("CommandOrControl+Shift+G");
-    // update_settings re-registers everything, so a separate resume would be a
-    // redundant unregister/register cycle.
-    expect(commandsMock.resumeShortcuts).not.toHaveBeenCalled();
-  });
-
-  it("only resumes when nothing was recorded", async () => {
-    const o = loadedOrchestration();
-    o.captureModes = modes;
-    await o.beginShortcutRecording();
-    await o.endShortcutRecording();
-
-    expect(commandsMock.resumeShortcuts).toHaveBeenCalledTimes(1);
-    expect(commandsMock.updateSettings).not.toHaveBeenCalled();
-  });
-
-  // A blank row is not a change: the backend never stores one, so treating it as
-  // dirty would save-and-re-register on every blur of an untouched field.
-  it("treats a blank placeholder row as no change", async () => {
-    const o = loadedOrchestration();
-    o.captureModes = modes;
-    o.appliedSettings = {
-      ...o.appliedSettings,
-      shortcutOverrides: { window: ["CommandOrControl+Shift+W"] }
-    };
-    o.shortcutEditorDrafts = { window: ["CommandOrControl+Shift+W"] };
-    o.addShortcutEntry("window");
-    await o.endShortcutRecording();
-
-    expect(commandsMock.updateSettings).not.toHaveBeenCalled();
-    expect(commandsMock.resumeShortcuts).toHaveBeenCalledTimes(1);
-  });
-
-  // Moving between two shortcut fields fires blur (commit + re-register) before
-  // focus (suspend). If those two land out of order the shortcuts are armed
-  // while the second field is recording, and the OS eats the chord — the exact
-  // failure `suspend_shortcuts` exists to prevent.
-  it("suspends only after the previous field's save has finished", async () => {
-    const order: string[] = [];
-    commandsMock.updateSettings.mockImplementation(async (s: CaptureSettings) => {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      order.push("save");
-      settingsHolder.current = { ...s };
-      return { status: "ok", data: settingsHolder.current };
-    });
-    commandsMock.suspendShortcuts.mockImplementation(async () => {
-      order.push("suspend");
-      return { status: "ok", data: null };
-    });
-
-    const o = loadedOrchestration();
-    o.captureModes = modes;
-    o.setShortcutEntry("window", 0, "CommandOrControl+Shift+G");
-    const blur = o.endShortcutRecording();
-    const focus = o.beginShortcutRecording();
-    await Promise.all([blur, focus]);
-
-    expect(order).toEqual(["save", "suspend"]);
-  });
-
-  // A save triggered from one mode must not delete a blank row the user just
-  // added under another: the backend strips blanks, so adopting its response
-  // wholesale would make the row disappear mid-edit.
-  it("keeps an unfilled row in another mode across a save", async () => {
-    const o = loadedOrchestration();
-    o.captureModes = modes;
-    o.addShortcutEntry("screen");
-    o.setShortcutEntry("window", 0, "CommandOrControl+Shift+G");
-    await o.endShortcutRecording();
-
-    expect(settingsHolder.current.shortcutOverrides?.screen).toEqual([
-      "CommandOrControl+Shift+S"
-    ]);
-    expect(o.getModeAccelerators("screen")).toEqual(["CommandOrControl+Shift+S", ""]);
-  });
-});
-
-describe("shortcutRowState", () => {
-  it("reports the registration state of a committed row", () => {
-    const o = new CaptureOrchestration();
-    o.captureModes = modes;
-    o.shortcutStatusByKey = {
-      "CommandOrControl+Shift+W:window": status("CommandOrControl+Shift+W", "window", "registered"),
-      "CommandOrControl+Alt+W:window": {
-        ...status("CommandOrControl+Alt+W", "window", "failed"),
-        error: "HotKey already registered"
-      }
-    };
-    expect(o.shortcutRowState("window", "CommandOrControl+Shift+W")).toBe("registered");
-    expect(o.shortcutRowState("window", "CommandOrControl+Alt+W")).toBe("failed");
-    expect(o.shortcutRowState("window", "")).toBe("empty");
-    expect(o.shortcutRowState("screen", "CommandOrControl+Shift+S")).toBe("pending");
-  });
-
-  // The collision that started this: the recorder emits Cmd+Alt+Shift+4 while
-  // the region default is spelled Cmd+Shift+Alt+4. Same chord, different string
-  // — so a raw compare misses it and only the OS notices, by refusing the
-  // second registration.
-  it("flags a duplicate chord that differs only in modifier order", () => {
-    const o = new CaptureOrchestration();
-    o.captureModes = modes;
-    o.shortcutStatusByKey = {
-      "CommandOrControl+Shift+W:window": status("CommandOrControl+Shift+W", "window", "registered")
-    };
-    o.shortcutEditorDrafts = {
-      region: ["CommandOrControl+Shift+Alt+4"],
-      window: ["CommandOrControl+Shift+W", "CommandOrControl+Alt+Shift+4"]
-    };
-    expect(o.shortcutRowState("window", "CommandOrControl+Alt+Shift+4")).toBe("duplicate");
-    // Both sides of the collision are flagged; neither is the "right" one.
-    expect(o.shortcutRowState("region", "CommandOrControl+Shift+Alt+4")).toBe("duplicate");
-    // A chord bound once is untouched — the check flags collisions, not any
-    // accelerator that happens to share modifiers with another.
-    expect(o.shortcutRowState("window", "CommandOrControl+Shift+W")).toBe("registered");
-  });
-});
-
-describe("toggleSetting", () => {
-  it("flips a boolean setting and persists via updateSettings", async () => {
-    const o = loadedOrchestration();
-    o.settings = { ...o.settings, autoOpenEditor: true };
-    o.appliedSettings = { ...o.settings };
-    await o.toggleSetting("autoOpenEditor");
-    expect(commandsMock.updateSettings).toHaveBeenCalledTimes(1);
-    expect(o.settings.autoOpenEditor).toBe(false);
-    expect(o.appliedSettings.autoOpenEditor).toBe(false);
-  });
-
-  it("toggles bring-to-front hotkey capture", async () => {
-    const o = loadedOrchestration();
-    o.settings = { ...o.settings, bringToFrontOnHotkeyCapture: false };
-    o.appliedSettings = { ...o.settings };
-    await o.toggleSetting("bringToFrontOnHotkeyCapture");
-    expect(commandsMock.updateSettings).toHaveBeenCalledTimes(1);
-    expect(o.settings.bringToFrontOnHotkeyCapture).toBe(true);
-    expect(o.appliedSettings.bringToFrontOnHotkeyCapture).toBe(true);
-  });
-
-  it("rolls back when updateSettings errors", async () => {
-    commandsMock.updateSettings.mockResolvedValueOnce({
-      status: "error",
-      error: "denied"
-    });
-    const o = loadedOrchestration();
-    o.settings = { ...o.settings, copyToClipboard: false };
-    o.appliedSettings = { ...o.settings };
-    await o.toggleSetting("copyToClipboard");
-    expect(o.settings.copyToClipboard).toBe(false);
-    expect(o.appliedSettings.copyToClipboard).toBe(false);
-    expect(o.captureActivity).toContain("denied");
-  });
-});
-
-// update_settings replaces the whole stored struct, so a save made from the
-// frontend's own defaults writes `saveDirectory: null` and empty overrides over
-// whatever the user had configured. Rust preserves the two fields it owns
-// (last_run_version, version) unconditionally; the rest can only be protected
-// here, by refusing to save a baseline that was never loaded.
+// The gate itself (a save refused before `get_settings` has answered) is
+// asserted in settingsState.test.ts. This is its control from the outside: the
+// startup sequence must actually open it, or the gate would read as a fix while
+// quietly making every settings change inert.
 describe("settings-load gate", () => {
-  it("does not save a toggle made before get_settings has answered", async () => {
-    const o = new CaptureOrchestration();
-    o.settings = { ...o.settings, saveDirectory: "/stored/captures", autoOpenEditor: true };
-    o.appliedSettings = { ...o.settings };
-
-    await o.toggleSetting("autoOpenEditor");
-
-    expect(commandsMock.updateSettings).not.toHaveBeenCalled();
-    // The optimistic flip is rolled back, so the switch matches what is stored.
-    expect(o.settings.autoOpenEditor).toBe(true);
-    expect(o.captureActivity).toContain("still loading");
-  });
-
-  it("does not save a shortcut edit made before get_settings has answered", async () => {
-    const o = new CaptureOrchestration();
-    o.captureModes = modes;
-    o.setShortcutEntry("window", 0, "CommandOrControl+Shift+G");
-
-    await o.endShortcutRecording();
-
-    expect(commandsMock.updateSettings).not.toHaveBeenCalled();
-  });
-
-  // Control for the two above: the gate must open, or it would read as a fix
-  // while quietly making every settings change inert.
   it("opens once setup has loaded the stored settings", async () => {
     settingsHolder.current = { ...settingsHolder.current, saveDirectory: "/stored/captures" };
     commandsMock.getSettings.mockResolvedValue(settingsHolder.current);
     const o = new CaptureOrchestration();
     const cleanup = o.setup();
     await vi.waitFor(() => {
-      expect(o.settingsLoaded).toBe(true);
+      expect(o.settingsStore.settingsLoaded).toBe(true);
     });
 
-    await o.toggleSetting("autoOpenEditor");
+    await o.settingsStore.toggleSetting("autoOpenEditor");
 
     expect(commandsMock.updateSettings).toHaveBeenCalledTimes(1);
     expect(settingsHolder.current.saveDirectory).toBe("/stored/captures");
     cleanup();
-  });
-});
-
-describe("toggleAutostart", () => {
-  it("flips the OS autostart state through the command", async () => {
-    const o = new CaptureOrchestration();
-    o.autostartEnabled = false;
-    await o.toggleAutostart();
-    expect(commandsMock.setAutostart).toHaveBeenCalledWith(true);
-    expect(o.autostartEnabled).toBe(true);
-  });
-
-  it("rolls back when setAutostart errors", async () => {
-    commandsMock.setAutostart.mockResolvedValueOnce({
-      status: "error",
-      error: "blocked"
-    });
-    const o = new CaptureOrchestration();
-    o.autostartEnabled = false;
-    await o.toggleAutostart();
-    expect(o.autostartEnabled).toBe(false);
-    expect(o.captureActivity).toContain("blocked");
   });
 });
 
@@ -631,7 +314,7 @@ describe("requestCapture", () => {
 
     const on = new CaptureOrchestration();
     on.captureModes = modes;
-    on.settings = { ...on.settings, playCaptureSound: true };
+    on.settingsStore.settings = { ...on.settingsStore.settings, playCaptureSound: true };
     await on.requestCapture("window", "shortcut");
     expect(captureSoundMock.playCaptureSound).toHaveBeenCalledOnce();
   });
@@ -657,7 +340,7 @@ describe("requestCapture", () => {
       const o = new CaptureOrchestration();
       o.captureModes = modes;
       await o.requestCapture(mode.id, "button");
-      expect(o.captureActivity, `mode ${mode.id}`).not.toContain("not available");
+      expect(statusLine.message, `mode ${mode.id}`).not.toContain("not available");
     }
 
     expect(logError).not.toHaveBeenCalled();
@@ -671,7 +354,7 @@ describe("requestCapture", () => {
 
     expect(logError).toHaveBeenCalledTimes(1);
     expect(vi.mocked(logError).mock.calls[0][0]).toContain("hologram");
-    expect(o.captureActivity).toContain("hologram");
+    expect(statusLine.message).toContain("hologram");
     expect(o.capturePending).toBe(false);
     expect(commandsMock.startRegionSelection).not.toHaveBeenCalled();
     expect(commandsMock.startWindowSelection).not.toHaveBeenCalled();
@@ -683,11 +366,11 @@ describe("fallback shortcuts", () => {
   it("does not fire a default accelerator disabled by shortcut overrides", () => {
     const o = new CaptureOrchestration();
     o.captureModes = modes;
-    o.appliedSettings = {
-      ...o.appliedSettings,
+    o.settingsStore.appliedSettings = {
+      ...o.settingsStore.appliedSettings,
       shortcutOverrides: { region: [] }
     };
-    o.effectiveAccelerators = { region: [], window: [], screen: [] };
+    o.settingsStore.effectiveAccelerators = { region: [], window: [], screen: [] };
     const event = keyEvent({
       code: "Digit4",
       ...commandOrControl(o),
@@ -701,11 +384,15 @@ describe("fallback shortcuts", () => {
   it("fires an unregistered custom accelerator as an in-app fallback", () => {
     const o = new CaptureOrchestration();
     o.captureModes = modes;
-    o.appliedSettings = {
-      ...o.appliedSettings,
+    o.settingsStore.appliedSettings = {
+      ...o.settingsStore.appliedSettings,
       shortcutOverrides: { region: ["CommandOrControl+Shift+R"] }
     };
-    o.effectiveAccelerators = { region: ["CommandOrControl+Shift+R"], window: [], screen: [] };
+    o.settingsStore.effectiveAccelerators = {
+      region: ["CommandOrControl+Shift+R"],
+      window: [],
+      screen: []
+    };
     const event = keyEvent({
       code: "KeyR",
       ...commandOrControl(o),
@@ -719,7 +406,7 @@ describe("fallback shortcuts", () => {
   it("requires Ctrl and Meta to match exactly", () => {
     const o = new CaptureOrchestration();
     o.captureModes = modes;
-    o.registrations = [status("CommandOrControl+Shift+S", "screen", "failed")];
+    o.settingsStore.registrations = [status("CommandOrControl+Shift+S", "screen", "failed")];
     const event = keyEvent({
       code: "KeyS",
       ctrlKey: o.isMac,
@@ -793,31 +480,10 @@ describe("capture watchdog", () => {
   });
 });
 
-// The sanitize rules exist on both sides of the IPC boundary on purpose (a
-// round trip per keystroke would be worse), so the corpus is the pin: this case
-// and `settings.rs`'s `sanitize_settings_agrees_with_the_shared_frontend_fixture`
-// read the same file, and drift fails on whichever side drifted.
-describe("sanitizeShortcutOverrides", () => {
-  it("agrees with the shared fixture the Rust side also reads", () => {
-    // TypeScript widens a JSON import to the union of the literal case shapes,
-    // where each case's absent mode keys are typed `undefined`; the corpus is a
-    // map of mode id to accelerators and is read as one.
-    const cases = sanitizeFixture.cases as {
-      name: string;
-      input: Record<string, string[]>;
-      expected: Record<string, string[]>;
-    }[];
-    expect(cases.length).toBeGreaterThan(0);
-    for (const testCase of cases) {
-      expect(sanitizeShortcutOverrides(testCase.input), testCase.name).toEqual(testCase.expected);
-    }
-  });
-});
-
 describe("failedShortcuts derived", () => {
   it("hides failures once the user dismisses the banner", () => {
     const o = new CaptureOrchestration();
-    o.shortcutStatusByKey = {
+    o.settingsStore.shortcutStatusByKey = {
       "Cmd+Shift+4:region": status("Cmd+Shift+4", "region", "failed")
     };
     expect(o.failedShortcuts.length).toBe(1);

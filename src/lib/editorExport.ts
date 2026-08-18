@@ -265,23 +265,50 @@ export async function copyCaptureImage(
 // Start a native OS drag of one or more Recent captures so they can be dropped
 // into other apps (a Claude Code session, a chat, Explorer) as real image
 // files. Drags each capture's flattened `current.png` (annotations baked in,
-// matching copy/export). Deliberately synchronous up to the IPC call:
-// persisting first would await mid-gesture and drop the native drag, and edits
-// autosave in the background, so `current.png` is already current.
+// matching copy/export).
 //
-// Caveat (unlike the batch export, which live-renders annotations): a capture
-// that has annotations but hasn't persisted yet has no `currentPath`, so we
-// fall back to the un-annotated base raster (`path`). That window is small —
-// autosave produces `current.png` shortly after the first edit — but a drag in
-// that instant drops the base image, not the annotated one.
+// The native drag MUST start synchronously inside the `dragstart` gesture (see
+// startFileDrag in editorCommands.ts), so — unlike reveal/copy-path/copy-image
+// — this cannot await a persist first. It instead REQUESTS one and hands the
+// paths over without waiting: `flushPendingSave` is fired and deliberately not
+// awaited, so `startFileDragIpc` below still runs in this same tick.
+//
+// What that buys, given the annotate-then-drag gesture used to hand out a
+// stale render almost every time (a 500 ms debounce plus a full-size render
+// plus the IPC write):
+//   - The caller (+page.svelte) already flushed on `pointerdown`, one pointer
+//     event earlier, so the write typically has the whole press-and-move to
+//     land in.
+//   - This second flush covers a drag that starts without a preceding
+//     pointerdown flush (a keyboard-initiated drag, a re-drag after the
+//     annotation changed mid-press).
+//   - The OS reads the file bytes at DROP time, not at drag start, so a write
+//     still in flight here usually lands before anything is read.
+//
+// Residual race, honestly: nothing here blocks the drop. If the render+write
+// is still in flight when the user drops, the receiving app gets the previous
+// save's bytes. And a capture that has annotations but has never been
+// persisted has no `currentPath` at all, so the path resolved below is the
+// un-annotated base raster — the flush may create `current.png` a moment
+// later, but this drag already handed out `path`. Both windows are narrow;
+// neither is closed.
 //
 // The first file doubles as the drag-cursor preview. No-op when nothing
 // resolves to a usable path.
-export function dragCaptures(captures: RecentCapture[]): void {
+export function dragCaptures(
+  captures: RecentCapture[],
+  flushPendingSave: () => Promise<void>
+): void {
   const paths = captures
     .map((capture) => capture.currentPath ?? capture.path)
     .filter((path): path is string => Boolean(path));
   if (paths.length === 0) return;
+  // Fire-and-forget: awaiting here would drop the native drag (see above). A
+  // failed flush is not surfaced — the drag itself still proceeds, and the
+  // persist path reports its own errors through DocumentStore.persistError.
+  void flushPendingSave().catch((error) => {
+    logWarn("flush before drag-out failed", error);
+  });
   // startFileDrag rejects if the native drag can't start. Log but don't
   // surface it: a failed drag is a no-op gesture (nothing drops), and there's
   // no activity-bar context for a drag the way there is for a click action.

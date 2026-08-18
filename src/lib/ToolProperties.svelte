@@ -9,7 +9,6 @@
     Trash2
   } from "@lucide/svelte";
 
-  import { capture } from "$lib/captureOrchestration.svelte";
   import ColorPicker from "$lib/ColorPicker.svelte";
   import {
     editor,
@@ -35,35 +34,30 @@
     TEXT_FONT_SIZE_MAX,
     TEXT_FONT_SIZE_MIN
   } from "$lib/editor.svelte";
+  import { statusLine } from "$lib/statusLine.svelte";
 
+  // Stated as the exceptions rather than as a list of the eleven tools that do
+  // have a panel: a tool added to the `Tool` union without a matching case used
+  // to silently render no properties panel at all, so the default is now "has a
+  // panel" and only "hand" (nothing to configure) and an empty "select" opt out.
   const hasToolPanel = $derived(
-    editor.activeTool === "crop" ||
-      editor.activeTool === "cut" ||
-      editor.activeTool === "pen" ||
-      editor.activeTool === "arrow" ||
-      editor.activeTool === "shape" ||
-      editor.activeTool === "text" ||
-      editor.activeTool === "highlight" ||
-      editor.activeTool === "blur" ||
-      editor.activeTool === "color" ||
-      editor.activeTool === "erase" ||
-      editor.activeTool === "erase-area" ||
-      (editor.activeTool === "select" && editor.selectedAnnotation !== null)
+    editor.activeTool !== "hand" &&
+      (editor.activeTool !== "select" || editor.selectedAnnotation !== null)
   );
 
   async function handleApplyCrop() {
     const message = await editor.applyCrop();
-    if (message) capture.setActivity(message);
+    if (message) statusLine.set(message);
   }
 
   async function handleApplyCut() {
     const message = await editor.applyCut();
-    if (message) capture.setActivity(message);
+    if (message) statusLine.set(message);
   }
 
   async function handleCopyColor() {
     const message = await editor.copyCurrentColor();
-    if (message) capture.setActivity(message);
+    if (message) statusLine.set(message);
   }
 </script>
 

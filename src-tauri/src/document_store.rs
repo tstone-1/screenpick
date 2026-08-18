@@ -8,6 +8,7 @@
 //! around the functions here.
 
 use std::{
+    collections::HashSet,
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -144,17 +145,59 @@ pub(crate) fn is_valid_doc_id(id: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
+/// Which direct children of the documents root are orphaned document folders:
+/// names that look exactly like a document id but that no manifest entry
+/// claims. `create_document` writes the folder, its rasters and its annotation
+/// layer before appending the manifest entry, so a failure in that window
+/// leaves a folder nothing will ever look at again — `list_documents` prunes
+/// stale files of KNOWN entries and never sees an unknown folder at all.
+///
+/// The caller deletes what this returns, so two refusals carry the whole
+/// safety of the sweep:
+///
+/// - `manifest_load_failed` — a manifest that could not be read or parsed, as
+///   distinct from one that is legitimately empty — returns nothing at all. A
+///   manifest we cannot read is not evidence about any folder, and reading it
+///   as an empty list would condemn every document the user has.
+/// - a name that is not a valid document id is never returned. `is_valid_doc_id`
+///   is reused rather than a looser `doc-*` glob, so the sweep can only ever
+///   name a folder `create_document` could itself have created.
+pub(crate) fn orphan_document_folders(
+    folder_names: &[String],
+    manifest_ids: &[String],
+    manifest_load_failed: bool,
+) -> Vec<String> {
+    if manifest_load_failed {
+        return Vec::new();
+    }
+    let known: HashSet<&str> = manifest_ids.iter().map(String::as_str).collect();
+    folder_names
+        .iter()
+        .filter(|name| is_valid_doc_id(name) && !known.contains(name.as_str()))
+        .cloned()
+        .collect()
+}
+
 /// Write bytes durably: a unique sibling temp file (pid + nanosecond timestamp,
 /// so two concurrent writers — or a crash-and-retry — can't collide on the same
 /// tmp name), `sync_all` before rename (so a power loss can't leave a
 /// zero-length/half-written target on NTFS — the exact failure mode that used
 /// to be able to feed the corrupt-manifest recovery path below), then rename
 /// over the target — retrying once on Windows if the destination already
-/// exists (see `rename_replacing`). The tmp file is removed on any failure so a
-/// write that doesn't complete doesn't litter the directory forever. This is
-/// the single atomic-write primitive for the app (settings.rs calls into this
-/// pure module rather than keeping its own copy — see the code review that
-/// unified them).
+/// exists (see `rename_replacing`) — and finally, on POSIX, an fsync of the
+/// containing directory (see `sync_parent_dir`). The tmp file is removed on any
+/// failure so a write that doesn't complete doesn't litter the directory
+/// forever. This is the single atomic-write primitive for the app (settings.rs
+/// calls into this pure module rather than keeping its own copy — see the code
+/// review that unified them).
+///
+/// What a returned `Ok` guarantees after a power loss: the target holds either
+/// the complete new bytes or the complete previous ones, never a mix — that is
+/// the file `sync_all`. On POSIX it now also guarantees the *new* bytes, since
+/// the rename that publishes them has been flushed too; before the directory
+/// sync, a crash could roll a completed save back to the previous content. On
+/// Windows the directory sync is skipped (see `sync_parent_dir`), so the
+/// torn-file guarantee holds there and the roll-back window does not close.
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let file_name = path
@@ -179,8 +222,48 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
         let _ = fs::remove_file(&tmp);
         return Err(err.to_string());
     }
+    sync_parent_dir(parent);
     Ok(())
 }
+
+/// Flush the directory entry the rename in `write_atomic` just created.
+///
+/// On POSIX filesystems the file's own `sync_all` makes its CONTENT durable,
+/// but the rename that publishes it under the target name is a change to the
+/// *directory*, and that is not on disk until the directory itself is synced.
+/// Without this, a power loss immediately after a save can come back with the
+/// previous file content — never a torn file, but a silently rolled-back one,
+/// under a call that had already reported success.
+///
+/// Best-effort and non-fatal, matching how this module treats secondary
+/// failures elsewhere (`prune_stale_base_files`, `backup_corrupt_file`): the
+/// rename has already landed, so returning an error here would tell the caller
+/// nothing was written when the new content is in fact in place — and on the
+/// save path that error reaches the user as "could not save".
+#[cfg(not(windows))]
+fn sync_parent_dir(parent: &Path) {
+    match fs::File::open(parent) {
+        Ok(dir) => {
+            if let Err(err) = dir.sync_all() {
+                log::warn!(
+                    "could not flush directory {} after an atomic write: {err}",
+                    parent.display()
+                );
+            }
+        }
+        Err(err) => log::warn!(
+            "could not open directory {} to flush it after an atomic write: {err}",
+            parent.display()
+        ),
+    }
+}
+
+/// No-op on Windows: a directory can't be opened as a file to be synced this
+/// way, and NTFS metadata ordering is not the POSIX rename problem above. The
+/// Windows-specific hazard `write_atomic` does have to handle — a rename onto
+/// an existing destination failing — is dealt with by `rename_replacing`.
+#[cfg(windows)]
+fn sync_parent_dir(_parent: &Path) {}
 
 /// Rename `tmp` onto `path`, retrying once on Windows when the destination
 /// already exists. Unix `rename` always replaces an existing destination, but
@@ -512,6 +595,69 @@ mod tests {
         assert!(dir.join("annotations.json").exists());
 
         fs::remove_dir_all(&dir).ok();
+    }
+
+    fn names(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    // N2 in the 2026-08 code review: a create_document that failed between
+    // writing its folder and appending its manifest entry left the folder
+    // behind forever — list_documents prunes stale files of known entries and
+    // never looks at an unknown folder.
+    #[test]
+    fn orphan_sweep_names_only_unreferenced_document_folders() {
+        let folders = names(&["doc-1-1", "doc-2-1", "doc-3-1"]);
+        let manifest = names(&["doc-2-1"]);
+
+        let orphans = orphan_document_folders(&folders, &manifest, false);
+
+        assert_eq!(orphans, names(&["doc-1-1", "doc-3-1"]));
+        assert!(
+            !orphans.contains(&"doc-2-1".to_string()),
+            "a folder the manifest still references must never be swept"
+        );
+    }
+
+    // The sweep deletes what it returns, so anything that isn't shaped exactly
+    // like a document id has to be invisible to it — including the manifest
+    // itself and the files a corruption recovery leaves beside it.
+    #[test]
+    fn orphan_sweep_ignores_names_that_are_not_document_ids() {
+        let folders = names(&[
+            "index.json",
+            "index.json.corrupt-1700000000000",
+            "doc-../etc",
+            "documents",
+            "Doc-1-1",
+            "doc-1-1",
+        ]);
+
+        assert_eq!(
+            orphan_document_folders(&folders, &[], false),
+            names(&["doc-1-1"]),
+            "only the well-formed document id is a sweep candidate"
+        );
+    }
+
+    // A manifest that could not be read says nothing about any folder. Read as
+    // an empty list it would condemn every document the user owns, which is why
+    // the load-failure flag is a parameter here and not the caller's judgement.
+    #[test]
+    fn orphan_sweep_deletes_nothing_when_the_manifest_could_not_be_loaded() {
+        let folders = names(&["doc-1-1", "doc-2-1"]);
+
+        assert!(
+            orphan_document_folders(&folders, &[], true).is_empty(),
+            "a failed manifest load must never produce deletions"
+        );
+        // Control: the identical inputs with a SUCCESSFUL load do produce them,
+        // so the assertion above is about the flag and not about the fixture.
+        assert_eq!(
+            orphan_document_folders(&folders, &[], false),
+            folders,
+            "an empty manifest that really loaded leaves every folder orphaned"
+        );
     }
 
     #[test]

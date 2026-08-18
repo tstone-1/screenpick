@@ -19,9 +19,10 @@
 //! A top-level `index.json` manifest lists every document's metadata. The
 //! frontend drives the lifecycle (create on capture, save on edit, delete on
 //! consent) and orders the strip by `updatedAt`; Rust owns durability + path
-//! trust. Document files live outside the default capture-trust root, so
-//! `crate::capture::verify_capture_source` is extended to trust this root too,
-//! and the asset-protocol scope is widened to it at startup.
+//! trust. Document files live outside the default capture-trust root, so this
+//! module's `documents_root_canonical` is handed to the capture-trust gate
+//! (`crate::capture_trust_roots::verify_capture_source`) as a third trusted
+//! root, and the asset-protocol scope is widened to it at startup.
 //!
 //! This module is the `AppHandle`-bound glue (path resolution, manifest
 //! read/modify/write around each command); the manifest entry types, the
@@ -51,8 +52,9 @@ use std::{
 
 use tauri::{AppHandle, Manager};
 
-use crate::capture::{error_message, verify_capture_source};
+use crate::capture_trust_roots::verify_capture_source;
 use crate::document_store::{self, is_valid_doc_id, DocumentMeta, DocumentRecord};
+use crate::errors::error_message;
 
 /// Guards every manifest read-modify-write span (see the module doc comment).
 static MANIFEST_LOCK: Mutex<()> = Mutex::new(());
@@ -99,6 +101,59 @@ pub(crate) fn extend_asset_scope(app: &AppHandle) {
     };
     if let Err(err) = app.asset_protocol_scope().allow_directory(&dir, true) {
         log::warn!("could not extend asset scope for documents: {err}");
+    }
+}
+
+/// Delete document folders no manifest entry references. Run once at startup
+/// (from the app's `setup`), which is the only moment nothing else can be
+/// halfway through a `create_document`: it holds `MANIFEST_LOCK` across the
+/// whole read-and-delete span anyway, so a create can't interleave, but running
+/// it at startup also means no editor session holds a document open.
+///
+/// This deletes user data, so it refuses in every case where it cannot prove a
+/// folder is unreferenced (see `document_store::orphan_document_folders` for
+/// the id-shape and load-failure refusals, and the missing-manifest one below).
+/// Each removal is logged at `info` with the folder name.
+pub(crate) fn sweep_orphan_document_folders(app: &AppHandle) {
+    let (Ok(root), Ok(path)) = (documents_root(app), manifest_path(app)) else {
+        return;
+    };
+    let _guard = MANIFEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // No manifest file is NOT an empty manifest. A previous session's
+    // corruption recovery renames the manifest aside and leaves every folder in
+    // place — telling the user in so many words that its documents were not
+    // deleted — so a sweep against the resulting absent file would delete
+    // exactly what that recovery promised to keep. First run is the same shape
+    // and has no folders to sweep anyway.
+    if !path.is_file() {
+        return;
+    }
+    let (manifest, recovery) = document_store::read_manifest_from(&path);
+    if let Some(recovery) = recovery {
+        // Same notification `read_manifest` would raise; raising it here keeps
+        // the once-per-corruption property, since the file has now been renamed
+        // aside and the next read finds the ordinary "no documents yet" case.
+        notify_manifest_recovery(app, &recovery);
+        return;
+    }
+    let Ok(entries) = fs::read_dir(&root) else {
+        return;
+    };
+    // Direct children only, and only directories — `index.json` and any
+    // renamed-aside `index.json.corrupt-*` sit in this same root.
+    let folder_names: Vec<String> = entries
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+        .collect();
+    let known_ids: Vec<String> = manifest.iter().map(|meta| meta.id.clone()).collect();
+    for name in document_store::orphan_document_folders(&folder_names, &known_ids, false) {
+        match fs::remove_dir_all(root.join(&name)) {
+            Ok(()) => log::info!("removed orphaned document folder {name}"),
+            Err(err) => log::warn!("could not remove orphaned document folder {name}: {err}"),
+        }
     }
 }
 

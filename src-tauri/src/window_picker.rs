@@ -4,9 +4,10 @@ use tauri::{
 };
 
 use crate::capture::{
-    capture_window_at_point, ensure_screen_capture_access, error_message, window_bounds_at_point,
-    CaptureResult, WindowBounds,
+    capture_window_at_point, ensure_screen_capture_access, window_bounds_at_point, CaptureResult,
+    WindowBounds,
 };
+use crate::errors::error_message;
 use crate::picker_session::{
     emit_capture_cancelled, finish_capture, hide_before_capture, place_overlay,
     run_capture_off_ui_thread, PickerSession,

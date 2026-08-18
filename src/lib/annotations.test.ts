@@ -4,12 +4,14 @@ import {
   annotationBounds,
   annotationHitTest,
   annotationLayer,
+  annotationLayerForBase,
   annotationsInPaintOrder,
   annotationsInVisualHitOrder,
   colorWithAlpha,
   cropAnnotations,
   cutoutAnnotations,
   cutSeamPoints,
+  deserializeAnnotationLayer,
   deserializeAnnotations,
   distanceToSegment,
   normalizeHexColor,
@@ -724,5 +726,91 @@ describe("deserializeAnnotations", () => {
     ];
 
     expect(deserializeAnnotations(JSON.stringify(mixed))).toEqual(valid);
+  });
+});
+
+// W1 in the 2026-08 code review: crop/cut re-base (replace_document_base) and
+// the annotation save (save_document) are two IPC calls, and the first commits
+// the new base to the manifest. A failure between them persists the cropped
+// image beside the pre-crop layer; restoring that pair silently offsets every
+// annotation by the crop origin, permanently. The layer carries the base raster
+// it was rendered against so the restore path can refuse the mismatched pair.
+describe("annotation layer base stamp", () => {
+  const layer = [VALID_ANNOTATIONS.pen, VALID_ANNOTATIONS.text];
+
+  it("round-trips the stamp with the layer", () => {
+    const json = serializeAnnotations(layer, "base-1700000000000-4.png");
+
+    expect(deserializeAnnotationLayer(json)).toEqual({
+      annotations: layer,
+      baseFile: "base-1700000000000-4.png"
+    });
+  });
+
+  it("writes the bare array a caller with no base identity always wrote", () => {
+    const json = serializeAnnotations(layer);
+
+    expect(JSON.parse(json)).toEqual(layer);
+    expect(deserializeAnnotationLayer(json)).toEqual({ annotations: layer, baseFile: null });
+  });
+
+  // Every document already on disk holds the bare array. Reading a missing
+  // stamp as a mismatch would drop the user's work on the upgrade that
+  // introduced the stamp, which is the opposite of what it exists for.
+  it("reads a legacy un-stamped layer as unknown, not as a mismatch", () => {
+    const stored = deserializeAnnotationLayer(JSON.stringify(layer));
+
+    expect(stored.baseFile).toBeNull();
+    expect(annotationLayerForBase(stored, "base-99-1.png")).toEqual({
+      annotations: layer,
+      droppedFrom: null
+    });
+  });
+
+  it("applies a layer stamped with the base the document still holds", () => {
+    const stored = deserializeAnnotationLayer(serializeAnnotations(layer, "base-99-1.png"));
+
+    expect(annotationLayerForBase(stored, "base-99-1.png")).toEqual({
+      annotations: layer,
+      droppedFrom: null
+    });
+  });
+
+  it("drops a layer stamped with a base the document no longer holds", () => {
+    const stored = deserializeAnnotationLayer(serializeAnnotations(layer, "base.png"));
+
+    expect(annotationLayerForBase(stored, "base-99-1.png")).toEqual({
+      annotations: [],
+      droppedFrom: "base.png"
+    });
+  });
+
+  // The envelope's entries go through the same per-kind validation as a bare
+  // array: a stamp must not become a way to smuggle a malformed annotation past
+  // the checks that keep a document openable.
+  it("validates the entries inside a stamped envelope", () => {
+    const json = JSON.stringify({
+      baseFile: "base.png",
+      annotations: [VALID_ANNOTATIONS.pen, { kind: "pen", id: 90 }, null]
+    });
+
+    expect(deserializeAnnotationLayer(json)).toEqual({
+      annotations: [VALID_ANNOTATIONS.pen],
+      baseFile: "base.png"
+    });
+  });
+
+  it("reads a damaged stamp as unknown rather than dropping the layer", () => {
+    const json = JSON.stringify({ baseFile: 7, annotations: layer });
+
+    expect(deserializeAnnotationLayer(json)).toEqual({ annotations: layer, baseFile: null });
+  });
+
+  it("yields an empty layer for an object that is not an envelope at all", () => {
+    expect(deserializeAnnotationLayer('{"baseFile":"base.png"}')).toEqual({
+      annotations: [],
+      baseFile: null
+    });
+    expect(deserializeAnnotationLayer("not json")).toEqual({ annotations: [], baseFile: null });
   });
 });

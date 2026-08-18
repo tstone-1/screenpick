@@ -12,7 +12,8 @@ use tauri::{AppHandle, Manager};
 use xcap::{Monitor, Window};
 
 use crate::capture_modes::{capture_modes, CaptureMode};
-use crate::capture_trust::is_capture_source_trusted;
+use crate::capture_trust_roots::verify_capture_source;
+use crate::errors::error_message;
 use crate::export_validation::{validate_png_export, verify_export_destination};
 
 #[cfg(target_os = "macos")]
@@ -890,46 +891,6 @@ fn capture_path(app: &AppHandle, mode: &str) -> Result<PathBuf, String> {
         .map_err(error_message)?
         .as_millis();
     Ok(dir.join(capture_filename(mode, timestamp, next_capture_sequence())))
-}
-
-pub(crate) fn error_message(error: impl std::fmt::Display) -> String {
-    error.to_string()
-}
-
-pub(crate) fn verify_capture_source(app: &AppHandle, source_path: &str) -> Result<PathBuf, String> {
-    let canonical_source = Path::new(source_path)
-        .canonicalize()
-        .map_err(error_message)?;
-
-    let settings = app.try_state::<crate::settings::SettingsState>();
-    let trusted_files = settings
-        .as_ref()
-        .map(|state| state.trusted_capture_files())
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|file| file.canonicalize().ok())
-        .collect::<Vec<_>>();
-    let default_root = app
-        .path()
-        .app_cache_dir()
-        .map_err(error_message)?
-        .join("captures")
-        .canonicalize()
-        .ok();
-
-    // The persistent document store (`$APPLOCALDATA/documents`) lives outside the
-    // capture cache, but its base.png / current.png are app-managed ScreenPick
-    // images that copy-path, reveal, and re-crop legitimately act on — trust them
-    // too. Canonicalized so `..` / symlinks can't smuggle in an outside path.
-    let trusted_in_documents = crate::documents::documents_root_canonical(app)
-        .is_some_and(|root| canonical_source.starts_with(root));
-
-    if !trusted_in_documents
-        && !is_capture_source_trusted(&canonical_source, &trusted_files, default_root.as_deref())
-    {
-        return Err("Source must be a ScreenPick capture.".to_string());
-    }
-    Ok(canonical_source)
 }
 
 fn remember_capture_file(app: &AppHandle, path: &Path) {

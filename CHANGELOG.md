@@ -6,6 +6,62 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [CalVer](https://calver.org/) `YY.M.MICRO` versioning
 (see [BUILD.md](BUILD.md#version-management)).
 
+## [26.8.1] - 2026-08-18
+
+### Fixed
+
+- **A crash between a crop/cut's two save steps could restore annotations in
+  the wrong places.** Re-basing the image and writing the annotation layer are
+  two separate steps, and a crash, full disk, or forced quit between them left
+  the cropped image beside the pre-crop annotations — which then restored
+  offset by the crop origin, silently. The annotation layer is now stamped
+  with the image it was drawn against; on restore, a layer whose image no
+  longer matches is dropped (the screenshot itself is kept) and the mismatch
+  is logged, instead of placing every annotation wrongly. Documents saved by
+  older versions restore unchanged.
+- **A document creation that failed partway left an invisible folder behind
+  forever.** Startup now removes document folders that no manifest entry
+  references — and refuses to remove anything whenever the manifest could not
+  be read, so a recovered-from-corruption session never loses folders the
+  recovery promised to keep.
+- **Saves are now durable against power loss on macOS one step further:** the
+  atomic-write primitive syncs the containing directory after the rename, so a
+  completed save can no longer be rolled back to the previous file content by
+  a power cut. (Windows has no equivalent directory handle; behavior there is
+  unchanged.)
+
+- **The Recent pane now shows your annotations, and dragging a capture out
+  delivers them.** The strip's thumbnail always rendered the un-annotated
+  original instead of the annotated image, and dragging a capture out right
+  after editing could hand the OS a copy missing the newest marks (the
+  annotated file is written on a short delay, and the drag could win the
+  race). Thumbnails now show the annotated image as of the last save and
+  refresh after every save; pressing a Recent card flushes any pending save
+  before a drag can begin. A drag completing before an in-flight save still
+  gets the previous save's content — the window is now much smaller, not gone.
+
+### Changed
+
+- The capture-trust check (which paths the app accepts as its own captures)
+  was consolidated into one pure, parameter-driven module with the trust
+  decision fully unit-tested; behavior is unchanged.
+- All four picker windows (region, screen overlay, screen list, window
+  picker) now have behavior tests covering cancel, confirm, and double-submit
+  guards.
+- Settings and shortcut-editor state moved out of the capture orchestrator
+  into a dedicated `settingsState` store, mirroring the editor/document-store
+  split; consumers were re-pointed, behavior is unchanged.
+- The status line is now its own `statusLine` module written to by both the
+  capture and editor surfaces, so editor components no longer import the
+  capture orchestrator to report results.
+- A newly added tool now gets a properties panel by default (the panel check
+  is an exclusion list instead of an enumeration that silently missed
+  additions).
+- BUILD.md's release checklist now matches CI: the macOS bindings drift guard
+  runs automatically on every push and as a tag gate; README describes the
+  diagnostic log accurately (failures and key lifecycle events); ROADMAP #11
+  trimmed to the genuinely open picker-route test gap.
+
 ## [26.8.0] - 2026-08-06
 
 ### Fixed

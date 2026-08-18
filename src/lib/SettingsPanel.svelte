@@ -1,7 +1,9 @@
 <script lang="ts">
   import { FolderOpen, RotateCcw, X } from "@lucide/svelte";
 
-  import { capture } from "$lib/captureOrchestration.svelte";
+  // `capture` supplies the capture-mode registry the shortcut rows are keyed by
+  // (and the quit button); everything the panel edits lives on `settingsStore`.
+  import { capture, settingsStore } from "$lib/captureOrchestration.svelte";
   import { unlockCaptureSound } from "$lib/captureSound";
   import { acceleratorFromKeyboardEvent } from "$lib/shortcutRecording";
   import { update } from "$lib/updateState.svelte";
@@ -25,20 +27,20 @@
       return;
     }
     if (event.key === "Backspace" || event.key === "Delete") {
-      capture.setShortcutEntry(modeId, index, "");
+      settingsStore.setShortcutEntry(modeId, index, "");
       return;
     }
-    const accelerator = acceleratorFromKeyboardEvent(event, capture.isMac);
-    if (accelerator) capture.setShortcutEntry(modeId, index, accelerator);
+    const accelerator = acceleratorFromKeyboardEvent(event, settingsStore.isMac);
+    if (accelerator) settingsStore.setShortcutEntry(modeId, index, accelerator);
   }
 
   function handleShortcutKeyup(event: KeyboardEvent, modeId: string, index: number) {
     if (event.code !== "PrintScreen") return;
-    const accelerator = acceleratorFromKeyboardEvent(event, capture.isMac);
+    const accelerator = acceleratorFromKeyboardEvent(event, settingsStore.isMac);
     if (accelerator) {
       event.preventDefault();
       event.stopPropagation();
-      capture.setShortcutEntry(modeId, index, accelerator);
+      settingsStore.setShortcutEntry(modeId, index, accelerator);
     }
   }
 </script>
@@ -51,8 +53,8 @@
   <div class="settings-row">
     <span class="setting-label">Save folder</span>
     <div class="save-folder-input">
-      <span class="folder-path">{capture.settings.saveDirectory ?? "Default (app cache)"}</span>
-      <button type="button" onclick={() => void capture.pickSaveDirectory()} title="Choose folder">
+      <span class="folder-path">{settingsStore.settings.saveDirectory ?? "Default (app cache)"}</span>
+      <button type="button" onclick={() => void settingsStore.pickSaveDirectory()} title="Choose folder">
         <FolderOpen size={15} />
       </button>
     </div>
@@ -63,11 +65,11 @@
     <button
       type="button"
       class="toggle-switch"
-      class:active={capture.settings.autoOpenEditor}
-      onclick={() => void capture.toggleSetting("autoOpenEditor")}
+      class:active={settingsStore.settings.autoOpenEditor}
+      onclick={() => void settingsStore.toggleSetting("autoOpenEditor")}
       role="switch"
-      aria-label={capture.settings.autoOpenEditor ? "Disable auto-open editor" : "Enable auto-open editor"}
-      aria-checked={capture.settings.autoOpenEditor}
+      aria-label={settingsStore.settings.autoOpenEditor ? "Disable auto-open editor" : "Enable auto-open editor"}
+      aria-checked={settingsStore.settings.autoOpenEditor}
     >
       <span class="toggle-track"></span>
     </button>
@@ -78,11 +80,11 @@
     <button
       type="button"
       class="toggle-switch"
-      class:active={capture.autostartEnabled}
-      onclick={() => void capture.toggleAutostart()}
+      class:active={settingsStore.autostartEnabled}
+      onclick={() => void settingsStore.toggleAutostart()}
       role="switch"
-      aria-label={capture.autostartEnabled ? "Disable start at login" : "Enable start at login"}
-      aria-checked={capture.autostartEnabled}
+      aria-label={settingsStore.autostartEnabled ? "Disable start at login" : "Enable start at login"}
+      aria-checked={settingsStore.autostartEnabled}
     >
       <span class="toggle-track"></span>
     </button>
@@ -93,11 +95,11 @@
     <button
       type="button"
       class="toggle-switch"
-      class:active={capture.settings.bringToFrontOnHotkeyCapture}
-      onclick={() => void capture.toggleSetting("bringToFrontOnHotkeyCapture")}
+      class:active={settingsStore.settings.bringToFrontOnHotkeyCapture}
+      onclick={() => void settingsStore.toggleSetting("bringToFrontOnHotkeyCapture")}
       role="switch"
-      aria-label={capture.settings.bringToFrontOnHotkeyCapture ? "Disable bring to front after hotkey capture" : "Enable bring to front after hotkey capture"}
-      aria-checked={capture.settings.bringToFrontOnHotkeyCapture}
+      aria-label={settingsStore.settings.bringToFrontOnHotkeyCapture ? "Disable bring to front after hotkey capture" : "Enable bring to front after hotkey capture"}
+      aria-checked={settingsStore.settings.bringToFrontOnHotkeyCapture}
     >
       <span class="toggle-track"></span>
     </button>
@@ -108,17 +110,17 @@
     <button
       type="button"
       class="toggle-switch"
-      class:active={capture.settings.closeToTray}
-      onclick={() => void capture.toggleSetting("closeToTray")}
+      class:active={settingsStore.settings.closeToTray}
+      onclick={() => void settingsStore.toggleSetting("closeToTray")}
       role="switch"
-      aria-label={capture.settings.closeToTray ? "Disable close to tray" : "Enable close to tray"}
-      aria-checked={capture.settings.closeToTray}
+      aria-label={settingsStore.settings.closeToTray ? "Disable close to tray" : "Enable close to tray"}
+      aria-checked={settingsStore.settings.closeToTray}
     >
       <span class="toggle-track"></span>
     </button>
   </div>
 
-  {#if capture.settings.closeToTray}
+  {#if settingsStore.settings.closeToTray}
     <div class="settings-row">
       <button type="button" class="quit-button" onclick={() => void capture.quitApp()}>
         Quit ScreenPick
@@ -131,13 +133,13 @@
     <button
       type="button"
       class="toggle-switch"
-      class:active={capture.settings.checkForUpdatesOnStartup}
-      onclick={() => void capture.toggleSetting("checkForUpdatesOnStartup")}
+      class:active={settingsStore.settings.checkForUpdatesOnStartup}
+      onclick={() => void settingsStore.toggleSetting("checkForUpdatesOnStartup")}
       role="switch"
-      aria-label={capture.settings.checkForUpdatesOnStartup
+      aria-label={settingsStore.settings.checkForUpdatesOnStartup
         ? "Disable update check at startup"
         : "Enable update check at startup"}
-      aria-checked={capture.settings.checkForUpdatesOnStartup}
+      aria-checked={settingsStore.settings.checkForUpdatesOnStartup}
     >
       <span class="toggle-track"></span>
     </button>
@@ -174,11 +176,11 @@
     <button
       type="button"
       class="toggle-switch"
-      class:active={capture.settings.copyToClipboard}
-      onclick={() => void capture.toggleSetting("copyToClipboard")}
+      class:active={settingsStore.settings.copyToClipboard}
+      onclick={() => void settingsStore.toggleSetting("copyToClipboard")}
       role="switch"
-      aria-label={capture.settings.copyToClipboard ? "Disable copy to clipboard" : "Enable copy to clipboard"}
-      aria-checked={capture.settings.copyToClipboard}
+      aria-label={settingsStore.settings.copyToClipboard ? "Disable copy to clipboard" : "Enable copy to clipboard"}
+      aria-checked={settingsStore.settings.copyToClipboard}
     >
       <span class="toggle-track"></span>
     </button>
@@ -189,14 +191,14 @@
     <button
       type="button"
       class="toggle-switch"
-      class:active={capture.settings.playCaptureSound}
+      class:active={settingsStore.settings.playCaptureSound}
       onclick={() => {
         unlockCaptureSound();
-        void capture.toggleSetting("playCaptureSound");
+        void settingsStore.toggleSetting("playCaptureSound");
       }}
       role="switch"
-      aria-label={capture.settings.playCaptureSound ? "Disable capture sound" : "Enable capture sound"}
-      aria-checked={capture.settings.playCaptureSound}
+      aria-label={settingsStore.settings.playCaptureSound ? "Disable capture sound" : "Enable capture sound"}
+      aria-checked={settingsStore.settings.playCaptureSound}
     >
       <span class="toggle-track"></span>
     </button>
@@ -205,7 +207,7 @@
   <div class="settings-row shortcut-section">
     <div class="section-heading">
       <span class="setting-label">Shortcut overrides</span>
-      <button type="button" class="reset-shortcuts" title="Reset to defaults" onclick={() => void capture.resetShortcuts()}>
+      <button type="button" class="reset-shortcuts" title="Reset to defaults" onclick={() => void settingsStore.resetShortcuts()}>
         <RotateCcw size={14} />
       </button>
     </div>
@@ -213,7 +215,7 @@
          screenshot chords through the WindowServer, which consumes them before
          the webview gets a keydown, so pressing one here records nothing and
          fires Apple's screenshot picker instead. -->
-    {#if capture.isMac}
+    {#if settingsStore.isMac}
       <p class="shortcut-note">
         macOS keeps ⌘⇧3, ⌘⇧4 and ⌘⇧5 for its own screenshots. It takes those
         before ScreenPick sees them, so they cannot be recorded here — turn the
@@ -224,7 +226,7 @@
     {#each capture.captureModes as mode}
       <div class="shortcut-mode-group">
         <strong>{mode.label}</strong>
-        {#each capture.getModeAccelerators(mode.id) as accelerator, i}
+        {#each settingsStore.getModeAccelerators(mode.id) as accelerator, i}
           <div class="shortcut-entry">
             <!-- The field shows the readable chord, not the raw
                  "CommandOrControl+Shift+Alt+4" accelerator, which does not fit
@@ -236,7 +238,7 @@
               readonly
               class="shortcut-input"
               class:recording={recordingShortcut === shortcutSlot(mode.id, i)}
-              value={accelerator ? capture.formatShortcut(accelerator) : ""}
+              value={accelerator ? settingsStore.formatShortcut(accelerator) : ""}
               placeholder={recordingShortcut === shortcutSlot(mode.id, i)
                 ? "Press a shortcut..."
                 : "Click, then press keys"}
@@ -244,17 +246,17 @@
               onkeyup={(event) => handleShortcutKeyup(event, mode.id, i)}
               onfocus={() => {
                 recordingShortcut = shortcutSlot(mode.id, i);
-                void capture.beginShortcutRecording();
+                void settingsStore.beginShortcutRecording();
               }}
               onblur={() => {
                 if (recordingShortcut === shortcutSlot(mode.id, i)) recordingShortcut = null;
-                void capture.endShortcutRecording();
+                void settingsStore.endShortcutRecording();
               }}
             />
             <button
               type="button"
               aria-label={`Remove ${mode.label} shortcut`}
-              onclick={() => void capture.removeShortcutEntry(mode.id, i)}
+              onclick={() => void settingsStore.removeShortcutEntry(mode.id, i)}
             >
               <X size={13} />
             </button>
@@ -264,7 +266,7 @@
                binding: recording suspends the global shortcuts, so nothing is
                registered until blur commits. -->
           {#if recordingShortcut !== shortcutSlot(mode.id, i)}
-            {@const state = capture.shortcutRowState(mode.id, accelerator)}
+            {@const state = settingsStore.shortcutRowState(mode.id, accelerator)}
             {#if state === "registered"}
               <span class="shortcut-state ok">Active</span>
             {:else if state === "duplicate"}
@@ -272,9 +274,9 @@
             {:else if state === "failed"}
               <span
                 class="shortcut-state bad"
-                title={capture.shortcutRowError(mode.id, accelerator) ?? "Unknown error"}
+                title={settingsStore.shortcutRowError(mode.id, accelerator) ?? "Unknown error"}
               >
-                {capture.friendlyShortcutError(capture.shortcutRowError(mode.id, accelerator))}
+                {settingsStore.friendlyShortcutError(settingsStore.shortcutRowError(mode.id, accelerator))}
               </span>
             {/if}
           {/if}
@@ -282,7 +284,7 @@
         <button
           type="button"
           class="add-shortcut"
-          onclick={() => capture.addShortcutEntry(mode.id)}
+          onclick={() => settingsStore.addShortcutEntry(mode.id)}
         >
           + Add shortcut
         </button>

@@ -33,8 +33,23 @@ vi.mock("./annotationRendering", () => ({
   renderFlattenedPng: vi.fn().mockResolvedValue(new Uint8Array())
 }));
 
-const { DocumentStore } = await import("./documentStore.svelte");
+// The diagnostics log is the recovery signal for a dropped annotation layer
+// (below), so it is mocked to be asserted on rather than to be silenced.
+vi.mock("./diagnosticsLog", () => ({
+  logError: vi.fn(),
+  logWarn: vi.fn()
+}));
+
+const {
+  DocumentStore,
+  baseFileNameOf,
+  recentCapturePatchForRecord,
+  recentThumbnailUrl,
+  restoredAnnotationLayer
+} = await import("./documentStore.svelte");
 const { saveDocument } = await import("./editorCommands");
+const { logError } = await import("./diagnosticsLog");
+const logErrorMock = vi.mocked(logError);
 const deleteDocumentMock = commandsMock.deleteDocument;
 const listDocumentsMock = commandsMock.listDocuments;
 const replaceDocumentBaseMock = commandsMock.replaceDocumentBase;
@@ -194,8 +209,12 @@ describe("DocumentStore.persistDocument", () => {
     const store = new DocumentStore();
     const doc = capture({ path: "doc.png", documentId: "doc-1" });
     store.recentCaptures = [doc];
+    // Teaches the store which base raster the document holds, so both writes
+    // carry the same stamp and the layers below are compared like for like.
+    store.recentFromRecord(documentRecord("doc-1", "[]"));
     // Base already in sync, so neither persist takes the re-base branch and
-    // save_document is the only ordering surface under test.
+    // save_document is the only ordering surface under test. Set after the
+    // record above, which points it at the document's own base path.
     store.recordLastPersistedBasePath("doc-1", "doc.png");
 
     const releases: Array<() => void> = [];
@@ -222,8 +241,8 @@ describe("DocumentStore.persistDocument", () => {
     await Promise.all([first, second]);
 
     expect(written).toEqual([
-      serializeAnnotations(firstLayer),
-      serializeAnnotations(secondLayer)
+      serializeAnnotations(firstLayer, "doc-1-base.png"),
+      serializeAnnotations(secondLayer, "doc-1-base.png")
     ]);
     expect(replaceDocumentBaseMock).not.toHaveBeenCalled();
   });
@@ -257,5 +276,213 @@ describe("DocumentStore.persistDocument", () => {
     await drained;
     expect(settled).toBe(true);
     await persist;
+  });
+});
+
+// W1 in the 2026-08 code review. Crop/cut persist through two IPC calls:
+// replace_document_base commits the new base raster to the manifest, then
+// save_document writes the transformed annotation layer. A crash, a full disk
+// or a forced quit between them leaves the cropped base beside the pre-crop
+// layer — and the restore path used to re-apply that layer over the new image,
+// silently offsetting every annotation by the crop origin, permanently. The
+// layer now names the raster it was rendered against.
+describe("annotation layer / base raster pairing", () => {
+  function recordWithBase(id: string, annotationsJson: string, basePath: string): DocumentRecord {
+    return { ...documentRecord(id, annotationsJson), basePath };
+  }
+
+  it("stamps a save with the base raster the re-base just committed", async () => {
+    const store = new DocumentStore();
+    // The document as it stood before the crop.
+    store.recentFromRecord(recordWithBase("doc-1", "[]", "/docs/doc-1/base.png"));
+    const cropped = capture({ path: "cropped.png", documentId: "doc-1" });
+    store.recentCaptures = [cropped];
+    replaceDocumentBaseMock.mockResolvedValue({
+      status: "ok",
+      data: recordWithBase("doc-1", "[]", "/docs/doc-1/base-99-1.png")
+    });
+    saveDocumentMock.mockImplementation(async (id, annotations) => ({
+      status: "ok",
+      data: { ...recordWithBase(id, annotations, "/docs/doc-1/base-99-1.png"), annotations }
+    }));
+
+    const layer = [penAnnotation(1)];
+    await store.persistDocument(cropped, layer, { replaceBase: true });
+
+    expect(replaceDocumentBaseMock).toHaveBeenCalledOnce();
+    // The post-crop raster, not the pre-crop one it superseded: stamping the
+    // old name would make every crop look like the very corruption this
+    // guards against.
+    expect(saveDocumentMock).toHaveBeenCalledWith(
+      "doc-1",
+      serializeAnnotations(layer, "base-99-1.png"),
+      expect.anything(),
+      true
+    );
+  });
+
+  it("restores a layer stamped with the base the document still holds", async () => {
+    const store = new DocumentStore();
+    const layer = [penAnnotation(1)];
+    listDocumentsMock.mockResolvedValue({
+      status: "ok",
+      data: [
+        recordWithBase(
+          "doc-1",
+          serializeAnnotations(layer, "base-99-1.png"),
+          "/docs/doc-1/base-99-1.png"
+        )
+      ]
+    });
+
+    await store.loadPersistedDocuments(null, null);
+
+    expect(store.takeSeededAnnotations("doc-1")).toEqual(layer);
+    expect(logErrorMock).not.toHaveBeenCalled();
+  });
+
+  // The crash case itself: the manifest carries the cropped base, the layer on
+  // disk was drawn on the one before it.
+  it("drops a layer stamped with a base the document no longer holds", async () => {
+    const store = new DocumentStore();
+    listDocumentsMock.mockResolvedValue({
+      status: "ok",
+      data: [
+        recordWithBase(
+          "doc-1",
+          serializeAnnotations([penAnnotation(1)], "base.png"),
+          "/docs/doc-1/base-99-1.png"
+        )
+      ]
+    });
+
+    await store.loadPersistedDocuments(null, null);
+
+    expect(store.takeSeededAnnotations("doc-1")).toEqual([]);
+    // The base image itself survives — losing the overlay is recoverable,
+    // misplacing it silently is not.
+    expect(store.recentCaptures.map((entry) => entry.path)).toEqual(["/docs/doc-1/base-99-1.png"]);
+    expect(logErrorMock).toHaveBeenCalledOnce();
+    const [message] = logErrorMock.mock.calls[0];
+    expect(message).toContain("doc-1");
+    expect(message).toContain("base.png");
+    expect(message).toContain("base-99-1.png");
+  });
+
+  // Every document written before the stamp existed holds a bare array. The
+  // upgrade must not read that as a mismatch and throw the user's work away.
+  it("restores a legacy un-stamped layer unchanged", async () => {
+    const store = new DocumentStore();
+    const layer = [penAnnotation(1)];
+    listDocumentsMock.mockResolvedValue({
+      status: "ok",
+      data: [recordWithBase("doc-1", JSON.stringify(layer), "/docs/doc-1/base-99-1.png")]
+    });
+
+    await store.loadPersistedDocuments(null, null);
+
+    expect(store.takeSeededAnnotations("doc-1")).toEqual(layer);
+    expect(logErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("compares base rasters by file name on either platform's separator", () => {
+    expect(baseFileNameOf("C:\\Users\\x\\documents\\doc-1\\base-99-1.png")).toBe("base-99-1.png");
+    expect(baseFileNameOf("/Users/x/documents/doc-1/base-99-1.png")).toBe("base-99-1.png");
+    expect(baseFileNameOf("base.png")).toBe("base.png");
+
+    // The same document folder reached through the two separator styles must
+    // not read as a re-base: it is the name that identifies the raster.
+    const layer = [penAnnotation(1)];
+    const stamped = serializeAnnotations(layer, "base-99-1.png");
+    expect(
+      restoredAnnotationLayer(recordWithBase("doc-1", stamped, "C:\\docs\\doc-1\\base-99-1.png"))
+    ).toEqual({ annotations: layer, droppedFrom: null });
+    expect(
+      restoredAnnotationLayer(recordWithBase("doc-1", stamped, "/docs/doc-1/base-99-1.png"))
+    ).toEqual({ annotations: layer, droppedFrom: null });
+  });
+});
+
+// The Recent strip used to render `assetUrl` — always the un-annotated base
+// raster — so a highlighted screenshot showed up in the strip clean, and the
+// only place the annotations existed visibly was the open editor. The strip now
+// renders the document's flattened current.png, which brings its own hazard:
+// that file keeps its path while its bytes are rewritten on every save, and the
+// webview caches by URL, so a naive src swap would freeze on the first render.
+describe("Recent-strip thumbnail", () => {
+  function savedRecord(id: string, updatedAt: number | null): DocumentRecord {
+    return { ...documentRecord(id, "[]"), updatedAt, dirty: true };
+  }
+
+  it("shows the flattened current.png once a save has produced one", () => {
+    const unpersisted = capture({ path: "shot.png" });
+    const persisted = { ...unpersisted, documentId: "doc-1", currentPath: "doc-1-current.png" };
+
+    expect(recentThumbnailUrl(unpersisted)).toBe("asset://shot.png");
+    expect(recentThumbnailUrl(persisted)).toContain("asset://doc-1-current.png");
+  });
+
+  it("changes the thumbnail URL on every persisted save", () => {
+    const store = new DocumentStore();
+    store.recentCaptures = [capture({ path: "shot.png", documentId: "doc-1" })];
+
+    store.applyRecordToRecent(savedRecord("doc-1", 1000));
+    const afterFirstSave = recentThumbnailUrl(store.recentCaptures[0]);
+    store.applyRecordToRecent(savedRecord("doc-1", 2000));
+    const afterSecondSave = recentThumbnailUrl(store.recentCaptures[0]);
+
+    // Both point at the same file — only the cache key may move, or the
+    // asset protocol would stop resolving it.
+    expect(afterFirstSave).toContain("asset://doc-1-current.png");
+    expect(afterSecondSave).toContain("asset://doc-1-current.png");
+    expect(afterSecondSave).not.toBe(afterFirstSave);
+  });
+
+  // now_millis() is the revision's natural source and is not enough on its own:
+  // two saves inside one millisecond would repeat it and pin the strip on the
+  // older render, with nothing scheduled to correct it.
+  it("changes the thumbnail URL even when two saves share a timestamp", () => {
+    const store = new DocumentStore();
+    store.recentCaptures = [capture({ path: "shot.png", documentId: "doc-1" })];
+
+    store.applyRecordToRecent(savedRecord("doc-1", 1000));
+    const afterFirstSave = recentThumbnailUrl(store.recentCaptures[0]);
+    store.applyRecordToRecent(savedRecord("doc-1", 1000));
+
+    expect(recentThumbnailUrl(store.recentCaptures[0])).not.toBe(afterFirstSave);
+  });
+
+  // A record only ever patches its own document. Bumping a bystander's cache
+  // key would make the whole strip re-fetch on every keystroke-triggered save.
+  it("leaves other captures' thumbnails untouched when one document saves", () => {
+    const store = new DocumentStore();
+    const other = capture({ path: "other.png", documentId: "doc-2" });
+    store.recentCaptures = [capture({ path: "shot.png", documentId: "doc-1" }), other];
+
+    store.applyRecordToRecent(savedRecord("doc-1", 1000));
+
+    expect(store.recentCaptures[1]).toEqual(other);
+    expect(recentThumbnailUrl(store.recentCaptures[1])).toBe("asset://other.png");
+  });
+
+  // A capture whose create_document has not resolved yet (or failed) has no
+  // current.png at all; it must keep rendering the base exactly as before.
+  it("keeps an unpersisted capture on the base raster", () => {
+    const inMemory = capture({ path: "shot.png" });
+
+    // A record for some other document reaches every strip entry through the
+    // patch; the one it does not match must come out byte-for-byte identical.
+    expect(recentCapturePatchForRecord(savedRecord("doc-1", 1000))(inMemory)).toEqual(inMemory);
+    expect(recentThumbnailUrl(inMemory)).toBe("asset://shot.png");
+  });
+
+  // Restored at launch, the strip's entry must be keyed to the bytes on disk —
+  // not to a cache entry a previous run left behind under a bare URL.
+  it("keys a restored document's thumbnail to the save it was restored from", () => {
+    const store = new DocumentStore();
+
+    const restored = store.recentFromRecord(savedRecord("doc-1", 4242));
+
+    expect(recentThumbnailUrl(restored)).toBe("asset://doc-1-current.png?v=4242");
   });
 });
