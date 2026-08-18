@@ -1,0 +1,20 @@
+# Line endings are pinned here rather than left to each machine's
+# core.autocrlf. Without this file the working tree's endings depend on who
+# checked it out: this repo is developed on Windows (autocrlf=true, so CRLF)
+# and on macOS (LF), which is how `src/routes/region-selector/+page.svelte`
+# ended up with 135 CRLF lines and 27 LF ones in the same file. Git normalises
+# on commit, so `git diff` reports nothing while every commit prints a wall of
+# "LF will be replaced by CRLF" warnings and a whole-file rewrite hides in the
+# next diff.
+#
+# LF in the repository and LF in the working tree, on every platform. The tree
+# holds no shell scripts or .bat/.cmd files, so nothing here needs CRLF to
+# stay executable; CI runs on macOS and Linux, where LF is what the toolchain
+# expects anyway.
+* text=auto eol=lf
+
+# Binary assets: never normalise, never diff as text. A newline "fixed" inside
+# a PNG or an icon corrupts it silently.
+*.png binary
+*.ico binary
+*.icns binary
