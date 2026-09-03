@@ -1,4 +1,5 @@
 import { commands, type CaptureResult, type DocumentRecord } from "./bindings";
+import { logWarn } from "./diagnosticsLog";
 import { loadImage, toAssetUrl } from "./editorCommands";
 
 // Pure one-line pass-throughs called directly on `commands` (see the N9 note
@@ -512,6 +513,15 @@ export class EditorState {
     this.#documentStore.upgradeRecentCapture(matches, upgrade);
     if (this.document && matches(this.document.capture)) {
       this.document = { ...this.document, capture: upgrade(this.document.capture) };
+    } else if (this.document?.capture.path === original.path && !this.document.capture.documentId) {
+      // The open document IS this record's capture by path, yet the identity
+      // match refused it — so it keeps no documentId, and #persistCurrentDocument
+      // returns before every save and every crop re-base for as long as it stays
+      // open. Nothing else reports this: no IPC failed, so no persistError badge
+      // appears either.
+      logWarn(
+        `document identity not attached to the open capture (id=${record.id}, path=${original.path})`
+      );
     }
     if (this.currentCapture && matches(this.currentCapture)) {
       this.currentCapture = upgrade(this.currentCapture);
@@ -594,7 +604,19 @@ export class EditorState {
   // above class EditorState).
   async #persistCurrentDocument(options: { replaceBase?: boolean } = {}): Promise<DocumentRecord | null> {
     const capture = this.document?.capture;
-    if (!capture?.documentId) return null;
+    if (!capture?.documentId) {
+      // Routine for in-memory/test captures that were never persisted as
+      // documents. It is NOT routine when there is work to write: a document
+      // that lost (or never received) its identity silently drops every save
+      // and every crop re-base from here on, with nothing on screen and
+      // nothing in the log to say so. Say so.
+      if (capture && (this.annotations.length > 0 || options.replaceBase)) {
+        logWarn(
+          `save skipped: open capture has no documentId (path=${capture.path}, annotations=${this.annotations.length}, replaceBase=${options.replaceBase === true})`
+        );
+      }
+      return null;
+    }
     const saved = await this.#documentStore.persistDocument(capture, this.annotations, options);
     if (saved) {
       const patch = recentCapturePatchForRecord(saved);

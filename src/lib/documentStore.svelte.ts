@@ -500,7 +500,14 @@ export class DocumentStore {
         capture.width,
         capture.height
       );
-      if (result.status !== "ok") return null;
+      if (result.status !== "ok") {
+        // Without an identity the capture can never be saved — no annotation
+        // write, no crop re-base — so a refused create must not be silent the
+        // way a thrown one already isn't.
+        logError(`create_document failed (path=${capture.path}):`, result.error);
+        this.persistError = result.error || "Could not save this screenshot as a document.";
+        return null;
+      }
       this.#rememberBaseFile(result.data);
       return result.data;
     } catch (error) {
@@ -676,6 +683,14 @@ export class DocumentStore {
           capture.height
         );
         if (based.status !== "ok") {
+          // Logged, not just shown: this failure aborts the save before
+          // save_document is ever reached, and it repeats on every subsequent
+          // save because #lastPersistedBasePath is left untouched — so the
+          // document silently stops persisting for the rest of the session.
+          logError(
+            `replace_document_base failed (id=${id}, path=${capture.path}):`,
+            based.error
+          );
           this.persistError = based.error || "Could not save this screenshot's changes.";
           return null;
         }
@@ -690,6 +705,7 @@ export class DocumentStore {
         dirty
       );
       if (saved.status !== "ok") {
+        logError(`save_document failed (id=${id}):`, saved.error);
         this.persistError = saved.error || "Could not save this screenshot's changes.";
         return null;
       }
