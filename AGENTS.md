@@ -117,6 +117,36 @@ ScreenPick is an open-source cross-platform screenshot, annotation, and screen u
   commit sits after the tag, the installed build simply predates it — it needs a
   version bump + rebuild, not a code fix. The titlebar version alone never proves
   a feature is present in the running build.
+- **"Did the annotation save actually happen?" is answered on disk, not in the UI
+  and not in the log.** An unsaved document is invisible from the front: the
+  Recent thumbnail and drag-out both read `current.png`, and `create_document`
+  seeds that file as a byte copy of `base.png` — so a document whose save never
+  ran hands other apps a real, openable, un-annotated PNG that looks like a
+  correct file. Read the store instead
+  (`%LOCALAPPDATA%\com.tstone1.screenpick\documents\<doc-id>\`, macOS
+  `~/Library/Application Support/com.tstone1.screenpick/documents/<doc-id>/`);
+  three signals each say "never saved", and they agree or something else is
+  wrong:
+  - `annotations.json` is 2 bytes — the `[]` written at creation.
+  - `current.png` has the same size *and* mtime as `base.png` — still the seed
+    copy, never re-rendered.
+  - the entry in `documents/index.json` has `updatedAt == createdAt` and
+    `dirty: false`.
+
+  **An editor crop is the cheapest probe**, because `applyCrop` calls
+  `#persistCurrentDocument({ replaceBase: true })` unconditionally on success and
+  that rewrites `base.png`. A `screenpick-crop-*.png` in the save directory whose
+  `base.png` still holds the pre-crop capture at its creation timestamp proves the
+  persist path did not run — no annotation needed, and no reliance on what the
+  editor was showing at the time.
+
+  ⚠ **On a build before 26.9.0 an empty diagnostic log proves nothing about the
+  save path.** Three exits returned without logging anything — a refused
+  `create_document`, a refused `replace_document_base` / `save_document`, and the
+  `documentId` check inside `#persistCurrentDocument` — so "no errors in
+  `logs/ScreenPick.log`" was read as "the save ran and something else is at
+  fault", which is backwards. All three log from 26.9.0 on; on anything older,
+  go to the store.
 
 ## Platform Notes
 
