@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [CalVer](https://calver.org/) `YY.M.MICRO` versioning
 (see [BUILD.md](BUILD.md#version-management)).
 
+## [26.9.0] - 2026-09-03
+
+### Fixed
+
+- **A save that quietly did nothing now says so.** A document can reach a state
+  where every annotation save and every crop re-base returns before touching
+  disk — the annotation layer stays empty, `current.png` stays the pristine copy
+  made at capture time, and dragging that capture into another app therefore
+  hands over the un-annotated original. Seen in the wild: an editor crop wrote
+  its cropped PNG to the save folder and never reached the document behind it,
+  four times across four days, with nothing on screen and nothing in the
+  diagnostic log to show for it.
+
+  The reason it left no trace is that three separate exits on the save path
+  reported nothing at all: a refused `create_document` (which leaves the capture
+  with no document identity, so it can never be saved), a refused
+  `replace_document_base` or `save_document`, and the identity check inside the
+  persist itself. All three now write to the diagnostic log, and a refused
+  `create_document` also raises the status bar's "Not saved" badge instead of
+  failing invisibly.
+
+  **This release does not fix the underlying fault** — it has not been
+  reproduced, and the code path involved is unchanged across every release back
+  to 26.7.7. It makes the next occurrence name itself in
+  `logs/ScreenPick.log`, which is what a diagnosis needs.
+
+### Changed
+
+- Rust and npm dependencies refreshed within their existing ranges
+  (`tauri-plugin-updater` 2.10.1 to 2.11.0, `tauri-plugin-notification` 2.3.3 to
+  2.4.0, `uuid` 1.24.1 to 1.26.0, and others). No major versions taken:
+  TypeScript 7 is excluded by `@sveltejs/kit@2.70.3`'s peer range
+  (`^5.3.3 || ^6.0.0`), and `@types/node` stays on 24 to match the Node version
+  pinned in `.nvmrc` and every CI job.
+
 ## [26.8.1] - 2026-08-18
 
 ### Fixed
