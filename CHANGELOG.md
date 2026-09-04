@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [CalVer](https://calver.org/) `YY.M.MICRO` versioning
 (see [BUILD.md](BUILD.md#version-management)).
 
+## [26.9.2] - Unreleased
+
+### Changed
+
+- Vitest 4 to 5 (test tooling only — nothing in the shipped app changes).
+  `clearMocks` is on by default there, hoisted `vi.mock`/`vi.hoisted` calls must
+  be top level, and `test.sequential` is gone; none of those affected this
+  suite. The per-file `// @vitest-environment jsdom` docblock still selects the
+  client runtime, which matters because one test file's correctness depends on
+  it — verified by running that file both ways rather than by reading the
+  release notes.
+- The document-identity regression test now opens with a check that Svelte's
+  `$state` really is proxying. The docblock that selects that runtime is a
+  comment, so nothing enforced it: a typo or a config change would have
+  returned the file to the blind default silently, and every assertion in it
+  would have gone on passing against code that is broken in the app.
+
 ## [26.9.1] - 2026-09-04
 
 ### Fixed

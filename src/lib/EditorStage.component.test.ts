@@ -6,7 +6,7 @@
 // first component test — see vitest.config.ts for how the jsdom environment
 // is scoped to just `*.component.test.ts` files via the `@vitest-environment`
 // docblock above (Vitest 4 removed `environmentMatchGlobs`, the glob-based
-// mechanism referenced in the review).
+// mechanism referenced in the review; Vitest 5 keeps the docblock).
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/svelte";
 

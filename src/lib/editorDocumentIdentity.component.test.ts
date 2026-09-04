@@ -101,6 +101,30 @@ describe("document identity survives Svelte's state proxies", () => {
     vi.useRealTimers();
   });
 
+  // The control for every test below, and the reason it is first: those tests
+  // are about identity, so they are only meaningful where `$state` actually
+  // proxies. Run this file in the `node` environment and Svelte compiles in
+  // SSR mode, `$state` becomes a plain value, and each of them passes against
+  // code that is broken in the app — measured, not assumed. Nothing else would
+  // report that: the docblock at the top of this file is a comment, so a typo
+  // in it, a Vitest change to how per-file environments are selected, or a
+  // config edit downgrades this whole file to decoration, silently and while
+  // staying green.
+  //
+  // `openCapture` puts this exact object into a `$state` field. Reading it back
+  // under the client runtime yields a proxy — a different object wrapping the
+  // same capture — which is the entire fault this file exists for. If this
+  // assertion ever fails, the environment is wrong, not the editor.
+  it("runs under the client runtime, where $state proxies", () => {
+    const editor = new EditorState();
+    const raw = capture("environment-control.png");
+
+    editor.openCapture(raw);
+
+    expect(editor.document?.capture).not.toBe(raw);
+    expect(editor.document?.capture.path).toBe(raw.path);
+  });
+
   it("attaches the new document's id to the open capture", async () => {
     commandsMock.createDocument.mockResolvedValue({ status: "ok", data: record("doc-1") });
     const editor = new EditorState();
