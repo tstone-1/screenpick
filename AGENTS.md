@@ -77,8 +77,17 @@ ScreenPick is an open-source cross-platform screenshot, annotation, and screen u
   Any test whose subject is object identity, proxy behaviour, or reactivity
   therefore needs a `// @vitest-environment jsdom` docblock, which selects the
   client runtime. `editorDocumentIdentity.component.test.ts` is the worked
-  example: its four assertions go red against the old code under jsdom, and the
+  example: its assertions go red against the old code under jsdom, and the
   identical file with the docblock removed passes against that same broken code.
+
+  **That docblock is a comment, so nothing enforces it** — a typo in it, a
+  config edit, or a change in how the runner selects per-file environments
+  would return the file to the blind default silently and while staying green.
+  So the file opens with a test that asserts the proxy is live (`openCapture`
+  puts a capture into `$state`; reading it back must NOT be `===` to the object
+  passed in). Copy that control into any new file that depends on the client
+  runtime — and verify it can fail, by running the file once with the docblock
+  removed, rather than trusting that it passed.
 
 ## Building & verifying
 

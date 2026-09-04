@@ -21,6 +21,17 @@ import { defineConfig } from "vitest/config";
 // Vitest 4 removed `environmentMatchGlobs` (present in Vitest 1-2) in favor of
 // per-file environment comments / the Test Projects (`test.projects`) feature
 // — the per-file comment is the simpler of the two for a single test suffix.
+// Still the mechanism on Vitest 5, verified rather than assumed when this repo
+// moved to it.
+//
+// That default is not a neutral choice, and one test file's correctness hangs
+// on overriding it: `.svelte.ts` modules imported under "node" are compiled in
+// SSR mode, where `$state` is a plain value and nothing is proxied. Identity
+// comparisons that are FALSE in the running app are therefore TRUE here, which
+// is how a save bug survived months of a green suite (26.9.1).
+// editorDocumentIdentity.component.test.ts opens with a test that asserts the
+// proxy is live, so downgrading it to this default fails loudly instead of
+// leaving it green and blind. Read that file before changing anything here.
 export default defineConfig({
   plugins: [svelte()],
   resolve: {
