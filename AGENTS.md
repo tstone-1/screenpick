@@ -55,6 +55,30 @@ ScreenPick is an open-source cross-platform screenshot, annotation, and screen u
   `lib.rs`, `capture.rs`, `settings.rs`, `region.rs`, etc. A green Windows
   `cargo test` only covers the pure modules — verify the rest with `cargo check`
   (or a real build), not `cargo test`.
+- **Never compare `$state`-held objects with `===`, and never write a test that
+  depends on that comparison under the default `node` environment.** Svelte's
+  client runtime deep-proxies `$state`, so an object read back out of a state
+  field is a *proxy*: it is never `===` to the raw object it wraps, and two
+  state fields holding the same object hand out two different proxies
+  (`this.document.capture === this.recentCaptures[0]` is false even when both
+  are the same capture). Match on a stable key instead — `path`, or
+  `workspaceKeyFor`.
+
+  The suite cannot see this by default. `.svelte.ts` modules imported under
+  `environment: "node"` (vitest.config.ts's default) are compiled in **SSR
+  mode**, where `$state` is a plain value and no proxy exists — measured, not
+  assumed: `util.types.isProxy` reports `false` for every state value there and
+  identity comparisons hold. This cost a real bug that shipped for months:
+  `#attachDocumentIdentity` matched the new document against the open capture
+  with `capture === original`, which passed every node-mode test and could
+  never be true in the app, so every capture kept a null `documentId` and every
+  annotation save and crop re-base returned before touching disk (26.9.1).
+
+  Any test whose subject is object identity, proxy behaviour, or reactivity
+  therefore needs a `// @vitest-environment jsdom` docblock, which selects the
+  client runtime. `editorDocumentIdentity.component.test.ts` is the worked
+  example: its four assertions go red against the old code under jsdom, and the
+  identical file with the docblock removed passes against that same broken code.
 
 ## Building & verifying
 
@@ -147,6 +171,49 @@ ScreenPick is an open-source cross-platform screenshot, annotation, and screen u
   `logs/ScreenPick.log`" was read as "the save ran and something else is at
   fault", which is backwards. All three log from 26.9.0 on; on anything older,
   go to the store.
+
+  **The fault those log lines were added to catch was found on the first
+  occurrence and fixed in 26.9.1**, so this section now reads as history plus a
+  live tripwire. The cause was `#attachDocumentIdentity` matching the new
+  document against the open capture by object identity — impossible under
+  Svelte's state proxies (see the `$state` bullet under Conventions). The two
+  log lines that named it are worth recognising verbatim, because together they
+  are the signature of a capture that can never be saved:
+
+  ```
+  WARN document identity not attached to the open capture (id=..., path=...)
+  WARN save skipped: open capture has no documentId (path=..., annotations=N, replaceBase=...)
+  ```
+
+  The first is a post-condition in `#attachDocumentIdentity` and stays in place.
+  If it ever fires again, the capture on screen has no `documentId` and every
+  save from that point is a silent no-op — go straight to that method, not to
+  the IPC layer, because nothing failed there.
+
+- **A capture cannot be saved until its `create_document` resolves, ~40 ms after
+  it appears — and work started inside that window can be damaged permanently,
+  not just delayed.** Every write path returns early without a `documentId`.
+  For an annotation that is harmless (the identity arrives and
+  `#attachDocumentIdentity` schedules the save), but a crop or cut is not:
+  `rebasedCapture` copies the `documentId` forward, so one started too early
+  produces a capture carrying no id **at a new path**, which the arriving record
+  can no longer match by path — unsaveable for the rest of the session, and
+  invisible to the post-condition above precisely because the paths differ.
+
+  `#settlePendingCreate` closes this, and it is called from exactly the three
+  places whose work outlives the window: `applyCrop` and `applyCut` (immediately
+  before they read the capture they re-base from) and `flushPendingSave` (the
+  exit handshake — nothing has armed the debounce timer yet, because arming it
+  needs a `documentId`, so without the wait there is no pending work to find and
+  the annotation dies with the process). It is deliberately **not** in
+  `#persistCurrentDocument`: with those three covered no caller reaches it
+  inside the window, deleting it there reddened nothing, and the comment on
+  `#settlePendingCreate` records that. A new caller that persists inside the
+  window needs its own wait.
+
+  `#pendingCreates` is keyed by capture path rather than being a single promise
+  because rapid captures overlap; a crop on the second capture must not be
+  released by the first capture's record.
 
 ## Platform Notes
 

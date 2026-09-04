@@ -373,6 +373,14 @@ export class EditorState {
   // LIVE `this.document`/`this.annotations` at fire time, not a value snapshot
   // taken when the timer was armed — see #scheduleDocumentSave.
   #saveTimer: ReturnType<typeof setTimeout> | null = null;
+  // create_document round trips still in flight, keyed by the capture path they
+  // were started for. A capture is unsaveable until its create resolves — every
+  // write path checks `documentId` and returns without it — so anything that
+  // must not silently no-op waits here first (#settlePendingCreate). Keyed by
+  // path rather than holding a single promise because rapid captures overlap:
+  // the second create must not make a caller waiting on the first think it has
+  // landed. Entries remove themselves when the round trip settles.
+  #pendingCreates = new Map<string, Promise<void>>();
 
   setupResize() {
     if (typeof ResizeObserver === "undefined") return;
@@ -485,8 +493,50 @@ export class EditorState {
   // write resolves (DocumentStore.createDocumentFor). A failure leaves the
   // capture usable but unpersisted (DocumentStore already recorded persistError).
   async #createDocumentFor(capture: RecentCapture): Promise<void> {
-    const record = await this.#documentStore.createDocumentFor(capture);
-    if (record) this.#attachDocumentIdentity(capture, record);
+    const pending = (async () => {
+      const record = await this.#documentStore.createDocumentFor(capture);
+      if (record) this.#attachDocumentIdentity(capture, record);
+    })();
+    this.#pendingCreates.set(capture.path, pending);
+    try {
+      await pending;
+    } finally {
+      this.#pendingCreates.delete(capture.path);
+    }
+  }
+
+  // Wait for `capture`'s create_document round trip, if one is still in flight.
+  //
+  // Without this, everything a user can do in the ~40 ms before the create
+  // resolves lands on a capture that has no document identity yet, and every
+  // write path treats "no identity" as "not a persisted document" and returns.
+  // A crop is the sharp case, because the damage outlives the window: it builds
+  // its replacement capture from the open one (rebasedCapture copies the
+  // documentId forward), so a crop started inside the window produces a capture
+  // that carries no id AND sits at a new path the arriving record can no longer
+  // match — permanently unsaveable, with the post-condition in
+  // #attachDocumentIdentity unable to see it because the paths differ.
+  //
+  // Cheap by construction: no create in flight (the overwhelmingly common case)
+  // or an id already attached resolves synchronously, so the wait only ever
+  // costs what it is actually there for. createDocumentFor never rejects — it
+  // catches and returns null — so this cannot hang on a refused create.
+  //
+  // Called from the three places whose work OUTLIVES the window, not from
+  // #persistCurrentDocument itself: applyCrop and applyCut, which build a
+  // replacement capture the arriving record could never match afterwards, and
+  // flushPendingSave, where nothing has armed the debounce timer yet (that
+  // needs a documentId) so the exit handshake would otherwise find no pending
+  // work and let the process go. A wait inside #persistCurrentDocument was
+  // tried and removed: with those three covered, no caller could reach it
+  // inside the window, so deleting it reddened nothing — and a save that does
+  // somehow arrive early is reported by the "save skipped" warning below
+  // rather than swallowed. Any NEW caller that persists inside the window
+  // needs its own wait here, or that warning is what you will see.
+  async #settlePendingCreate(capture: RecentCapture | null | undefined): Promise<void> {
+    if (!capture || capture.documentId) return;
+    const pending = this.#pendingCreates.get(capture.path);
+    if (pending) await pending;
   }
 
   // Fold a newly-created document's identity onto the in-memory capture across
@@ -495,14 +545,28 @@ export class EditorState {
   // subsequent saves/lookups line up. If annotations were drawn during the
   // create window, persist them now.
   #attachDocumentIdentity(original: RecentCapture, record: DocumentRecord) {
-    // Match by object identity, not path: a crop/cut landing inside this
-    // async create round-trip installs a brand-new capture object at a new
-    // path (#installCapture), while `original` still points at the exact
-    // object this document was created for. Path equality could otherwise
-    // re-match a stale recentCaptures entry the user has already moved past —
-    // silently upgrading a "ghost" entry nothing displays with a documentId,
-    // rather than the capture actually on screen.
-    const matches = (capture: RecentCapture) => capture === original;
+    // Match by path, NOT by object identity (`capture === original`, which this
+    // used to do and which can never be true in the running app). `original` is
+    // the raw capture object; every candidate below is read back out of a
+    // `$state` field, and Svelte's client runtime hands those back as proxies.
+    // A proxy is never `===` to the object it wraps, and two `$state` fields
+    // holding the same object hand out two DIFFERENT proxies — so the identity
+    // check refused the open document every time, leaving the capture with no
+    // documentId and turning every later save and crop re-base into a silent
+    // no-op (26.9.0's log lines are what finally named it).
+    //
+    // The suite could not see this: `.svelte.ts` modules imported under
+    // `environment: "node"` compile in SSR mode, where `$state` is a plain
+    // value and identity holds. The regression test for this therefore runs
+    // under jsdom — see editorDocumentIdentity.component.test.ts.
+    //
+    // Path is a safe key here: capture paths are unique per capture, and the
+    // crop/cut case the identity check was written for installs a capture at a
+    // NEW path (#installCapture), so it still cannot be re-matched. The
+    // `!documentId` clause keeps an already-upgraded capture from being
+    // re-stamped with a different record's id.
+    const matches = (capture: RecentCapture) =>
+      capture.path === original.path && !capture.documentId;
     const upgrade = (capture: RecentCapture): RecentCapture => ({
       ...capture,
       documentId: record.id,
@@ -513,12 +577,15 @@ export class EditorState {
     this.#documentStore.upgradeRecentCapture(matches, upgrade);
     if (this.document && matches(this.document.capture)) {
       this.document = { ...this.document, capture: upgrade(this.document.capture) };
-    } else if (this.document?.capture.path === original.path && !this.document.capture.documentId) {
-      // The open document IS this record's capture by path, yet the identity
-      // match refused it — so it keeps no documentId, and #persistCurrentDocument
-      // returns before every save and every crop re-base for as long as it stays
-      // open. Nothing else reports this: no IPC failed, so no persistError badge
-      // appears either.
+    }
+    // Post-condition, not an else-branch: the open document is this record's
+    // capture by path, so by now it must carry the identity. If it doesn't,
+    // #persistCurrentDocument returns before every save and every crop re-base
+    // for as long as it stays open, and nothing else reports it — no IPC
+    // failed, so no persistError badge appears either. This is the line that
+    // named the identity-match bug above; it stays as the tripwire for the
+    // next way this can break.
+    if (this.document?.capture.path === original.path && !this.document.capture.documentId) {
       logWarn(
         `document identity not attached to the open capture (id=${record.id}, path=${original.path})`
       );
@@ -588,6 +655,13 @@ export class EditorState {
   // the exit path needs both drained — including work started by callers that
   // never went through the timer at all (crop/cut's re-base persist).
   async flushPendingSave(): Promise<void> {
+    // Annotations drawn inside the create window arm no timer at all —
+    // #scheduleDocumentSave returns early without a documentId, and it is
+    // #attachDocumentIdentity that schedules the save once the id lands. So on
+    // the exit path there can be work pending with nothing here to find it;
+    // settling the create first lets that scheduling happen, and the timer
+    // check below then flushes it.
+    await this.#settlePendingCreate(this.document?.capture);
     if (this.#saveTimer) {
       clearTimeout(this.#saveTimer);
       this.#saveTimer = null;
@@ -1775,6 +1849,13 @@ export class EditorState {
         result.data.width,
         result.data.height
       );
+      // Deliberately here and not before the IPC above: the crop and the
+      // create then overlap instead of queueing, and this is the last moment
+      // the identity is read. rebasedCapture copies documentId forward, so a
+      // capture built before the create lands can never be saved again.
+      await this.#settlePendingCreate(this.document?.capture);
+      // Re-checked after the awaits: the open document can be closed mid-crop.
+      if (!this.document) return null;
       const capture = rebasedCapture(this.document.capture, result.data);
       this.historyPast = [...this.historyPast, beforeCrop].slice(-HISTORY_LIMIT);
       this.historyFuture = [];
@@ -1932,6 +2013,11 @@ export class EditorState {
         amplitude: CUT_SEAM_AMPLITUDE_DEFAULT,
         period: CUT_SEAM_PERIOD_DEFAULT
       };
+      // Same reason as applyCrop's: a cut started inside the create window
+      // would build a capture with no documentId at a path the arriving record
+      // cannot match, and nothing would ever be written for it again.
+      await this.#settlePendingCreate(this.document?.capture);
+      if (!this.document) return null;
       const capture = rebasedCapture(this.document.capture, result.data);
       this.historyPast = [...this.historyPast, beforeCut].slice(-HISTORY_LIMIT);
       this.historyFuture = [];
