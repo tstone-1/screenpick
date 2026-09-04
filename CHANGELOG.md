@@ -6,6 +6,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [CalVer](https://calver.org/) `YY.M.MICRO` versioning
 (see [BUILD.md](BUILD.md#version-management)).
 
+## [26.9.1] - 2026-09-04
+
+### Fixed
+
+- **Annotations were never written to disk, so dragging a capture out of the
+  Recent strip handed over the un-annotated original.** This is the fault
+  26.9.0 added logging for, caught on its first occurrence: draw on a fresh
+  capture, drag it into another app, and the receiving app got the pristine
+  screenshot without the pen strokes. Crops behaved the same way — the cropped
+  PNG reached the save folder and never reached the document behind it.
+
+  A capture is upgraded with its document identity when `create_document`
+  resolves a few milliseconds after the capture appears. That upgrade matched
+  the new record against the open capture by object identity
+  (`capture === original`), and Svelte's client runtime deep-proxies reactive
+  state: an object read back out of a `$state` field is a proxy, never `===` to
+  the object it wraps. The match therefore failed every single time, the
+  capture kept a null document id, and every later save and crop re-base
+  returned before touching disk. The match is now on the capture's path, which
+  is unique per capture.
+
+  The reason this shipped is that the test suite could not express it:
+  `.svelte.ts` modules imported under Vitest's `node` environment compile in
+  SSR mode, where `$state` is a plain value and identity comparisons hold. The
+  regression test runs under jsdom, where the client runtime is used; the same
+  file with that one line removed passes against the broken code.
+
+- **A crop or cut in the first moments after a capture left that screenshot
+  unsaveable for the rest of the session.** A capture becomes a document about
+  40 ms after it appears, and a re-base started before that carried no document
+  identity forward — the record, when it arrived, could no longer find the
+  cropped image, so every later annotation on it was silently dropped. Crop and
+  cut now wait for that round trip before re-basing.
+
+  Quitting in the same window could also lose an annotation: nothing had
+  scheduled a save yet, so the exit handshake found no pending work and let the
+  process go. It now waits for the same round trip before deciding there is
+  nothing to write.
+
 ## [26.9.0] - 2026-09-03
 
 ### Fixed
