@@ -17,6 +17,13 @@ and this project uses [CalVer](https://calver.org/) `YY.M.MICRO` versioning
   client runtime, which matters because one test file's correctness depends on
   it — verified by running that file both ways rather than by reading the
   release notes.
+- Test runs reuse Vite's module transforms between invocations
+  (`fsModuleCache`), which takes the full suite from 4693 ms to 4071 ms and a
+  single file from 3413 ms to 2900 ms (medians of five interleaved A/B pairs;
+  the two distributions do not overlap). The cache invalidates on a source
+  edit — verified by mutating a source file after priming it and watching the
+  right seven tests go red — and lives inside `node_modules`, so it needs no
+  new gitignore entry.
 - The document-identity regression test now opens with a check that Svelte's
   `$state` really is proxying. The docblock that selects that runtime is a
   comment, so nothing enforced it: a typo or a config change would have
