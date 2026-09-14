@@ -6,9 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [CalVer](https://calver.org/) `YY.M.MICRO` versioning
 (see [BUILD.md](BUILD.md#version-management)).
 
-## [26.9.2] - Unreleased
+## [26.9.2] - 2026-09-14
+
+### Added
+
+- Rectangular selection for copying or cutting a screenshot section and pasting
+  it elsewhere in the same screenshot. Pasted sections can be moved, undone,
+  saved, and exported with annotations. Cutting leaves a white source area.
+- Copy, Cut, and Paste controls and Ctrl/Cmd+C, X, and V shortcuts for selected
+  screenshot sections.
+
+### Fixed
+
+- Zoomed screenshots now stay centered within the viewport, allowing every edge
+  to be reached by panning, including the bottom of tall captures at 131% zoom.
+- Screenshot pixels and annotation overlays now align at the image edges.
 
 ### Changed
+
+- Updated frontend and Rust dependencies, including Vite 8.3, Lucide 1.46, and
+  xcap 0.9.8. Removed obsolete `time` and `alloc-stdlib` compatibility pins after
+  verifying the current dependency versions build together.
 
 - Vitest 4 to 5 (test tooling only — nothing in the shipped app changes).
   `clearMocks` is on by default there, hoisted `vi.mock`/`vi.hoisted` calls must

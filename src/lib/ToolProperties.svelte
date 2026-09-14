@@ -151,6 +151,34 @@
     </div>
   {/if}
 
+  {#if editor.activeTool === "region"}
+    <div class="crop-panel">
+      <div>
+        <span>Rectangular selection</span>
+        <strong>{editor.regionRect ? `${editor.regionRect.width} x ${editor.regionRect.height}` : "Drag on image"}</strong>
+      </div>
+      <p>Copy or cut a section, paste it, then drag it into place. Cut leaves white behind.</p>
+      <div class="crop-actions">
+        <button
+          type="button"
+          disabled={!editor.regionRect || editor.regionPending}
+          onclick={async () => statusLine.set(await editor.copyRegion() ?? "Selection copied. Paste to place it.")}
+        >Copy</button>
+        <button
+          type="button"
+          disabled={!editor.regionRect || editor.regionPending}
+          onclick={async () => statusLine.set(await editor.copyRegion(true) ?? "Selection cut. Paste to place it.")}
+        >Cut</button>
+        <button
+          type="button"
+          disabled={!editor.regionClipboard || editor.regionPending}
+          onclick={() => statusLine.set(editor.pasteRegion() ?? "Pasted section. Drag it to move.")}
+        >Paste</button>
+        <button type="button" onclick={() => editor.cancelRegion()}>Cancel</button>
+      </div>
+    </div>
+  {/if}
+
   {#if editor.activeTool === "cut"}
     <div class="crop-panel">
       <div>

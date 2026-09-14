@@ -14,6 +14,7 @@
   } from "$lib/editor.svelte";
   import {
     annotationsInPaintOrder,
+    annotationGroups,
     cutSeamPoints,
     polygonShapePoints,
     CUT_SEAM_CASING_COLOR,
@@ -27,34 +28,11 @@
   } from "$lib/editorStyles";
   import { suppressMiddleClickAutoscroll, targetIsEditable } from "$lib/domUtils";
 
-  // Drive the on-screen SVG paint order from the same helper the canvas
-  // export uses, so adding a new kind only requires touching the per-kind
-  // {#snippet} below — not a parallel hand-coded paint order.
-  // Text is rendered as HTML in a sibling .text-annotation-layer, so we
-  // filter it out here.
-  const svgAnnotations = $derived(
-    annotationsInPaintOrder(
-      [
-        ...editor.annotations,
-        editor.blurDraft,
-        editor.highlightDraft,
-        editor.penDraft,
-        editor.arrowDraft,
-        editor.shapeDraft
-      ].filter((a): a is Annotation => a !== null)
-    ).filter((a) => a.kind !== "text" && a.kind !== "cut" && a.kind !== "erase")
-  );
-  const cutAnnotations = $derived(
-    editor.annotations.filter((annotation): annotation is CutSeamAnnotation => annotation.kind === "cut")
-  );
-  // Image-eraser strokes (committed + in-flight draft) live in their own bottom
-  // layer directly over the screenshot, below every other annotation.
-  const eraseAnnotations = $derived(
-    [
-      ...editor.annotations.filter((a): a is EraseStroke => a.kind === "erase"),
-      ...(editor.eraseAreaDraft ? [editor.eraseAreaDraft] : [])
-    ]
-  );
+  const groups = $derived(annotationGroups([
+    ...editor.annotations,
+    editor.eraseAreaDraft, editor.blurDraft, editor.highlightDraft,
+    editor.penDraft, editor.arrowDraft, editor.shapeDraft
+  ].filter((a): a is Annotation => a !== null)));
 
   function erasePath(points: { x: number; y: number }[]): string {
     const [first, ...rest] = points;
@@ -223,7 +201,7 @@
   {#if editor.document}
     {@const visibleCrop = editor.cropDraft ?? editor.cropRect}
     <div class="canvas">
-      {#if editor.activeTool === "crop" || editor.activeTool === "cut"}
+      {#if editor.activeTool === "crop" || editor.activeTool === "cut" || editor.activeTool === "region"}
         <div
           class="drag-gutter"
           aria-hidden="true"
@@ -237,7 +215,7 @@
       <div
         class="image-frame"
         class:select-active={editor.activeTool === "select"}
-        class:crop-active={editor.activeTool === "crop"}
+        class:crop-active={editor.activeTool === "crop" || editor.activeTool === "region"}
         class:cut-active={editor.activeTool === "cut"}
         class:pen-active={editor.activeTool === "pen"}
         class:arrow-active={editor.activeTool === "arrow"}
@@ -272,6 +250,20 @@
           src={editor.document.capture.assetUrl}
           alt={editor.document.capture.title}
         />
+        {#each groups as group, groupIndex}
+          {@const svgAnnotations = annotationsInPaintOrder(group).filter((a) => a.kind !== "text" && a.kind !== "cut" && a.kind !== "erase")}
+          {@const cutAnnotations = group.filter((a): a is CutSeamAnnotation => a.kind === "cut")}
+          {@const eraseAnnotations = group.filter((a): a is EraseStroke => a.kind === "erase")}
+          <div class="composite-group">
+          {#each group as image (image.id)}
+            {#if image.kind === "image"}
+              {#if image.dataUrl !== null}
+                <img class="pasted-section" src={image.dataUrl} alt="Pasted section" draggable="false" style={cropStyle(image.rect, editor.document.zoom)} />
+              {:else}
+                <div class="cut-source" style={cropStyle(image.rect, editor.document.zoom)}></div>
+              {/if}
+            {/if}
+          {/each}
         {#snippet renderErase(erase: EraseStroke)}
           {@const paint = erase.color ?? `url(#${checkerPatternId})`}
           {#if erase.points.length < 2}
@@ -329,22 +321,17 @@
             {/each}
           </svg>
         {/if}
-        {#if editor.annotations.some((a) => a.kind === "blur") || editor.blurDraft}
+        {#if group.some((a) => a.kind === "blur")}
           <div class="blur-layer">
-            {#each editor.annotations as annotation (annotation.id)}
+            {#each group as annotation (annotation.id)}
               {#if annotation.kind === "blur"}
                 <div
                   class="blur-rect"
+                  class:draft={annotation.id === editor.blurDraft?.id}
                   style={`left:${annotation.rect.x * editor.document.zoom}px;top:${annotation.rect.y * editor.document.zoom}px;width:${annotation.rect.width * editor.document.zoom}px;height:${annotation.rect.height * editor.document.zoom}px;backdrop-filter:blur(${annotation.radius * editor.document.zoom}px);`}
                 ></div>
               {/if}
             {/each}
-            {#if editor.blurDraft}
-              <div
-                class="blur-rect draft"
-                style={`left:${editor.blurDraft.rect.x * editor.document.zoom}px;top:${editor.blurDraft.rect.y * editor.document.zoom}px;width:${editor.blurDraft.rect.width * editor.document.zoom}px;height:${editor.blurDraft.rect.height * editor.document.zoom}px;backdrop-filter:blur(${editor.blurDraft.radius * editor.document.zoom}px);`}
-              ></div>
-            {/if}
           </div>
         {/if}
         {#snippet renderPen(stroke: PenStroke)}
@@ -445,9 +432,9 @@
             {/each}
           </svg>
         {/if}
-        {#if editor.textDraft || editor.annotations.some((a) => a.kind === "text")}
+        {#if (groupIndex === groups.length - 1 && editor.textDraft) || group.some((a) => a.kind === "text")}
           <div class="text-annotation-layer">
-            {#each editor.annotations as annotation (annotation.id)}
+            {#each group as annotation (annotation.id)}
               {#if annotation.kind === "text"}
                 <div
                   class="text-annotation"
@@ -458,7 +445,7 @@
                 </div>
               {/if}
             {/each}
-            {#if editor.textDraft}
+            {#if groupIndex === groups.length - 1 && editor.textDraft}
               {@const draft = editor.textDraft}
               <input
                 type="text"
@@ -476,6 +463,8 @@
             {/if}
           </div>
         {/if}
+          </div>
+        {/each}
         {#if editor.activeTool === "color" && editor.colorSample}
           <div class="color-sample-preview" style={samplePreviewStyle(editor.colorSample, editor.document.zoom)}>
             <span style={`background: ${editor.colorSample.color};`}></span>
@@ -494,6 +483,10 @@
             <span></span>
             <span></span>
           </div>
+        {/if}
+        {#if editor.activeTool === "region" && (editor.regionDraft ?? editor.regionRect)}
+          {@const region = (editor.regionDraft ?? editor.regionRect)!}
+          <div class="selection-outline region-selection" style={cropStyle(region, editor.document.zoom)}></div>
         {/if}
         {#if visibleCrop && editor.activeTool === "crop"}
           <div class="crop-selection" style={cropStyle(visibleCrop, editor.document.zoom)}>
@@ -530,6 +523,19 @@
 </div>
 
 <style>
+  .composite-group {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+  }
+  .pasted-section, .cut-source {
+    position: absolute;
+    pointer-events: none;
+  }
+  .cut-source { background: #ffffff; }
+  .region-selection { border-style: dashed; }
+
   .canvas-stage {
     position: relative;
     display: grid;
@@ -569,6 +575,10 @@
   .canvas {
     position: relative;
     display: grid;
+    /* Keep the grid cell viewport-sized. Auto tracks grow to the zoomed image,
+       anchoring it at the top/left and invalidating the centered pan limits. */
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
     place-items: center;
     width: 100%;
     height: 100%;
@@ -591,7 +601,9 @@
     position: relative;
     grid-area: 1 / 1;
     overflow: hidden;
-    border: 1px solid #8794a3;
+    /* An outline keeps the content at capture.width * zoom. A border under
+       border-box shrinks only the screenshot, misaligning it with overlays. */
+    outline: 1px solid #8794a3;
     box-shadow: 0 18px 44px rgba(35, 44, 56, 0.2);
     user-select: none;
   }
