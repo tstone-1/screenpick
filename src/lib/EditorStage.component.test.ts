@@ -87,6 +87,24 @@ describe("EditorStage", () => {
     expect(img?.getAttribute("src")).toBe("asset://component-test.png");
   });
 
+  it("selects a rectangle in either direction and moves a pasted section", () => {
+    editor.activeTool = "region";
+    const { container } = render(EditorStage);
+    const frame = container.querySelector(".image-frame")!;
+    frame.dispatchEvent(pointerEvent("pointerdown", { clientX: 80, clientY: 70 }));
+    frame.dispatchEvent(pointerEvent("pointermove", { clientX: 20, clientY: 30 }));
+    frame.dispatchEvent(pointerEvent("pointerup", { clientX: 20, clientY: 30 }));
+    expect(editor.regionRect).toEqual({ x: 20, y: 30, width: 60, height: 40 });
+    editor.regionClipboard = { rect: editor.regionRect!, dataUrl: "data:image/png;base64,AQID" };
+    editor.pasteRegion();
+    frame.dispatchEvent(pointerEvent("pointerdown", { clientX: 40, clientY: 50 }));
+    frame.dispatchEvent(pointerEvent("pointermove", { clientX: 90, clientY: 80 }));
+    frame.dispatchEvent(pointerEvent("pointerup", { clientX: 90, clientY: 80 }));
+    expect(editor.selectedAnnotationBounds).toEqual({ x: 86, y: 76, width: 60, height: 40 });
+    editor.undo();
+    expect(editor.annotations[0]).toMatchObject({ rect: { x: 36, y: 46 } });
+  });
+
   it("pen tool pointerdown/move/up produces exactly one committed stroke and stays on the pen tool", () => {
     editor.activeTool = "pen";
 

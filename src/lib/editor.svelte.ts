@@ -1,6 +1,6 @@
 import { commands, type CaptureResult, type DocumentRecord } from "./bindings";
 import { logWarn } from "./diagnosticsLog";
-import { loadImage, toAssetUrl } from "./editorCommands";
+import { copyPngBytesToClipboard, loadImage, toAssetUrl } from "./editorCommands";
 
 // Pure one-line pass-throughs called directly on `commands` (see the N9 note
 // in editorCommands.ts) — locally re-aliased to the `*Ipc` naming this module
@@ -13,6 +13,7 @@ import { loadImage, toAssetUrl } from "./editorCommands";
 const { cropCapture: cropCaptureIpc, cutoutCapture: cutoutCaptureIpc } = commands;
 import {
   annotationBounds,
+  annotationGroups,
   annotationHitTest,
   annotationLayer,
   annotationsInVisualHitOrder,
@@ -31,6 +32,7 @@ import {
   type CutSeamAnnotation,
   type EraseStroke,
   type HighlightAnnotation,
+  type ImageAnnotation,
   type PenStroke,
   type Point,
   type ShapeAnnotation,
@@ -40,6 +42,7 @@ import {
 import {
   arrowGeometry as buildArrowGeometry,
   measureTextWidth,
+  renderSelectionPng,
   strokePath as buildStrokePath,
   textStyle as buildTextStyle,
   type ArrowGeometry
@@ -208,6 +211,7 @@ export const CUT_SEAM_COLOR_DEFAULT = "#ffffff";
 // "./annotations" directly.
 
 export type Tool =
+  | "region"
   | "select"
   | "crop"
   | "cut"
@@ -278,6 +282,12 @@ export class EditorState {
   cropDraft = $state<CropRect | null>(null);
   cropDragStart = $state<{ x: number; y: number } | null>(null);
   cropPending = $state(false);
+  regionRect = $state<CropRect | null>(null);
+  regionDraft = $state<CropRect | null>(null);
+  regionDragStart = $state<Point | null>(null);
+  regionPending = $state(false);
+  regionClipboard = $state<Omit<ImageAnnotation, "id" | "kind"> | null>(null);
+  #regionGeneration = 0;
   cutAxis = $state<"horizontal" | "vertical">("horizontal");
   cutBand = $state<CropRect | null>(null);
   cutDraft = $state<CropRect | null>(null);
@@ -425,6 +435,7 @@ export class EditorState {
   // entry ONLY if it commits state outside `annotations` — otherwise adding it
   // here is enough.
   #resetTransientState() {
+    this.cancelRegion();
     this.cropDraft = null;
     this.cropDragStart = null;
     this.cutBand = null;
@@ -900,6 +911,7 @@ export class EditorState {
   // Copy the flattened capture (crop + annotations, exactly as shown) to the
   // OS clipboard. Returns an error message on failure, or null on success.
   async copyToClipboard(): Promise<string | null> {
+    if (this.activeTool === "region" && this.regionRect) return this.copyRegion();
     if (!this.document || this.copyPending) return null;
     const capture = this.document.capture;
     const annotations = [...this.annotations];
@@ -909,6 +921,108 @@ export class EditorState {
     } finally {
       this.copyPending = false;
     }
+  }
+
+  startRegionDrag(event: PointerEvent) {
+    if (!this.document || this.activeTool !== "region" || event.button !== 0 || this.regionPending) return;
+    const start = this.#pointInImage(event);
+    if (!start) return;
+    event.preventDefault();
+    this.imageFrame?.setPointerCapture(event.pointerId);
+    this.regionDragStart = start;
+    this.regionRect = null;
+    this.regionDraft = { ...start, width: 0, height: 0 };
+  }
+
+  updateRegionDrag(event: PointerEvent) {
+    const point = this.#pointInImage(event);
+    if (this.regionDragStart && point) this.regionDraft = this.#rectFromPoints(this.regionDragStart, point);
+  }
+
+  finishRegionDrag(event: PointerEvent) {
+    if (!this.regionDragStart) return;
+    this.updateRegionDrag(event);
+    this.imageFrame?.releasePointerCapture(event.pointerId);
+    const rect = this.regionDraft;
+    if (rect) {
+      const x = Math.round(rect.x);
+      const y = Math.round(rect.y);
+      const width = Math.round(rect.x + rect.width) - x;
+      const height = Math.round(rect.y + rect.height) - y;
+      this.regionRect = width > 0 && height > 0 ? { x, y, width, height } : null;
+    }
+    this.regionDraft = null;
+    this.regionDragStart = null;
+  }
+
+  cancelRegion() {
+    this.#regionGeneration++;
+    this.regionRect = this.regionDraft = this.regionDragStart = null;
+  }
+
+  async copyRegion(cut = false): Promise<string | null> {
+    if (!this.document || !this.regionRect || this.regionPending) return null;
+    const capture = this.document.capture;
+    const rect = { ...this.regionRect };
+    const annotations = [...this.annotations];
+    const before = JSON.stringify(annotations);
+    const generation = this.#regionGeneration;
+    this.regionPending = true;
+    try {
+      const dataUrl = await renderSelectionPng(capture, annotations, rect);
+      // Embedded pixels count toward the document store's 8 MiB JSON limit.
+      if (dataUrl.length > 7 * 1024 * 1024) return "Selection is too large. Select a smaller area.";
+      const bytes = Uint8Array.from(atob(dataUrl.split(",")[1]), (c) => c.charCodeAt(0));
+      const result = await copyPngBytesToClipboard(bytes);
+      if (result.status === "error") return result.error || "Could not copy selection.";
+      this.regionClipboard = { rect, dataUrl };
+      if (cut) {
+        if (
+          generation !== this.#regionGeneration ||
+          this.document?.capture.path !== capture.path ||
+          JSON.stringify(this.annotations) !== before
+        ) return "Selection copied; image changed, so the cut was cancelled.";
+        const cover: ImageAnnotation = { kind: "image", id: this.#nextAnnotationId, rect, dataUrl: null };
+        if (!this.#imageFits(cover)) return "Selection copied; document is too large to cut.";
+        this.#recordHistory();
+        this.#nextAnnotationId++;
+        this.annotations = [...this.annotations, cover];
+        this.cancelRegion();
+      }
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : "Could not copy selection.";
+    } finally {
+      this.regionPending = false;
+    }
+  }
+
+  #imageFits(image: ImageAnnotation): boolean {
+    return new TextEncoder().encode(JSON.stringify([...this.annotations, image])).length < 8 * 1024 * 1024 - 1024;
+  }
+
+  pasteRegion(): string | null {
+    if (!this.document || !this.regionClipboard || this.regionPending) return null;
+    const { rect, dataUrl } = this.regionClipboard;
+    const capture = this.document.capture;
+    if (rect.width > capture.width || rect.height > capture.height) return "Selection is larger than this screenshot.";
+    const image: ImageAnnotation = {
+      kind: "image",
+      id: this.#nextAnnotationId,
+      dataUrl,
+      rect: {
+        ...rect,
+        x: Math.min(rect.x + 16, capture.width - rect.width),
+        y: Math.min(rect.y + 16, capture.height - rect.height)
+      }
+    };
+    if (!this.#imageFits(image)) return "Document is too large to paste this selection. Select a smaller area.";
+    this.#recordHistory();
+    this.#nextAnnotationId++;
+    this.annotations = [...this.annotations, image];
+    this.cancelRegion();
+    this.#selectPlacedAnnotation(image.id);
+    return null;
   }
 
   startCropDrag(event: PointerEvent) {
@@ -997,6 +1111,10 @@ export class EditorState {
   // keydown handler ask "did the editor have a draft to drop?" without
   // reaching into nine internal `$state` fields by name.
   cancelActiveGesture(): boolean {
+    if (this.regionRect || this.regionDraft || this.regionPending) {
+      this.cancelRegion();
+      return true;
+    }
     if (
       this.activeTool === "crop" &&
       (this.cropRect || this.cropDraft || this.cropDragStart)
@@ -1067,6 +1185,12 @@ export class EditorState {
 
   #buildToolHandlers(): Record<Tool, ToolHandlers> {
     return {
+      region: {
+        onPointerDown: (e) => this.startRegionDrag(e),
+        onPointerMove: (e) => this.updateRegionDrag(e),
+        onPointerUp: (e) => this.finishRegionDrag(e),
+        onPointerCancel: () => this.cancelRegion()
+      },
       select: {
         onPointerDown: (e) => this.startSelectionDrag(e),
         onPointerMove: (e) => this.updateSelectionDrag(e),
@@ -1560,7 +1684,8 @@ export class EditorState {
     const target = this.selectedAnnotation;
     if (!target) return { forward: false, backward: false };
     const layer = annotationLayer(target);
-    const siblings = this.annotations.filter((annotation) => annotationLayer(annotation) === layer);
+    const group = this.#annotationGroup(target.id);
+    const siblings = group.filter((annotation) => annotationLayer(annotation) === layer);
     const index = siblings.findIndex((annotation) => annotation.id === target.id);
     return {
       forward: index >= 0 && index < siblings.length - 1,
@@ -1574,8 +1699,9 @@ export class EditorState {
     const layer = annotationLayer(target);
     const positions: number[] = [];
     const siblings: Annotation[] = [];
+    const groupIds = new Set(this.#annotationGroup(target.id).map((a) => a.id));
     this.annotations.forEach((annotation, index) => {
-      if (annotationLayer(annotation) === layer) {
+      if (groupIds.has(annotation.id) && annotationLayer(annotation) === layer) {
         positions.push(index);
         siblings.push(annotation);
       }
@@ -1595,6 +1721,10 @@ export class EditorState {
       next[position] = reordered[siblingIndex];
     });
     this.annotations = next;
+  }
+
+  #annotationGroup(id: number): Annotation[] {
+    return annotationGroups(this.annotations).find((group) => group.some((a) => a.id === id)) ?? [];
   }
 
   bringSelectedToFront() {
@@ -1767,6 +1897,8 @@ export class EditorState {
 
   annotationTypeLabel(annotation: Annotation): string {
     switch (annotation.kind) {
+      case "image":
+        return "Pasted section";
       case "pen":
         return "Pen";
       case "erase":
@@ -2153,7 +2285,9 @@ export class EditorState {
     tolerance = Math.max(4, 7 / (this.document?.zoom ?? 1))
   ): Annotation | null {
     for (const annotation of annotationsInVisualHitOrder(this.annotations)) {
-      if (annotationHitTest(annotation, point, tolerance)) return annotation;
+      if (annotationHitTest(annotation, point, tolerance)) {
+        return annotation.kind === "image" && annotation.dataUrl === null ? null : annotation;
+      }
     }
     return null;
   }

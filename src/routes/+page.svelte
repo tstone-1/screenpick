@@ -17,6 +17,7 @@
     PenLine,
     Pipette,
     Scissors,
+    Scan,
     Settings,
     Shapes,
     SprayCan,
@@ -50,6 +51,7 @@
 
   const tools: ToolDescriptor[] = [
     { id: "select", label: "Select", icon: MousePointer2 },
+    { id: "region", label: "Rectangular selection", icon: Scan },
     { id: "hand", label: "Hand (pan — or hold Space / middle-drag)", icon: Hand },
     { id: "crop", label: "Crop", icon: Crop },
     { id: "cut", label: "Cut", icon: Scissors },
@@ -271,6 +273,7 @@
   }
 
   function selectTool(id: Tool) {
+    if (editor.activeTool === "region" && id !== "region") editor.cancelRegion();
     if (editor.activeTool === "color" && id !== "color") {
       editor.clearColorSample();
     }
@@ -330,7 +333,18 @@
     if (!editor.document || !(event.ctrlKey || event.metaKey)) return false;
     if (event.shiftKey || event.altKey) return false;
     if (eventTargetIsEditable(event)) return false;
-    if (event.key.toLowerCase() !== "c") return false;
+    const key = event.key.toLowerCase();
+    if (key === "v" && editor.regionClipboard) {
+      event.preventDefault();
+      statusLine.set(editor.pasteRegion() ?? "Pasted section. Drag it to move.");
+      return true;
+    }
+    if (key === "x" && editor.activeTool === "region" && editor.regionRect) {
+      event.preventDefault();
+      void editor.copyRegion(true).then((error) => statusLine.set(error ?? "Selection cut. Paste to place it."));
+      return true;
+    }
+    if (key !== "c") return false;
     event.preventDefault();
     void handleCopy();
     return true;

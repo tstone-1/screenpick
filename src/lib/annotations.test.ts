@@ -572,6 +572,7 @@ describe("annotationsInPaintOrder", () => {
 // serializeAnnotations writes. Named per kind so a dropped entry names itself
 // in the failure output.
 const VALID_ANNOTATIONS: Record<Annotation["kind"], Annotation> = {
+  image: { kind: "image", id: 90, rect: { x: 10, y: 20, width: 30, height: 40 }, dataUrl: "data:image/png;base64,AAAA" },
   pen: {
     kind: "pen",
     id: 1,

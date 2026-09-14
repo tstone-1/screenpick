@@ -1,6 +1,6 @@
 {
   "name": "screenpick",
-  "version": "26.9.1",
+  "version": "26.9.2",
   "description": "Cross-platform screenshot and annotation tool for macOS and Windows.",
   "type": "module",
   "repository": {
@@ -24,29 +24,29 @@
   },
   "dependencies": {
     "@crabnebula/tauri-plugin-drag": "^2.1.0",
-    "@lucide/svelte": "^1.24.0",
-    "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-dialog": "^2.7.1",
-    "@tauri-apps/plugin-global-shortcut": "^2.3.1",
-    "@tauri-apps/plugin-log": "^2.9.0",
+    "@lucide/svelte": "^1.46.0",
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-dialog": "^2.7.3",
+    "@tauri-apps/plugin-global-shortcut": "^2.3.2",
+    "@tauri-apps/plugin-log": "^2.9.1",
     "@tauri-apps/plugin-process": "^2.3.1",
-    "@tauri-apps/plugin-updater": "^2.10.1"
+    "@tauri-apps/plugin-updater": "^2.11.0"
   },
   "overrides": {
     "cookie": "0.7.2"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.10",
-    "@sveltejs/kit": "^2.69.2",
-    "@sveltejs/vite-plugin-svelte": "^7.2.0",
+    "@sveltejs/kit": "^2.70.3",
+    "@sveltejs/vite-plugin-svelte": "^7.3.0",
     "@tauri-apps/cli": "^2.11.4",
     "@testing-library/svelte": "^5.4.2",
-    "@types/node": "^24.13.3",
+    "@types/node": "^24.13.4",
     "jsdom": "^30.0.1",
-    "svelte": "^5.0.0",
-    "svelte-check": "^4.7.2",
+    "svelte": "^5.57.0",
+    "svelte-check": "^4.7.6",
     "typescript": "^6.0.3",
-    "vite": "^8.1.4",
+    "vite": "^8.3.0",
     "vitest": "^5.0.0"
   }
 }

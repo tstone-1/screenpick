@@ -9,6 +9,7 @@ import {
   TEXT_BACKGROUND_PADDING_Y,
   TEXT_LINE_HEIGHT,
   type Annotation,
+  type CropRect,
   type ArrowAnnotation,
   type BlurAnnotation,
   type CutSeamAnnotation,
@@ -124,6 +125,28 @@ export async function renderFlattenedPng(
   capture: RecentCapture,
   annotations: Annotation[]
 ): Promise<Uint8Array> {
+  return canvasToPngBytes(await renderFlattenedCanvas(capture, annotations));
+}
+
+export async function renderSelectionPng(
+  capture: RecentCapture,
+  annotations: Annotation[],
+  rect: CropRect
+): Promise<string> {
+  const source = await renderFlattenedCanvas(capture, annotations);
+  const canvas = document.createElement("canvas");
+  canvas.width = rect.width;
+  canvas.height = rect.height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas 2D context unavailable.");
+  ctx.drawImage(source, rect.x, rect.y, rect.width, rect.height, 0, 0, rect.width, rect.height);
+  return canvas.toDataURL("image/png");
+}
+
+async function renderFlattenedCanvas(
+  capture: RecentCapture,
+  annotations: Annotation[]
+): Promise<HTMLCanvasElement> {
   const image = await loadImage(capture.assetUrl);
 
   await ensureTextFontsReady(annotations);
@@ -137,14 +160,29 @@ export async function renderFlattenedPng(
   ctx.drawImage(image, 0, 0, capture.width, capture.height);
 
   for (const annotation of annotationsInPaintOrder(annotations)) {
-    drawAnnotation(ctx, annotation);
+    if (annotation.kind === "image" && annotation.dataUrl !== null) {
+      const image = await loadImage(annotation.dataUrl);
+      const { x, y, width, height } = annotation.rect;
+      ctx.drawImage(image, x, y, width, height);
+    } else {
+      drawAnnotation(ctx, annotation);
+    }
   }
 
-  return canvasToPngBytes(canvas);
+  return canvas;
 }
 
 export function drawAnnotation(ctx: CanvasRenderingContext2D, annotation: Annotation) {
   switch (annotation.kind) {
+    case "image": {
+      if (annotation.dataUrl !== null) throw new Error("Image must be decoded before drawing.");
+      ctx.save();
+      ctx.fillStyle = "#ffffff";
+      const { x, y, width, height } = annotation.rect;
+      ctx.fillRect(x, y, width, height);
+      ctx.restore();
+      break;
+    }
     case "pen":
       drawPenStroke(ctx, annotation);
       break;

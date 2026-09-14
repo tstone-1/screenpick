@@ -28,8 +28,10 @@ ScreenPick is an open-source cross-platform screenshot, annotation, and screen u
 
 ### Key Rust crates
 
-- `xcap` (pinned `=0.9.6`) — screen/window/region capture. Pin is load-bearing:
+- `xcap` (pinned `=0.9.8`) — screen/window/region capture. Pin is load-bearing:
   `capture_window_at_point` relies on `Window::all()` front-to-back order on macOS.
+  The 0.9.8 update retains byte-identical macOS/Windows implementations and the
+  public Window API from 0.9.6; recheck ordering before changing the pin again.
 - `arboard` — clipboard image read/write.
 - `tauri-plugin-global-shortcut`, `tauri-plugin-dialog` — capture shortcuts and file dialogs.
 - macOS-only: `objc2-core-graphics` for Screen Recording permission preflight.
@@ -91,13 +93,17 @@ ScreenPick is an open-source cross-platform screenshot, annotation, and screen u
 
 ## Building & verifying
 
+- Run dependency experiments in a directory outside the active dev checkout.
+  Vite watches nested `tsconfig.json` and HTML files even when their modules are
+  not imported: a nested staging build can reload the running editor or stop
+  its dev server. A nested `.gitignore` does not isolate the watcher.
 - Build, test-gate, and release procedures live in [BUILD.md](BUILD.md) — including
   two local-build gotchas: run `npm ci` first, and on Windows close every running
   ScreenPick instance before `npx tauri build` (a live process locks
   `target\release\screenpick.exe`; the failure only surfaces after the full compile).
 - **Verifying capture-backend changes:** don't hand-drive the picker overlay
   (clicking a target window in it isn't scriptable). Write a tiny standalone
-  scratch crate pinned to the same `xcap = "=0.9.6"` and call `Window::all()` +
+  scratch crate pinned to the same `xcap = "=0.9.8"` and call `Window::all()` +
   `Window::capture_image()` against a live target window — the identical API
   `write_window_capture` uses (`src-tauri/src/capture.rs`), so it faithfully
   reproduces real behavior in seconds. Gate the backend behind a cargo feature

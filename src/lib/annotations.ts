@@ -117,7 +117,16 @@ export type CutSeamAnnotation = {
 export const CUT_SEAM_CASING_COLOR = "#20242a";
 export const CUT_SEAM_CASING_EXTRA_WIDTH = 2;
 
+export type ImageAnnotation = {
+  kind: "image";
+  id: number;
+  rect: CropRect;
+  // Embedded PNG; null is the fixed white source area left by a rectangular cut.
+  dataUrl: string | null;
+};
+
 export type Annotation =
+  | ImageAnnotation
   | PenStroke
   | ArrowAnnotation
   | ShapeAnnotation
@@ -164,7 +173,7 @@ export type StoredAnnotationLayer = {
 // With no stamp this writes the bare array it always wrote, so a caller with no
 // base identity in hand changes nothing about the on-disk format. The envelope
 // adds ~50 bytes against document_store.rs's 8 MiB `annotations_within_limit`
-// ceiling, which no real layer approaches.
+// ceiling. Pasted PNGs count toward it; the editor reserves envelope headroom.
 export function serializeAnnotations(
   annotations: Annotation[],
   baseFile: string | null = null
@@ -235,6 +244,12 @@ const SHAPE_KINDS = new Set<ShapeKind>(["rectangle", "ellipse", "triangle", "dia
 type AnnotationValidator = (entry: Record<string, unknown>) => boolean;
 
 const ANNOTATION_VALIDATORS: Record<AnnotationKind, AnnotationValidator> = {
+  image: (entry) =>
+    isRect(entry.rect) && entry.rect.width > 0 && entry.rect.height > 0 &&
+    (entry.dataUrl === null || (
+      typeof entry.dataUrl === "string" &&
+      /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(entry.dataUrl)
+    )),
   pen: (entry) =>
     isPointList(entry.points) && typeof entry.color === "string" && isFiniteNumber(entry.width),
   // `color: null` is the transparent-hole mode, not a missing field.
@@ -351,9 +366,10 @@ export const TEXT_BACKGROUND_PADDING_Y = 2;
 export const TEXT_LINE_HEIGHT = 1.2;
 
 type AnnotationKind = Annotation["kind"];
-export type AnnotationLayer = "erase" | "cut" | "blur" | "highlight" | "middle" | "text";
+export type AnnotationLayer = "erase" | "cut" | "blur" | "highlight" | "middle" | "text" | "image";
 
 const ANNOTATION_LAYER: Record<AnnotationKind, AnnotationLayer> = {
+  image: "image",
   erase: "erase",
   cut: "cut",
   blur: "blur",
@@ -374,23 +390,26 @@ export function annotationLayer(annotation: Annotation): AnnotationLayer {
 // array order). Select and Erase both hit-test in this order so they target the
 // same visible annotation when several overlap.
 export function annotationsInVisualHitOrder(annotations: Annotation[]): Annotation[] {
-  const text = annotations.filter((annotation) => ANNOTATION_LAYER[annotation.kind] === "text");
-  const middle = annotations.filter((annotation) => ANNOTATION_LAYER[annotation.kind] === "middle");
-  const highlights = annotations.filter((annotation) => ANNOTATION_LAYER[annotation.kind] === "highlight");
-  const blurs = annotations.filter((annotation) => ANNOTATION_LAYER[annotation.kind] === "blur");
-  const cuts = annotations.filter((annotation) => ANNOTATION_LAYER[annotation.kind] === "cut");
-  const erases = annotations.filter((annotation) => ANNOTATION_LAYER[annotation.kind] === "erase");
-  return [
-    ...text.reverse(),
-    ...middle.reverse(),
-    ...highlights.reverse(),
-    ...blurs.reverse(),
-    ...cuts.reverse(),
-    ...erases.reverse()
-  ];
+  return annotationsInPaintOrder(annotations).reverse();
+}
+
+// A pasted image or cut source is a compositing boundary: it covers earlier
+// marks, while annotations made afterwards can still be drawn over it.
+export function annotationGroups(annotations: Annotation[]): Annotation[][] {
+  const groups: Annotation[][] = [[]];
+  for (const annotation of annotations) {
+    if (annotation.kind === "image") groups.push([annotation], []);
+    else groups[groups.length - 1].push(annotation);
+  }
+  return groups;
 }
 
 export function annotationsInPaintOrder(annotations: Annotation[]): Annotation[] {
+  return annotationGroups(annotations).flatMap(paintGroup);
+}
+
+function paintGroup(annotations: Annotation[]): Annotation[] {
+  if (annotations[0]?.kind === "image") return annotations;
   const erases = annotations.filter((annotation) => ANNOTATION_LAYER[annotation.kind] === "erase");
   const cuts = annotations.filter((annotation) => ANNOTATION_LAYER[annotation.kind] === "cut");
   const blurs = annotations.filter((annotation) => ANNOTATION_LAYER[annotation.kind] === "blur");
@@ -402,6 +421,8 @@ export function annotationsInPaintOrder(annotations: Annotation[]): Annotation[]
 
 export function annotationBounds(annotation: Annotation): AnnotationBounds {
   switch (annotation.kind) {
+    case "image":
+      return annotation.rect;
     case "pen":
       return pointsBounds(annotation.points, annotation.width / 2);
     case "erase":
@@ -516,6 +537,8 @@ export function estimatedTextWidth(annotation: TextAnnotation): number {
 
 export function annotationHitTest(annotation: Annotation, point: Point, tolerance: number): boolean {
   switch (annotation.kind) {
+    case "image":
+      return rectContains(annotation.rect, point);
     case "pen":
       return polylineHitTest(annotation.points, point, Math.max(tolerance, annotation.width / 2));
     case "erase":
@@ -675,6 +698,11 @@ export function expandRect(rect: CropRect, amount: number): CropRect {
 
 export function translateAnnotation(annotation: Annotation, dx: number, dy: number): Annotation {
   switch (annotation.kind) {
+    case "image":
+      return {
+        ...annotation,
+        rect: { ...annotation.rect, x: annotation.rect.x + dx, y: annotation.rect.y + dy }
+      };
     case "pen":
       return {
         ...annotation,

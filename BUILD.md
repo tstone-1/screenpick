@@ -499,7 +499,7 @@ This does not affect CI, which builds in a fresh keychain each run.
       (a breaking API in use here, a peer-dep conflict, an unported plugin) — then
       ask whether to take it in this cycle or defer. "Two majors held back, both
       clean, want them?" is the answer being looked for; a bare list is not.
-- [ ] `cargo audit -f src-tauri/Cargo.lock` (install: `cargo install cargo-audit`) — run from
+- [ ] `cargo audit -f Cargo.lock` (install: `cargo install cargo-audit`) — run from
       `src-tauri/` so it picks up `.cargo/audit.toml`. Expect a **clean exit** (only the
       pre-triaged "allowed warnings" — unmaintained gtk3-family crates, `paste`, `anyhow`
       1.0.102, `memmap2` via pinned xcap — none actionable). If `cargo audit` reports a
@@ -622,8 +622,10 @@ env vars exported, or by downloading the release DMG) with the commands in
 gh auth switch --user tstone-1
 git add -A
 git commit -m "Release vYY.M.MICRO: brief description"
-git tag vYY.M.MICRO
 git push origin main
+# Wait for ci.yml to pass on this exact commit, including the macOS bindings check.
+# Inspect the selected run's headSha, conclusion, and jobs with gh run view.
+git tag vYY.M.MICRO
 git push origin vYY.M.MICRO
 ```
 
@@ -807,7 +809,9 @@ cargo update --manifest-path src-tauri/Cargo.toml
 npm update && npm outdated
 npm audit && (cd src-tauri && cargo audit -f Cargo.lock)   # run from src-tauri/ for .cargo/audit.toml
 npm run check && npm run test
-cargo clippy --manifest-path src-tauri/Cargo.toml
+cargo fmt --manifest-path src-tauri/Cargo.toml --check
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path src-tauri/Cargo.toml --locked
 # Hard gate, macOS only — see Pre-release Checklist:
 cargo test --manifest-path src-tauri/Cargo.toml export_typescript_bindings
 # Bump version in package.json, package-lock.json, src-tauri/Cargo.toml, src-tauri/tauri.conf.json
@@ -817,7 +821,9 @@ cargo check --manifest-path src-tauri/Cargo.toml   # refresh Cargo.lock
 npx tauri build --target universal-apple-darwin   # local smoke build (unsigned, ad-hoc)
 gh auth switch --user tstone-1
 git add -A && git commit -m "Release vYY.M.MICRO: description"
-git tag vYY.M.MICRO && git push origin main && git push origin vYY.M.MICRO   # tag by name, never --tags
+git push origin main
+# Wait for ci.yml to pass on this exact commit, including the macOS bindings check.
+git tag vYY.M.MICRO && git push origin vYY.M.MICRO   # tag by name, never --tags
 git describe --tags --exact-match
 # Pushing the tag triggers release.yml, which builds macOS + Windows and opens a
 # DRAFT release. Review it, then publish: gh release edit vYY.M.MICRO --draft=false
