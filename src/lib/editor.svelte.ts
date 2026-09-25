@@ -391,6 +391,10 @@ export class EditorState {
   // the second create must not make a caller waiting on the first think it has
   // landed. Entries remove themselves when the round trip settles.
   #pendingCreates = new Map<string, Promise<void>>();
+  // Persistence identity is not undoable. Early snapshots resolve it here.
+  #createdIdentities = new Map<string, Pick<RecentCapture, "documentId" | "currentPath">>();
+  #pendingFlushes = new Set<Promise<unknown>>();
+  #documentGeneration = 0;
 
   setupResize() {
     if (typeof ResizeObserver === "undefined") return;
@@ -404,6 +408,7 @@ export class EditorState {
   }
 
   openCapture(capture: RecentCapture) {
+    this.#documentGeneration += 1;
     this.#saveCurrentWorkspace();
     const saved = this.#documentStore.getWorkspace(capture);
     if (saved) {
@@ -484,7 +489,6 @@ export class EditorState {
 
   ingestCompleted(payload: CaptureResult): RecentCapture {
     const capture = { ...payload, assetUrl: toAssetUrl(payload.path) };
-    this.#saveCurrentWorkspace();
     this.openCapture(capture);
     this.#pushRecent(capture);
     void this.#createDocumentFor(capture);
@@ -516,34 +520,9 @@ export class EditorState {
     }
   }
 
-  // Wait for `capture`'s create_document round trip, if one is still in flight.
-  //
-  // Without this, everything a user can do in the ~40 ms before the create
-  // resolves lands on a capture that has no document identity yet, and every
-  // write path treats "no identity" as "not a persisted document" and returns.
-  // A crop is the sharp case, because the damage outlives the window: it builds
-  // its replacement capture from the open one (rebasedCapture copies the
-  // documentId forward), so a crop started inside the window produces a capture
-  // that carries no id AND sits at a new path the arriving record can no longer
-  // match — permanently unsaveable, with the post-condition in
-  // #attachDocumentIdentity unable to see it because the paths differ.
-  //
-  // Cheap by construction: no create in flight (the overwhelmingly common case)
-  // or an id already attached resolves synchronously, so the wait only ever
-  // costs what it is actually there for. createDocumentFor never rejects — it
-  // catches and returns null — so this cannot hang on a refused create.
-  //
-  // Called from the three places whose work OUTLIVES the window, not from
-  // #persistCurrentDocument itself: applyCrop and applyCut, which build a
-  // replacement capture the arriving record could never match afterwards, and
-  // flushPendingSave, where nothing has armed the debounce timer yet (that
-  // needs a documentId) so the exit handshake would otherwise find no pending
-  // work and let the process go. A wait inside #persistCurrentDocument was
-  // tried and removed: with those three covered, no caller could reach it
-  // inside the window, so deleting it reddened nothing — and a save that does
-  // somehow arrive early is reported by the "save skipped" warning below
-  // rather than swallowed. Any NEW caller that persists inside the window
-  // needs its own wait here, or that warning is what you will see.
+  // Resolve creation for the operation's original capture. Awaiting this yields
+  // even when creation already finished; callers must own their input snapshot
+  // and recheck the document generation before touching live editor state.
   async #settlePendingCreate(capture: RecentCapture | null | undefined): Promise<void> {
     if (!capture || capture.documentId) return;
     const pending = this.#pendingCreates.get(capture.path);
@@ -556,6 +535,11 @@ export class EditorState {
   // subsequent saves/lookups line up. If annotations were drawn during the
   // create window, persist them now.
   #attachDocumentIdentity(original: RecentCapture, record: DocumentRecord) {
+    if (!this.#createdIdentities.has(original.path)) {
+      this.#createdIdentities.set(original.path, {
+        documentId: record.id, currentPath: record.currentPath
+      });
+    }
     // Match by path, NOT by object identity (`capture === original`, which this
     // used to do and which can never be true in the running app). `original` is
     // the raw capture object; every candidate below is read back out of a
@@ -649,7 +633,17 @@ export class EditorState {
   // outgoing one's write (run while `this.document` still points at the outgoing
   // document, inside `#saveCurrentWorkspace`).
   #flushDocumentSave() {
-    void this.flushPendingSave();
+    const capture = this.document?.capture;
+    const annotations = this.annotations;
+    const pendingCreate = capture && this.#pendingCreates.has(capture.path);
+    const needsSave = this.#saveTimer || (pendingCreate && annotations.length > 0);
+    if (this.#saveTimer) clearTimeout(this.#saveTimer);
+    this.#saveTimer = null;
+    if (!capture || !needsSave) return;
+    // Capture ownership and detach the timer synchronously, before a switch.
+    const pending = this.#persistCapture(capture, annotations);
+    this.#pendingFlushes.add(pending);
+    void pending.finally(() => this.#pendingFlushes.delete(pending));
   }
 
   // Awaitable flush, for callers that must know the write landed rather than
@@ -666,19 +660,15 @@ export class EditorState {
   // the exit path needs both drained — including work started by callers that
   // never went through the timer at all (crop/cut's re-base persist).
   async flushPendingSave(): Promise<void> {
-    // Annotations drawn inside the create window arm no timer at all —
-    // #scheduleDocumentSave returns early without a documentId, and it is
-    // #attachDocumentIdentity that schedules the save once the id lands. So on
-    // the exit path there can be work pending with nothing here to find it;
-    // settling the create first lets that scheduling happen, and the timer
-    // check below then flushes it.
-    await this.#settlePendingCreate(this.document?.capture);
-    if (this.#saveTimer) {
-      clearTimeout(this.#saveTimer);
-      this.#saveTimer = null;
-      await this.#persistCurrentDocument();
+    this.#flushDocumentSave();
+    while (this.#pendingFlushes.size > 0) {
+      await Promise.all(this.#pendingFlushes);
     }
     await this.#documentStore.settlePersists();
+  }
+
+  #withDocumentIdentity(capture: RecentCapture): RecentCapture {
+    return capture.documentId ? capture : { ...capture, ...this.#createdIdentities.get(capture.path) };
   }
 
   // Write the current document's annotation layer + a freshly flattened
@@ -688,21 +678,30 @@ export class EditorState {
   // — the two fields DocumentStore can't reach itself (see the seam comment
   // above class EditorState).
   async #persistCurrentDocument(options: { replaceBase?: boolean } = {}): Promise<DocumentRecord | null> {
-    const capture = this.document?.capture;
+    return this.#persistCapture(this.document?.capture, this.annotations, options);
+  }
+
+  async #persistCapture(
+    original: RecentCapture | undefined,
+    annotations: Annotation[],
+    options: { replaceBase?: boolean } = {}
+  ): Promise<DocumentRecord | null> {
+    if (original && !original.documentId) await this.#settlePendingCreate(original);
+    const capture = original && this.#withDocumentIdentity(original);
     if (!capture?.documentId) {
       // Routine for in-memory/test captures that were never persisted as
       // documents. It is NOT routine when there is work to write: a document
       // that lost (or never received) its identity silently drops every save
       // and every crop re-base from here on, with nothing on screen and
       // nothing in the log to say so. Say so.
-      if (capture && (this.annotations.length > 0 || options.replaceBase)) {
+      if (capture && (annotations.length > 0 || options.replaceBase)) {
         logWarn(
-          `save skipped: open capture has no documentId (path=${capture.path}, annotations=${this.annotations.length}, replaceBase=${options.replaceBase === true})`
+          `save skipped: capture has no documentId (path=${capture.path}, annotations=${annotations.length}, replaceBase=${options.replaceBase === true})`
         );
       }
       return null;
     }
-    const saved = await this.#documentStore.persistDocument(capture, this.annotations, options);
+    const saved = await this.#documentStore.persistDocument(capture, annotations, options);
     if (saved) {
       const patch = recentCapturePatchForRecord(saved);
       // Deliberately does NOT patch title/width/height from `saved` — the
@@ -1954,7 +1953,8 @@ export class EditorState {
   }
 
   async applyCrop(): Promise<string | null> {
-    if (!this.document || !this.cropRect || this.cropPending) return null;
+    if (!this.document || !this.cropRect || this.cropPending || this.cutPending) return null;
+    const generation = this.#documentGeneration;
     // Snapshot taken before the IPC; pushed to past only on success so a failed
     // crop doesn't pollute history with a "before failed crop" entry.
     const beforeCrop = this.#snapshot();
@@ -1974,6 +1974,7 @@ export class EditorState {
       if (result.status === "error") {
         return result.error || "Crop failed.";
       }
+      if (generation !== this.#documentGeneration) return null;
       const survivors = cropAnnotations(
         this.annotations,
         cropX,
@@ -1985,9 +1986,9 @@ export class EditorState {
       // create then overlap instead of queueing, and this is the last moment
       // the identity is read. rebasedCapture copies documentId forward, so a
       // capture built before the create lands can never be saved again.
-      await this.#settlePendingCreate(this.document?.capture);
+      await this.#settlePendingCreate(beforeCrop.document?.capture);
       // Re-checked after the awaits: the open document can be closed mid-crop.
-      if (!this.document) return null;
+      if (!this.document || generation !== this.#documentGeneration) return null;
       const capture = rebasedCapture(this.document.capture, result.data);
       this.historyPast = [...this.historyPast, beforeCrop].slice(-HISTORY_LIMIT);
       this.historyFuture = [];
@@ -2043,6 +2044,7 @@ export class EditorState {
   // Reset the editor to the empty state (no open document). Used when the open
   // document is closed.
   #clearEditor() {
+    this.#documentGeneration += 1;
     if (this.#saveTimer) {
       clearTimeout(this.#saveTimer);
       this.#saveTimer = null;
@@ -2058,6 +2060,7 @@ export class EditorState {
   }
 
   #recordHistory() {
+    this.#documentGeneration += 1;
     this.historyPast = [...this.historyPast, this.#snapshot()].slice(-HISTORY_LIMIT);
     this.historyFuture = [];
     // Every committed annotation change funnels through here, so this is the one
@@ -2089,8 +2092,11 @@ export class EditorState {
   }
 
   #restore(snapshot: EditorSnapshot) {
-    this.document = snapshot.document;
-    this.currentCapture = snapshot.currentCapture;
+    this.#documentGeneration += 1;
+    this.document = snapshot.document && {
+      ...snapshot.document, capture: this.#withDocumentIdentity(snapshot.document.capture)
+    };
+    this.currentCapture = snapshot.currentCapture && this.#withDocumentIdentity(snapshot.currentCapture);
     this.cropRect = snapshot.cropRect;
     // Undo/redo stays on the same capture, so the cached sample canvas remains
     // valid and is deliberately not cleared here.
@@ -2112,7 +2118,8 @@ export class EditorState {
   }
 
   async applyCut(): Promise<string | null> {
-    if (!this.document || !this.cutBand || this.cutPending) return null;
+    if (!this.document || !this.cutBand || this.cutPending || this.cropPending) return null;
+    const generation = this.#documentGeneration;
     const beforeCut = this.#snapshot();
     const capturePath = this.document.capture.path;
     const axis = this.cutAxis;
@@ -2125,6 +2132,7 @@ export class EditorState {
       if (result.status === "error") {
         return result.error || "Cut failed.";
       }
+      if (generation !== this.#documentGeneration) return null;
       const survivors = cutoutAnnotations(
         this.annotations,
         axis,
@@ -2148,8 +2156,8 @@ export class EditorState {
       // Same reason as applyCrop's: a cut started inside the create window
       // would build a capture with no documentId at a path the arriving record
       // cannot match, and nothing would ever be written for it again.
-      await this.#settlePendingCreate(this.document?.capture);
-      if (!this.document) return null;
+      await this.#settlePendingCreate(beforeCut.document?.capture);
+      if (!this.document || generation !== this.#documentGeneration) return null;
       const capture = rebasedCapture(this.document.capture, result.data);
       this.historyPast = [...this.historyPast, beforeCut].slice(-HISTORY_LIMIT);
       this.historyFuture = [];

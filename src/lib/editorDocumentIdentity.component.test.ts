@@ -16,7 +16,7 @@
 // null documentId, every annotation save and crop re-base returned before
 // touching disk, and dragging the capture out handed over the un-annotated
 // original (the fault 26.9.0 instrumented and this test pins).
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { RecentCapture } from "./editor.svelte";
 
@@ -359,5 +359,153 @@ describe("work started before create_document resolves", () => {
 
     expect(editor.document?.capture.documentId).toBe("doc-9");
     expect(editor.document?.capture.path).toBe("shot-9-cropped.png");
+  });
+});
+
+describe("asynchronous persistence invariants", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.useFakeTimers();
+    commandsMock.replaceDocumentBase.mockImplementation(async (id: string) => ({
+      status: "ok", data: record(id)
+    }));
+    saveDocumentMock.mockImplementation(async (id: string) => ({
+      status: "ok", data: record(id)
+    }) as never);
+  });
+
+  afterEach(() => vi.useRealTimers());
+
+  async function turns() {
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+  }
+
+  function note(editor: InstanceType<typeof EditorState>) {
+    editor.textDraft = {
+      kind: "text", id: 1, position: { x: 5, y: 5 }, text: "must survive",
+      color: "#ff0000", fontSize: 16, background: false, backgroundOpacity: 0.5
+    };
+    editor.commitTextDraft();
+  }
+
+  function expectSaved(id: string) {
+    expect(saveDocumentMock.mock.calls.some(
+      call => call[0] === id && call[1].includes("must survive")
+    )).toBe(true);
+  }
+
+  async function create(editor: InstanceType<typeof EditorState>, path: string, id: string) {
+    commandsMock.createDocument.mockResolvedValue({ status: "ok", data: record(id) });
+    editor.ingestCompleted(capture(path));
+    await turns();
+  }
+
+  function deferredCreate() {
+    let release!: (result: unknown) => void;
+    commandsMock.createDocument.mockImplementation(() => new Promise(resolve => { release = resolve; }));
+    return (id: string) => release({ status: "ok", data: record(id) });
+  }
+
+  it("saves annotations when flushed in place", async () => {
+    const editor = new EditorState();
+    await create(editor, "control.png", "control");
+    note(editor);
+    await editor.flushPendingSave();
+    expectSaved("control");
+  });
+
+  it.each([false, true])("switching during debounce persists the outgoing document (pending create: %s)", async (pending) => {
+    const editor = new EditorState();
+    const release = deferredCreate();
+    if (pending) editor.ingestCompleted(capture("first.png"));
+    else await create(editor, "first.png", "first");
+    note(editor);
+    editor.openCapture({ ...capture("second.png"), documentId: "second" });
+    const flushing = editor.flushPendingSave();
+    if (pending) release("first");
+    await flushing;
+    await vi.advanceTimersByTimeAsync(1000);
+    expectSaved("first");
+    expect(saveDocumentMock.mock.calls.some(call => call[0] === "second")).toBe(false);
+  });
+
+  it.each(["crop", "cut"] as const)("finishing a %s after switching never changes the new document", async (tool) => {
+    const editor = new EditorState();
+    await create(editor, "first.png", "first");
+    let release!: (result: unknown) => void;
+    const command = tool === "crop" ? commandsMock.cropCapture : commandsMock.cutoutCapture;
+    command.mockImplementation(() => new Promise(resolve => { release = resolve; }));
+    editor.cropRect = { x: 0, y: 0, width: 50, height: 40 };
+    editor.cutBand = { x: 0, y: 10, width: 200, height: 40 };
+    const finishing = tool === "crop" ? editor.applyCrop() : editor.applyCut();
+    editor.openCapture({ ...capture("second.png"), documentId: "second" });
+    const before = JSON.stringify({ annotations: editor.annotations, history: editor.historyPast });
+    release({ status: "ok", data: { ...capture("first-transformed.png"), width: 50, height: 40 } });
+    await finishing;
+    await turns();
+    expect(commandsMock.replaceDocumentBase).not.toHaveBeenCalled();
+    expect(editor.document?.capture.path).toBe("second.png");
+    expect(JSON.stringify({ annotations: editor.annotations, history: editor.historyPast })).toBe(before);
+  });
+
+  it("discards a crop if the user edits while creation is still pending", async () => {
+    const editor = new EditorState();
+    const release = deferredCreate();
+    editor.ingestCompleted(capture("early.png"));
+    commandsMock.cropCapture.mockResolvedValue({
+      status: "ok", data: { ...capture("early-crop.png"), width: 50, height: 40 }
+    });
+    editor.cropRect = { x: 0, y: 0, width: 50, height: 40 };
+    const cropping = editor.applyCrop();
+    await turns(); // Crop IPC finished; now blocked on creation.
+    note(editor);
+    release("early");
+    await cropping;
+    await editor.flushPendingSave();
+    expect(editor.document?.capture.path).toBe("early.png");
+    expect(commandsMock.replaceDocumentBase).not.toHaveBeenCalled();
+    expectSaved("early");
+  });
+
+  it.each(["crop", "cut"] as const)("undo after early %s retains identity and saves subsequent edits", async (tool) => {
+    const editor = new EditorState();
+    const release = deferredCreate();
+    editor.ingestCompleted(capture("early.png"));
+    const command = tool === "crop" ? commandsMock.cropCapture : commandsMock.cutoutCapture;
+    command.mockResolvedValue({
+      status: "ok", data: { ...capture("early-transformed.png"), width: 50, height: 40 }
+    });
+    editor.cropRect = { x: 0, y: 0, width: 50, height: 40 };
+    editor.cutBand = { x: 0, y: 10, width: 200, height: 40 };
+    const finishing = tool === "crop" ? editor.applyCrop() : editor.applyCut();
+    release("early");
+    await finishing;
+    await turns();
+    expect(editor.document?.capture.documentId).toBe("early");
+    expect(editor.document?.capture.path).toBe("early-transformed.png");
+    editor.undo();
+    expect(editor.document?.capture.documentId).toBe("early");
+    expect(editor.document?.capture.path).toBe("early.png");
+    note(editor);
+    await editor.flushPendingSave();
+    expectSaved("early");
+    expect(commandsMock.replaceDocumentBase).toHaveBeenLastCalledWith(
+      "early", "early.png", expect.any(String), 200, 100
+    );
+  });
+
+  it("reopening a workspace cached during create retains identity and can save", async () => {
+    const editor = new EditorState();
+    const release = deferredCreate();
+    editor.ingestCompleted(capture("cached.png"));
+    editor.openCapture(capture("other.png"));
+    release("cached");
+    await turns();
+    expect(editor.recentCaptures[0]?.documentId).toBe("cached");
+    editor.openCapture(editor.recentCaptures[0]);
+    expect(editor.document?.capture.documentId).toBe("cached");
+    note(editor);
+    await editor.flushPendingSave();
+    expectSaved("cached");
   });
 });

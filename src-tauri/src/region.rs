@@ -154,6 +154,8 @@ pub(crate) async fn finish_region_selection(
     // overlay is hiding) can't emit a CaptureCompleted on someone else's
     // session. finish_capture owns the hide/settle/end/restore/emit sequence.
     let session_id = app.state::<RegionPickerSession>().session().current();
+    // Teardown clears session state before capture. Own the target across it.
+    let target_monitor = app.state::<RegionPickerSession>().target_monitor();
     // async + run_capture_off_ui_thread so the overlay's hide is applied before
     // the shot instead of being blocked behind our own settle sleep.
     run_capture_off_ui_thread(move || {
@@ -167,7 +169,7 @@ pub(crate) async fn finish_region_selection(
                 }
             },
             finish_region_session,
-            |app| capture_region_selection(app, &selection),
+            |app| capture_region_selection(app, &selection, target_monitor),
         )
     })
     .await
@@ -210,8 +212,9 @@ fn finish_region_session(app: &AppHandle, expected_id: Option<u64>) -> bool {
 fn capture_region_selection(
     app: &AppHandle,
     selection: &RegionSelection,
+    target_monitor: Option<u32>,
 ) -> Result<CaptureResult, String> {
-    let monitor = resolve_target_monitor(app)?;
+    let monitor = resolve_target_monitor(target_monitor)?;
     let monitor_width = monitor.width().map_err(error_message)?;
     let monitor_height = monitor.height().map_err(error_message)?;
     if monitor_width == 0 || monitor_height == 0 {
@@ -242,8 +245,7 @@ fn capture_region_selection(
 /// back to the live primary monitor if the session id was lost (cancellation
 /// race) or the recorded monitor is no longer enumerable (disconnected mid-
 /// selection — the user then gets the next best capture instead of an error).
-fn resolve_target_monitor(app: &AppHandle) -> Result<Monitor, String> {
-    let recorded = app.state::<RegionPickerSession>().target_monitor();
+fn resolve_target_monitor(recorded: Option<u32>) -> Result<Monitor, String> {
     if let Some(target_id) = recorded {
         if let Ok(monitors) = Monitor::all() {
             if let Some(monitor) = monitors

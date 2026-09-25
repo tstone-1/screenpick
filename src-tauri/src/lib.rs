@@ -1,3 +1,7 @@
+#[cfg(not(all(test, target_os = "windows")))]
+mod capture_backend;
+#[cfg(target_os = "windows")]
+mod capture_color;
 mod capture_modes;
 mod capture_trust;
 mod document_store;
@@ -6,6 +10,8 @@ mod monitor_pairing;
 mod path_utils;
 mod shortcut_config;
 mod updates;
+#[cfg(all(target_os = "windows", not(test)))]
+mod windows_capture;
 
 // Windows Rust unit-test harnesses do not get Tauri's generated GUI manifest.
 // Keep pure tests runnable without linking the desktop stack that imports

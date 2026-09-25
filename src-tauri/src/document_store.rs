@@ -152,8 +152,8 @@ pub(crate) fn is_valid_doc_id(id: &str) -> bool {
 /// leaves a folder nothing will ever look at again — `list_documents` prunes
 /// stale files of KNOWN entries and never sees an unknown folder at all.
 ///
-/// The caller deletes what this returns, so two refusals carry the whole
-/// safety of the sweep:
+/// The caller quarantines these folders: a healthy replacement manifest may
+/// follow an earlier recovery, so absence is never evidence that deletion is safe.
 ///
 /// - `manifest_load_failed` — a manifest that could not be read or parsed, as
 ///   distinct from one that is legitimately empty — returns nothing at all. A
@@ -176,6 +176,54 @@ pub(crate) fn orphan_document_folders(
         .filter(|name| is_valid_doc_id(name) && !known.contains(name.as_str()))
         .cloned()
         .collect()
+}
+
+// Unknown folders can contain a complete document from a recovered index.
+// Keep their contents outside the active store, without overwriting an earlier
+// recovery. Failed/incomplete creates use the same path and are preserved too.
+pub(crate) fn quarantine_document(root: &Path, id: &str) -> Result<(), String> {
+    if !is_valid_doc_id(id) {
+        return Err("Invalid document id.".into());
+    }
+    let recovered = root.join("recovered");
+    fs::create_dir_all(&recovered).map_err(|e| e.to_string())?;
+    let destination = recovered.join(id);
+    if destination.exists() {
+        return Err("A recovered folder already exists; original left in place.".into());
+    }
+    fs::rename(root.join(id), destination).map_err(|e| e.to_string())
+}
+
+// Called under the manifest lock at startup. Keep the entire filesystem
+// lifecycle here so tests exercise the same recovery and sweep as the app.
+pub(crate) fn quarantine_unindexed_documents(
+    root: &Path,
+) -> Result<Option<ManifestRecovery>, String> {
+    let path = root.join("index.json");
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let (manifest, recovery) = read_manifest_from(&path);
+    if recovery.is_some() {
+        return Ok(recovery);
+    }
+    let entries = fs::read_dir(root).map_err(|e| e.to_string())?;
+    let folders = entries
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+        .collect::<Vec<_>>();
+    let ids = manifest
+        .iter()
+        .map(|meta| meta.id.clone())
+        .collect::<Vec<_>>();
+    for id in orphan_document_folders(&folders, &ids, false) {
+        match quarantine_document(root, &id) {
+            Ok(()) => log::warn!("preserved unindexed document {id} in documents/recovered"),
+            Err(err) => log::warn!("could not quarantine unindexed document {id}: {err}"),
+        }
+    }
+    Ok(None)
 }
 
 /// Write bytes durably: a unique sibling temp file (pid + nanosecond timestamp,
@@ -430,6 +478,50 @@ fn backup_corrupt_file(path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recovery_survives_a_new_manifest_and_later_startup_sweeps() {
+        let root = temp_dir_for("recovery-restart");
+        let old = root.join("doc-1-1");
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join("base.png"), b"original image").unwrap();
+        fs::write(old.join("annotations.json"), b"original annotations").unwrap();
+        let index = root.join("index.json");
+        fs::write(&index, b"broken JSON").unwrap();
+        assert!(quarantine_unindexed_documents(&root).unwrap().is_some());
+        assert!(old.join("base.png").is_file());
+        // A subsequent capture creates a valid replacement index. Recovery
+        // information is no longer returned by read_manifest_from.
+        let new = sample_meta("doc-2-1");
+        fs::create_dir_all(root.join(&new.id)).unwrap();
+        write_atomic(&index, &serde_json::to_vec(&vec![new]).unwrap()).unwrap();
+        let (_, recovery) = read_manifest_from(&index);
+        assert!(recovery.is_none());
+        quarantine_unindexed_documents(&root).unwrap();
+        quarantine_unindexed_documents(&root).unwrap();
+        let recovered = root.join("recovered/doc-1-1");
+        assert_eq!(
+            fs::read(recovered.join("base.png")).unwrap(),
+            b"original image"
+        );
+        assert_eq!(
+            fs::read(recovered.join("annotations.json")).unwrap(),
+            b"original annotations"
+        );
+        assert!(root.join("doc-2-1").is_dir());
+        // Incomplete creates are quarantined as well; an earlier recovery is
+        // never replaced if the same ID unexpectedly appears again.
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join("base.png"), b"other image").unwrap();
+        assert!(quarantine_document(&root, "doc-1-1").is_err());
+        assert_eq!(fs::read(old.join("base.png")).unwrap(), b"other image");
+        assert_eq!(
+            fs::read(recovered.join("base.png")).unwrap(),
+            b"original image"
+        );
+        assert!(quarantine_document(&root, "../outside").is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     fn temp_dir_for(label: &str) -> PathBuf {
         let mut path = std::env::temp_dir();

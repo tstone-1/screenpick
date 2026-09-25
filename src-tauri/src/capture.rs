@@ -429,9 +429,7 @@ pub(crate) fn capture_region_image(
         .friendly_name()
         .or_else(|_| monitor.name())
         .unwrap_or_else(|_| "Region".to_string());
-    let image = monitor
-        .capture_region(x, y, width, height)
-        .map_err(error_message)?;
+    let image = crate::capture_backend::region_image(monitor, x, y, width, height)?;
     let path = capture_path(app, "region")?;
     image.save(&path).map_err(error_message)?;
     remember_capture_file(app, &path);
@@ -740,7 +738,7 @@ fn write_window_capture(
     if should_skip_window_metadata(&app_name, &title) {
         return Err("Selected window is not capturable.".to_string());
     }
-    let image = window.capture_image().map_err(error_message)?;
+    let image = crate::capture_backend::window_image(window)?;
     let label = if title.is_empty() {
         app_name
     } else {
@@ -809,7 +807,7 @@ fn capture_monitor(app: &AppHandle, monitor: &Monitor) -> Result<CaptureResult, 
         .friendly_name()
         .or_else(|_| monitor.name())
         .unwrap_or_else(|_| "Display".to_string());
-    let image = monitor.capture_image().map_err(error_message)?;
+    let image = crate::capture_backend::monitor_image(monitor)?;
     let path = capture_path(app, "screen")?;
     image.save(&path).map_err(error_message)?;
     remember_capture_file(app, &path);

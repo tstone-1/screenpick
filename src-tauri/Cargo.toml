@@ -1,6 +1,6 @@
 [package]
 name = "screenpick"
-version = "26.9.2"
+version = "26.9.3"
 description = "Cross-platform screenshot and annotation tool for macOS and Windows."
 authors = ["tstone-1"]
 license = "MIT"
@@ -68,5 +68,19 @@ tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 # (a non-blocking wait must not park a tokio worker thread via std::thread::sleep).
 # Tauri already ships tokio transitively, so this adds no real weight.
 tokio = { version = "1", features = ["time"] }
+[target.'cfg(target_os = "windows")'.dependencies]
+# WGC's 8-bit HDR output can clip before xcap receives it. Capture scRGB float
+# on advanced-color displays and normalize using their live SDR white level.
+half = "2"
+scopeguard = "1"
+windows = { version = "0.62", features = [
+    "Foundation", "Graphics_Capture", "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11", "Win32_Foundation",
+    "Win32_Devices_Display", "Win32_Graphics_Gdi",
+    "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common",
+    "Win32_System_WinRT", "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
+] }
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-core-graphics = "0.3.2"

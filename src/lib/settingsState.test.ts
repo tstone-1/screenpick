@@ -450,3 +450,21 @@ describe("sanitizeShortcutOverrides", () => {
     }
   });
 });
+
+it.each(["result", "exception"])("failed shortcut save resumes suspended hotkeys (%s)", async (failure) => {
+  const settings = loadedSettings();
+  commandsMock.suspendShortcuts.mockResolvedValue({status:"ok",data:null});
+  commandsMock.resumeShortcuts.mockResolvedValue({status:"ok",data:null});
+  if (failure === "result") {
+    commandsMock.updateSettings.mockResolvedValue({status:"error",error:"disk full"});
+  } else {
+    commandsMock.updateSettings.mockRejectedValue(new Error("disk full"));
+  }
+  await settings.beginShortcutRecording();
+  expect(commandsMock.suspendShortcuts).toHaveBeenCalledOnce();
+  settings.setShortcutEntry("window",0,"Control+Shift+9");
+  await settings.endShortcutRecording();
+  expect(commandsMock.updateSettings).toHaveBeenCalledOnce();
+  expect(commandsMock.resumeShortcuts).toHaveBeenCalledOnce();
+  expect(statusLine.message).toContain("disk full");
+});

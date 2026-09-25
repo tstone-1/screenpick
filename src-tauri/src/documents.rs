@@ -104,56 +104,19 @@ pub(crate) fn extend_asset_scope(app: &AppHandle) {
     }
 }
 
-/// Delete document folders no manifest entry references. Run once at startup
-/// (from the app's `setup`), which is the only moment nothing else can be
-/// halfway through a `create_document`: it holds `MANIFEST_LOCK` across the
-/// whole read-and-delete span anyway, so a create can't interleave, but running
-/// it at startup also means no editor session holds a document open.
-///
-/// This deletes user data, so it refuses in every case where it cannot prove a
-/// folder is unreferenced (see `document_store::orphan_document_folders` for
-/// the id-shape and load-failure refusals, and the missing-manifest one below).
-/// Each removal is logged at `info` with the folder name.
+// Quarantine unindexed folders at startup, when no editor owns them. A valid
+// replacement manifest does not prove an older folder is safe to delete.
 pub(crate) fn sweep_orphan_document_folders(app: &AppHandle) {
-    let (Ok(root), Ok(path)) = (documents_root(app), manifest_path(app)) else {
+    let Ok(root) = documents_root(app) else {
         return;
     };
     let _guard = MANIFEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    // No manifest file is NOT an empty manifest. A previous session's
-    // corruption recovery renames the manifest aside and leaves every folder in
-    // place — telling the user in so many words that its documents were not
-    // deleted — so a sweep against the resulting absent file would delete
-    // exactly what that recovery promised to keep. First run is the same shape
-    // and has no folders to sweep anyway.
-    if !path.is_file() {
-        return;
-    }
-    let (manifest, recovery) = document_store::read_manifest_from(&path);
-    if let Some(recovery) = recovery {
-        // Same notification `read_manifest` would raise; raising it here keeps
-        // the once-per-corruption property, since the file has now been renamed
-        // aside and the next read finds the ordinary "no documents yet" case.
-        notify_manifest_recovery(app, &recovery);
-        return;
-    }
-    let Ok(entries) = fs::read_dir(&root) else {
-        return;
-    };
-    // Direct children only, and only directories — `index.json` and any
-    // renamed-aside `index.json.corrupt-*` sit in this same root.
-    let folder_names: Vec<String> = entries
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-        .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
-        .collect();
-    let known_ids: Vec<String> = manifest.iter().map(|meta| meta.id.clone()).collect();
-    for name in document_store::orphan_document_folders(&folder_names, &known_ids, false) {
-        match fs::remove_dir_all(root.join(&name)) {
-            Ok(()) => log::info!("removed orphaned document folder {name}"),
-            Err(err) => log::warn!("could not remove orphaned document folder {name}: {err}"),
-        }
+    match document_store::quarantine_unindexed_documents(&root) {
+        Ok(Some(recovery)) => notify_manifest_recovery(app, &recovery),
+        Ok(None) => (),
+        Err(err) => log::warn!("could not inspect unindexed document folders: {err}"),
     }
 }
 

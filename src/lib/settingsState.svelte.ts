@@ -178,7 +178,16 @@ export class SettingsState {
   async endShortcutRecording() {
     await this.#enqueueShortcutTask(async () => {
       if (this.#shortcutOverridesDirty()) {
-        await this.#saveAndApplySettings(this.settings, this.appliedSettings);
+        const saved = await this.#saveAndApplySettings(this.settings, this.appliedSettings);
+        if (!saved) {
+          // The backend returns before re-registering on validation/write errors.
+          // Preserve the save error while restoring the previous bindings.
+          const saveError = statusLine.message;
+          const resumed = await commands.resumeShortcuts();
+          await this.refreshShortcutStatuses();
+          statusLine.set(resumed.status === "error"
+            ? `${saveError} Could not restore shortcuts: ${resumed.error}` : saveError);
+        }
         return;
       }
       const result = await commands.resumeShortcuts();

@@ -133,8 +133,9 @@ impl SettingsState {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let merged = preserve_backend_owned_fields(&current, partial);
-        *current = sanitize_settings(merged);
-        self.save(&current)?;
+        let candidate = sanitize_settings(merged);
+        self.save(&candidate)?;
+        *current = candidate;
         Ok(current.clone())
     }
 
@@ -143,8 +144,10 @@ impl SettingsState {
             .settings
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        current.shortcut_overrides.clear();
-        self.save(&current)?;
+        let mut candidate = current.clone();
+        candidate.shortcut_overrides.clear();
+        self.save(&candidate)?;
+        *current = candidate;
         Ok(current.clone())
     }
 
@@ -165,8 +168,10 @@ impl SettingsState {
             // the settings file for nothing.
             return Ok(previous);
         }
-        current.last_run_version = Some(version.to_string());
-        self.save(&current)?;
+        let mut candidate = current.clone();
+        candidate.last_run_version = Some(version.to_string());
+        self.save(&candidate)?;
+        *current = candidate;
         Ok(previous)
     }
 
@@ -454,6 +459,47 @@ pub(crate) fn reset_shortcut_settings(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn failed_settings_writes_leave_runtime_state_unchanged() {
+        let blocker = temp_path("write-blocker");
+        std::fs::write(&blocker, b"not a directory").unwrap();
+        let initial = super::CaptureSettings {
+            shortcut_overrides: std::collections::HashMap::from([(
+                "window".into(),
+                vec!["Control+Shift+9".into()],
+            )]),
+            ..Default::default()
+        };
+        let state = super::SettingsState {
+            settings: std::sync::Mutex::new(initial.clone()),
+            config_path: blocker.join("settings.json"),
+            trusted_capture_files: std::sync::Mutex::new(Vec::new()),
+        };
+        let mut changed = initial.clone();
+        changed.close_to_tray = true;
+        assert!(state.update(changed).is_err());
+        assert!(!state.get().close_to_tray);
+        assert!(state.reset_shortcuts().is_err());
+        assert_eq!(state.get().shortcut_overrides, initial.shortcut_overrides);
+        assert!(state.record_run_version("test-version").is_err());
+        assert!(state.get().last_run_version.is_none());
+        // A writable destination is the control: success must actually adopt
+        // the candidate in memory and on disk.
+        std::fs::remove_file(&blocker).unwrap();
+        state
+            .update(super::CaptureSettings {
+                close_to_tray: true,
+                ..initial
+            })
+            .unwrap();
+        assert!(state.get().close_to_tray);
+        assert!(
+            super::load_settings_from(&state.config_path)
+                .0
+                .close_to_tray
+        );
+        std::fs::remove_dir_all(blocker).unwrap();
+    }
     use super::{
         load_settings_from, preserve_backend_owned_fields, sanitize_settings,
         validate_save_directory_path, CaptureSettings, CAPTURE_SETTINGS_VERSION,

@@ -11,6 +11,13 @@ ScreenPick is an open-source cross-platform screenshot, annotation, and screen u
 - Svelte 5 + SvelteKit (static adapter) + TypeScript frontend in `src/`.
 - Vite build tooling; Vitest for frontend unit tests, `cargo test` for Rust.
 - npm is the JavaScript package manager for this repo.
+- TypeScript 7 is installed as `@typescript/native` (npm alias); TypeScript 6
+  remains installed for Svelte's JavaScript compiler API. `npm run check` runs
+  both `--tsgo` and the classic checker: with svelte-check 4.7.6, a missing
+  `.svelte` import passes tsgo but fails the classic check (measured using an
+  isolated synthetic component). Keep both until that gap is fixed; recheck
+  with a failing control before removing the classic pass. Watch mode uses
+  the classic checker.
 
 ### Typed IPC contract
 
@@ -101,13 +108,25 @@ ScreenPick is an open-source cross-platform screenshot, annotation, and screen u
   two local-build gotchas: run `npm ci` first, and on Windows close every running
   ScreenPick instance before `npx tauri build` (a live process locks
   `target\release\screenpick.exe`; the failure only surfaces after the full compile).
+- **Windows HDR capture:** `capture_backend` routes advanced-color displays
+  through `windows_capture` (float scRGB WGC), normalizes by the target display's
+  live `DISPLAYCONFIG_SDR_WHITE_LEVEL / 1000`, then encodes sRGB. xcap's 8-bit
+  WGC output can clip before the app receives it; changing the saved PNG's gamma
+  cannot recover those pixels. A window and its monitor can behave differently:
+  reproduce with the actual failing window, not just a monitor capture. A prior
+  non-reproduction did not establish a driver glitch. Regression checks need
+  both an affected window and known SDR colors; a merely darker image is not
+  proof of correct normalization. HDR highlights beyond SDR white are clipped
+  on SDR export; this is not a perceptual tone mapper for HDR video.
+  `src-tauri/examples/capture-color-probe.rs` exercises the production backend
+  and generates a known-color chart; its header has the commands. Keep captured
+  desktop images outside the repository.
 - **Verifying capture-backend changes:** don't hand-drive the picker overlay
-  (clicking a target window in it isn't scriptable). Write a tiny standalone
-  scratch crate pinned to the same `xcap = "=0.9.8"` and call `Window::all()` +
-  `Window::capture_image()` against a live target window — the identical API
-  `write_window_capture` uses (`src-tauri/src/capture.rs`), so it faithfully
-  reproduces real behavior in seconds. Gate the backend behind a cargo feature
-  (`xcap/wgc`) and run with and without `--features wgc` for a clean before/after.
+  (clicking a target window in it isn't scriptable). Use the color probe above:
+  it calls `capture_backend`, the same boundary as `write_window_capture`, and
+  saves xcap's uncorrected output alongside the result. Calling only
+  `Window::capture_image()` bypasses the HDR correction. Its `--verify` option
+  checks known colors, and `--display` also checks screen and region capture.
   **Look at the actual output PNGs** — pixel-statistic heuristics mislead (a
   correct light-theme Task Manager capture is ~60% near-white; a blank GDI
   failure can read 0% if it grabbed dark frame chrome). Capture a known
@@ -215,20 +234,20 @@ ScreenPick is an open-source cross-platform screenshot, annotation, and screen u
   can no longer match by path — unsaveable for the rest of the session, and
   invisible to the post-condition above precisely because the paths differ.
 
-  `#settlePendingCreate` closes this, and it is called from exactly the three
-  places whose work outlives the window: `applyCrop` and `applyCut` (immediately
-  before they read the capture they re-base from) and `flushPendingSave` (the
-  exit handshake — nothing has armed the debounce timer yet, because arming it
-  needs a `documentId`, so without the wait there is no pending work to find and
-  the annotation dies with the process). It is deliberately **not** in
-  `#persistCurrentDocument`: with those three covered no caller reaches it
-  inside the window, deleting it there reddened nothing, and the comment on
-  `#settlePendingCreate` records that. A new caller that persists inside the
-  window needs its own wait.
+  Saves bind their capture and annotation snapshot before waiting for creation;
+  shutdown drains both those waits and the store's write queues. Never read the
+  live document after an await to decide which document an earlier edit belongs
+  to. Crop/cut also compare a document generation across awaits, so switching,
+  undoing or editing discards stale completion. Persistence identity is kept
+  outside undoable state and restored onto early snapshots/workspaces by path.
 
-  `#pendingCreates` is keyed by capture path rather than being a single promise
-  because rapid captures overlap; a crop on the second capture must not be
-  released by the first capture's record.
+  `#pendingCreates` is keyed by capture path because rapid captures overlap;
+  creation of one capture must not release another capture's operation.
+
+- Startup quarantines unindexed document folders under `documents/recovered/`.
+  A valid index can be a replacement written after corruption recovery, so its
+  omission of an old folder never proves that deleting the folder is safe.
+  Recovery tests must span corruption, a new capture, and a later startup.
 
 ## Platform Notes
 

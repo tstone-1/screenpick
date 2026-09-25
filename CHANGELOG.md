@@ -6,6 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [CalVer](https://calver.org/) `YY.M.MICRO` versioning
 (see [BUILD.md](BUILD.md#version-management)).
 
+## [26.9.3] - 2026-09-25
+
+### Fixed
+
+- Windows captures of Edge and other windows on HDR displays no longer rely on
+  an 8-bit capture that can wash out colors and clip text. Capture now preserves
+  float pixels until conversion to SDR, using the target display's current SDR
+  white level. Screen and region captures use the same correction.
+- Switching captures during autosave preserves the outgoing annotations;
+  pending crop/cut results cannot overwrite a different document.
+- Undo and reopening captures edited before initial document creation preserve
+  their identity, so later changes continue to save.
+- Startup preserves unindexed document folders under `documents/recovered/`
+  instead of deleting screenshots left behind by an earlier index recovery.
+- Failed settings writes leave runtime settings unchanged, and failed shortcut
+  edits restore the previously registered hotkeys.
+- Region capture keeps its original display when the primary display changes
+  while the selection is open.
+- Updated rustls to 0.23.45 for RUSTSEC-2026-0285.
+- The public-safe push check now examines the committed objects being pushed,
+  including history and other refs, instead of scanning working-copy files.
+
+### Changed
+
+- Updated compatible frontend and Rust dependencies, including Tauri 2.11.6
+  and the updater plugin 2.12.0.
+- Added TypeScript 7 checking through Svelte's tsgo mode, alongside the classic
+  TypeScript 6 check that still catches missing Svelte component imports.
+
 ## [26.9.2] - 2026-09-14
 
 ### Added
