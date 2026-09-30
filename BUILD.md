@@ -490,6 +490,7 @@ This does not affect CI, which builds in a fresh keychain each run.
 **Update toolchains and dependencies:**
 - [ ] `rustup update stable`
 - [ ] `cargo update --manifest-path src-tauri/Cargo.toml` — review major bumps against changelogs.
+      Confirm the update landed in the file, not only in cargo's output: `git diff --stat -- src-tauri/Cargo.lock` must list the lockfile whenever cargo printed `Updating` lines. On 2026-09-30 `cargo update` printed 55 updates and exited 0 three times in a row without writing the lockfile.
 - [ ] `npm update && npm outdated` — review remaining majors individually.
 - [ ] **Majors are a decision to put to the maintainer, not one to make silently.**
       `npm update` / `cargo update` only move within the allowed range, so anything
@@ -806,6 +807,7 @@ this is tracked in ROADMAP P0 #2.)
 # Replace YY.M.MICRO with the actual version
 rustup update stable
 cargo update --manifest-path src-tauri/Cargo.toml
+git diff --stat -- src-tauri/Cargo.lock   # must list the lockfile if cargo printed updates
 npm update && npm outdated
 npm audit && (cd src-tauri && cargo audit -f Cargo.lock)   # run from src-tauri/ for .cargo/audit.toml
 npm run check && npm run test
