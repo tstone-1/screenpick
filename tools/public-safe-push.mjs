@@ -15,20 +15,40 @@ function git(args, input) {
 
 try {
   const policy = readFileSync(process.argv[2], 'utf8');
-  const block = policy.match(/^\$ForbiddenPatterns\s*=\s*@\(\s*\r?\n([\s\S]*?)^\)/m);
-  if (!block) throw new Error('Cannot read the public-safe pattern list.');
-  const patterns = [];
-  for (const line of block[1].split(/\r?\n/)) {
-    if (/^\s*(?:#.*)?$/.test(line)) continue;
-    const entry = line.match(/^\s*'((?:[^']|'')*)'\s*,?\s*(?:#.*)?$/);
-    if (!entry) throw new Error('Unsupported policy syntax; inspection refused.');
-    try {
-      patterns.push(new RegExp(entry[1].replaceAll("''", "'"), 'i'));
-    } catch {
-      throw new Error('Unsupported policy expression; inspection refused.');
+  // Parse one PowerShell array of single-quoted regex strings into RegExps.
+  function parseList(name, flags, label) {
+    const block = policy.match(new RegExp(`^\\$${name}\\s*=\\s*@\\(\\s*\\r?\\n([\\s\\S]*?)^\\)`, 'm'));
+    if (!block) throw new Error(`Cannot read the ${label} list.`);
+    const list = [];
+    for (const line of block[1].split(/\r?\n/)) {
+      if (/^\s*(?:#.*)?$/.test(line)) continue;
+      const entry = line.match(/^\s*'((?:[^']|'')*)'\s*,?\s*(?:#.*)?$/);
+      if (!entry) throw new Error('Unsupported policy syntax; inspection refused.');
+      try {
+        list.push(new RegExp(entry[1].replaceAll("''", "'"), flags));
+      } catch {
+        throw new Error('Unsupported policy expression; inspection refused.');
+      }
     }
+    if (!list.length) throw new Error(`The ${label} list is empty.`);
+    return list;
   }
-  if (!patterns.length) throw new Error('The public-safe pattern list is empty.');
+  const patterns = parseList('ForbiddenPatterns', 'i', 'public-safe pattern');
+  // Commit-message rules are line-anchored, hence the multiline flag.
+  const messagePatterns = parseList('ForbiddenCommitMessagePatterns', 'im', 'public-safe commit-message pattern');
+
+  // Decode a blob: UTF-16 with a BOM is text; any other NUL byte means binary.
+  function decode(content) {
+    if (content.length >= 2 && content[0] === 0xff && content[1] === 0xfe) {
+      return content.subarray(2).toString('utf16le');
+    }
+    if (content.length >= 2 && content[0] === 0xfe && content[1] === 0xff) {
+      const swapped = Buffer.from(content.subarray(2));
+      if (swapped.length % 2) return null;
+      return swapped.swap16().toString('utf16le');
+    }
+    return content.includes(0) ? null : content.toString('utf8');
+  }
 
   const objects = new Set();
   const zero = /^0+$/;
@@ -63,9 +83,17 @@ try {
       offset += size + 1;
       // Trees contain binary names/IDs. Also scan commit/tag messages, which
       // are published content and can leak values even when every file is clean.
-      if (type === 'tree' || content.includes(0)) continue;
-      const text = content.toString('utf8');
-      if (patterns.some(pattern => pattern.test(text))) {
+      if (type === 'tree') continue;
+      const text = decode(content);
+      if (text === null) continue;
+      let hit = patterns.some(pattern => pattern.test(text));
+      if (!hit && (type === 'commit' || type === 'tag')) {
+        // Headers (tree, author, tagger...) are not message text.
+        const split = text.search(/\r?\n\r?\n/);
+        const message = split < 0 ? '' : text.slice(split).replace(/^\r?\n\r?\n/, '');
+        hit = messagePatterns.some(pattern => pattern.test(message));
+      }
+      if (hit) {
         // Never print the matching content: it may itself be a secret.
         throw new Error(`Forbidden content in pushed ${type} ${id}.`);
       }

@@ -22,6 +22,7 @@ export const commands = {
 	captureActiveWindow: () => typedError<CaptureResult, string>(__TAURI_INVOKE("capture_active_window")),
 	screenRecordingAccess: () => __TAURI_INVOKE<boolean>("screen_recording_access"),
 	openScreenRecordingSettings: () => typedError<null, string>(__TAURI_INVOKE("open_screen_recording_settings")),
+	openReleasesPage: () => typedError<null, string>(__TAURI_INVOKE("open_releases_page")),
 	listDocuments: () => typedError<DocumentRecord[], string>(__TAURI_INVOKE("list_documents")),
 	createDocument: (sourcePath: string, mode: string, title: string, width: number, height: number) => typedError<DocumentRecord, string>(__TAURI_INVOKE("create_document", { sourcePath, mode, title, width, height })),
 	replaceDocumentBase: (id: string, sourcePath: string, title: string, width: number, height: number) => typedError<DocumentRecord, string>(__TAURI_INVOKE("replace_document_base", { id, sourcePath, title, width, height })),

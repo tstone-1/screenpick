@@ -676,7 +676,19 @@ describe("deserializeAnnotations", () => {
   it.each([
     ["pen without points", { ...VALID_ANNOTATIONS.pen, points: undefined }],
     ["pen with an empty stroke", { ...VALID_ANNOTATIONS.pen, points: [] }],
-    ["pen with a half point", { ...VALID_ANNOTATIONS.pen, points: [{ x: 1 }] }],
+    // The pen tool discards a stroke that never moved, so one point cannot
+    // come from the editor.
+    ["pen with a single point", { ...VALID_ANNOTATIONS.pen, points: [{ x: 1, y: 2 }] }],
+    // `ctx.ellipse` throws on a negative radius, failing every export.
+    [
+      "shape with a negative width",
+      { ...VALID_ANNOTATIONS.shape, rect: { x: 0, y: 0, width: -10, height: 10 } }
+    ],
+    [
+      "shape with a negative height",
+      { ...VALID_ANNOTATIONS.shape, rect: { x: 0, y: 0, width: 10, height: -10 } }
+    ],
+    ["pen with a half point",{ ...VALID_ANNOTATIONS.pen, points: [{ x: 1 }] }],
     ["pen with a null coordinate", { ...VALID_ANNOTATIONS.pen, points: [{ x: 1, y: null }] }],
     ["pen with a string width", { ...VALID_ANNOTATIONS.pen, width: "3" }],
     ["erase with points as an object", { ...VALID_ANNOTATIONS.erase, points: { x: 1, y: 2 } }],

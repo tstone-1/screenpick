@@ -250,8 +250,14 @@ const ANNOTATION_VALIDATORS: Record<AnnotationKind, AnnotationValidator> = {
       typeof entry.dataUrl === "string" &&
       /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(entry.dataUrl)
     )),
+  // At least two points: the pen tool discards a stroke that never moved, so
+  // the editor cannot produce a single-point one, and a stroke with no segment
+  // has nothing for hit-testing to select.
   pen: (entry) =>
-    isPointList(entry.points) && typeof entry.color === "string" && isFiniteNumber(entry.width),
+    isPointList(entry.points) &&
+    entry.points.length >= 2 &&
+    typeof entry.color === "string" &&
+    isFiniteNumber(entry.width),
   // `color: null` is the transparent-hole mode, not a missing field.
   erase: (entry) =>
     isPointList(entry.points) &&
@@ -265,6 +271,12 @@ const ANNOTATION_VALIDATORS: Record<AnnotationKind, AnnotationValidator> = {
   shape: (entry) =>
     SHAPE_KINDS.has(entry.shape as ShapeKind) &&
     isRect(entry.rect) &&
+    // Drags are normalised to a positive-size rect before they commit, so a
+    // negative extent only comes from a damaged file. It must not load:
+    // `ctx.ellipse` throws on a negative radius, which would fail every export
+    // and every current.png render for the document.
+    entry.rect.width >= 0 &&
+    entry.rect.height >= 0 &&
     typeof entry.color === "string" &&
     isFiniteNumber(entry.width) &&
     typeof entry.fill === "boolean" &&

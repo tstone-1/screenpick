@@ -1,7 +1,6 @@
 #!/bin/sh
 # pre-push hook for public repositories.
-# Blocks pushes that would leak internal-only content into GitHub.
-# Reads the shared policy and scans newly reachable committed objects.
+# Checks newly pushed objects and commit messages against the shared pattern lists.
 #
 # Activate per-clone with: git config core.hooksPath .githooks
 # Skip a single push (rare, use with care): SKIP_AGENT_MEMORY_AUDIT=1 git push

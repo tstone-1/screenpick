@@ -11,11 +11,7 @@ Live forward-looking plan for ScreenPick. Shipped work is tracked in the [CHANGE
 
 ## In flight
 
-- **~~macOS Developer ID signing + notarization~~ — done 2026-07-25.** Certificate
-  issued, notarization key created, `release.yml` signs and notarizes the macOS
-  leg and gates on the result. Verified end to end on a local universal build.
-  Shipped in **26.7.6** (2026-07-25). The how-to and the traps are in
-  [BUILD.md](BUILD.md#macos-code-signing-and-notarization).
+Nothing in flight.
 
 ---
 

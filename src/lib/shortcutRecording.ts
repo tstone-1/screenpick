@@ -46,10 +46,12 @@ const ALLOWED_CODES = new Set([
   "BracketRight"
 ]);
 
-const MODIFIER_REQUIRED_WITHOUT_PRIMARY = new Set([
-  "Space",
-  "Enter"
-]);
+// The only keys that may be recorded as a global hotkey with no modifier: the
+// function keys and PrintScreen. Any other bare key (a letter, digit, Comma,
+// Slash, Minus, an arrow, Delete, ...) would be swallowed system-wide the moment
+// it registered, so it needs at least one modifier. This limits what can be
+// newly recorded only; stored accelerators are not re-validated here.
+const BARE_KEY_TOKEN = /^(F([1-9]|1[0-9]|2[0-4])|PrintScreen)$/;
 
 // Translate a `KeyboardEvent.code` into the accelerator key token, or null if
 // it isn't a key we can bind. Letters collapse to a single uppercase character
@@ -181,10 +183,7 @@ export function acceleratorFromKeyboardEvent(
     if (event.metaKey) mods.push("Super");
   }
 
-  if (
-    mods.length === 0 &&
-    (/^[A-Z0-9]$/.test(key) || MODIFIER_REQUIRED_WITHOUT_PRIMARY.has(key))
-  ) {
+  if (mods.length === 0 && !BARE_KEY_TOKEN.test(key)) {
     return null;
   }
 

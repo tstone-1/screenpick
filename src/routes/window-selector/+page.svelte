@@ -1,12 +1,12 @@
 <script lang="ts">
   import { onMount } from "svelte";
 
-  import { commands } from "$lib/bindings";
+  import { commands } from "#lib/bindings.ts";
   import {
     finishWindowPointSelection,
     windowRectAtPoint,
     type StrictWindowBounds
-  } from "$lib/windowPickerCommands";
+  } from "#lib/windowPickerCommands.ts";
 
   let selectionPending = $state(false);
   let highlight = $state<StrictWindowBounds | null>(null);

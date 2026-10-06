@@ -106,7 +106,7 @@ pub(crate) fn extend_asset_scope(app: &AppHandle) {
 
 // Quarantine unindexed folders at startup, when no editor owns them. A valid
 // replacement manifest does not prove an older folder is safe to delete.
-pub(crate) fn sweep_orphan_document_folders(app: &AppHandle) {
+pub(crate) fn quarantine_unindexed_document_folders(app: &AppHandle) {
     let Ok(root) = documents_root(app) else {
         return;
     };

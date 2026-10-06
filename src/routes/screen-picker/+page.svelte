@@ -3,8 +3,8 @@
   import { listen } from "@tauri-apps/api/event";
   import { LoaderCircle, Monitor, RefreshCcw, X } from "@lucide/svelte";
 
-  import { commands, type CapturableMonitor } from "$lib/bindings";
-  import { screenTargetChangedEvent, type ScreenTargetChanged } from "$lib/screenSelectionEvents";
+  import { commands, type CapturableMonitor } from "#lib/bindings.ts";
+  import { screenTargetChangedEvent, type ScreenTargetChanged } from "#lib/screenSelectionEvents.ts";
 
   let screens = $state<CapturableMonitor[]>([]);
   let status = $state("Loading displays");

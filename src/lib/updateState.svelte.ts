@@ -1,6 +1,11 @@
 import { commands, events } from "./bindings";
 import { logError, logWarn } from "./diagnosticsLog";
-import { checkForUpdates, relaunch, type PendingUpdate } from "./updaterCommands";
+import {
+  checkForUpdates,
+  openReleasesPage,
+  relaunch,
+  type PendingUpdate
+} from "./updaterCommands";
 
 // Where the release lives when the in-app path fails. Shown as the escape hatch
 // on every error state: a user whose install location isn't writable (running
@@ -179,6 +184,22 @@ export class UpdateState {
         message: `Couldn't install ${update.version}. Download it manually instead.`
       };
     }
+  }
+
+  // The banner's release-notes / manual-download link. A failure replaces the
+  // phase with an error message like every other update failure, except while a
+  // download or install is running: that state must not be overwritten.
+  async openReleases(): Promise<void> {
+    const message = `Couldn't open the releases page. Visit ${RELEASES_URL} instead.`;
+    try {
+      const result = await openReleasesPage();
+      if (result.status === "ok") return;
+      logError("Could not open the releases page", result.error);
+    } catch (error) {
+      logError("Could not open the releases page", error);
+    }
+    if (this.busy) return;
+    this.phase = { kind: "error", message };
   }
 
   dismiss(): void {

@@ -1,8 +1,11 @@
 {
   "name": "screenpick",
-  "version": "26.9.3",
+  "version": "26.10.0",
   "description": "Cross-platform screenshot and annotation tool for macOS and Windows.",
   "type": "module",
+  "imports": {
+    "#lib/*": "./src/lib/*"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/tstone-1/screenpick.git"
@@ -33,12 +36,9 @@
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.11.0"
   },
-  "overrides": {
-    "cookie": "0.7.2"
-  },
   "devDependencies": {
-    "@sveltejs/adapter-static": "^3.0.10",
-    "@sveltejs/kit": "^2.70.3",
+    "@sveltejs/adapter-static": "^4.0.0",
+    "@sveltejs/kit": "^3.0.1",
     "@sveltejs/vite-plugin-svelte": "^7.3.0",
     "@tauri-apps/cli": "^2.11.4",
     "@testing-library/svelte": "^5.4.2",

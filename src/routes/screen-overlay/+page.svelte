@@ -2,8 +2,8 @@
   import { onMount } from "svelte";
   import { emit } from "@tauri-apps/api/event";
 
-  import { commands } from "$lib/bindings";
-  import { screenTargetChangedEvent } from "$lib/screenSelectionEvents";
+  import { commands } from "#lib/bindings.ts";
+  import { screenTargetChangedEvent } from "#lib/screenSelectionEvents.ts";
 
   // Parse explicitly: Number("") and Number(null) are both 0 (a valid finite
   // number), which would mask a missing/garbled param as monitor 0. Require an

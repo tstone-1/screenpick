@@ -114,6 +114,23 @@ describe("acceleratorFromKeyboardEvent", () => {
     expect(acceleratorFromKeyboardEvent(ev("Space"), false)).toBeNull();
     expect(acceleratorFromKeyboardEvent(ev("Enter"), false)).toBeNull();
   });
+
+  it.each([
+    "Comma", "Period", "Slash", "Minus", "Equal", "Semicolon", "Quote", "Backquote",
+    "Backslash", "BracketLeft", "BracketRight", "ArrowUp", "ArrowDown", "ArrowLeft",
+    "ArrowRight", "Home", "End", "PageUp", "PageDown", "Insert", "Delete", "Tab"
+  ])("rejects a bare %s but accepts it with a modifier", (code) => {
+    expect(acceleratorFromKeyboardEvent(ev(code), false)).toBeNull();
+    expect(acceleratorFromKeyboardEvent(ev(code, { ctrlKey: true }), false)).toBe(
+      `CommandOrControl+${code}`
+    );
+  });
+
+  it("still accepts every function key and PrintScreen bare", () => {
+    expect(acceleratorFromKeyboardEvent(ev("F1"), false)).toBe("F1");
+    expect(acceleratorFromKeyboardEvent(ev("F24"), false)).toBe("F24");
+    expect(acceleratorFromKeyboardEvent(ev("PrintScreen"), false)).toBe("PrintScreen");
+  });
 });
 
 describe("acceleratorKey", () => {

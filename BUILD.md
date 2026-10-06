@@ -1,6 +1,6 @@
 # ScreenPick — Build Instructions
 
-ScreenPick is a Tauri 2 (Rust) + SvelteKit 5 (TypeScript) desktop app targeting
+ScreenPick is a Tauri 2 (Rust) + Svelte 5 / SvelteKit 3 (TypeScript) desktop app targeting
 **macOS** (Apple Silicon + Intel) and **Windows** (x64).
 
 > **Distribution model:** **macOS release builds are signed with a Developer ID
@@ -503,11 +503,13 @@ This does not affect CI, which builds in a fresh keychain each run.
 - [ ] `cargo audit -f Cargo.lock` (install: `cargo install cargo-audit`) — run from
       `src-tauri/` so it picks up `.cargo/audit.toml`. Expect a **clean exit** (only the
       pre-triaged "allowed warnings" — unmaintained gtk3-family crates, `paste`, `anyhow`
-      1.0.102, `memmap2` via pinned xcap — none actionable). If `cargo audit` reports a
+      1.0.104, `memmap2` via pinned xcap — none actionable). If `cargo audit` reports a
       new, non-allow-listed vulnerability, that is a real release blocker: do not add it to
-      `.cargo/audit.toml` without recording the same reviewed/accepted/revisit-condition
-      reasoning the existing quick-xml entries carry (see the comments in that file). A
-      release must not ship with an unreviewed red `cargo audit`.
+      `.cargo/audit.toml` without recording, next to the entry, why it was reviewed and
+      accepted and under which condition it is revisited (the ignore list is empty today). A
+      release must not ship with an unreviewed red `cargo audit`. The release
+      workflow's test job now runs `cargo audit` as well; keep this local step
+      anyway, so a finding surfaces before the tag rather than after it.
 - [ ] `npm audit`.
 
 **Code quality — these are the *exact* commands `ci.yml` runs.** Run them verbatim,
@@ -618,6 +620,10 @@ env vars exported, or by downloading the release DMG) with the commands in
 
 > ScreenPick is a **public** GitHub repo under the `tstone-1` account.
 > Before pushing: `gh auth switch --user tstone-1`.
+
+> The push check (`.githooks/pre-push`) only runs in a clone where the hooks path
+> was set. Before pushing, `git config core.hooksPath` must print `.githooks`; if
+> it prints nothing, run `git config core.hooksPath .githooks`.
 
 ```sh
 gh auth switch --user tstone-1
@@ -740,8 +746,9 @@ SemVer with `26.5.0` (May 2026)**.
 
 Examples: `26.5.0` (first May 2026 release), `26.5.1` (second), `26.6.0` (first June).
 
-The same `YY.M.MICRO` value must appear in `package.json`, `src-tauri/Cargo.toml`,
-and `src-tauri/tauri.conf.json`; the local tag must be `vYY.M.MICRO`; and (once a
+The same `YY.M.MICRO` value must appear in `package.json`, `package-lock.json`
+(top-level and root package), `src-tauri/Cargo.toml`, and
+`src-tauri/tauri.conf.json`, with `Cargo.lock` refreshed by `cargo check`; the local tag must be `vYY.M.MICRO`; and (once a
 channel exists) the published release must point to that tag. Do not leave a tag,
 release, or version file behind on an older value.
 
@@ -749,18 +756,20 @@ release, or version file behind on an older value.
 
 Every pin in `src-tauri/Cargo.toml` carries its own why/when-to-revisit comment
 inline — that's the source of truth on the Rust side. `package.json` has no
-comment syntax, so its one pin is documented here instead:
+comment syntax, so anything pinned there is documented here instead. It has no
+pin today: the `overrides.cookie: "0.7.2"` entry was removed with the move to
+SvelteKit 3 (26.10.0), which depends on `cookie ^2` directly and fails to build
+against the forced 0.7.2 (`Named export 'parseCookie' not found`).
 
-- **`overrides.cookie: "0.7.2"`** — forces the `cookie` package (a transitive
-  dependency of `@sveltejs/kit`) to a version at or above the fix for the
-  known `cookie <0.7.0` advisory (out-of-bounds characters accepted in
-  cookie name/path/domain, GHSA-pxg6-pf52-xh8x). `npm ls cookie` should show
-  exactly one resolution, `cookie@0.7.2 overridden`, under `@sveltejs/kit`.
-  **Revisit:** once `@sveltejs/kit`'s own `package.json` depends on
-  `cookie >=0.7.2` directly (check with `npm info @sveltejs/kit@latest
-  dependencies.cookie` after a `@sveltejs/kit` bump), drop the override —
-  an override that silently stops doing anything is worse than no override,
-  since it looks like a live constraint.
+Two majors are held back on purpose, and `npm outdated` lists both:
+
+- **`typescript` 6** — TypeScript 7 is installed as `@typescript/native` for the
+  tsgo pass. The `typescript` package itself stays on 6 because SvelteKit 3
+  peers on `typescript ^6` and svelte-check 4 on `^5 || ^6`. **Revisit** when
+  both accept 7 (`npm info @sveltejs/kit peerDependencies.typescript`,
+  `npm info svelte-check peerDependencies.typescript`).
+- **`@types/node` 24** — follows the Node major in `.nvmrc` and the workflows.
+  **Revisit** when those move to Node 26.
 
 See also the `.cargo/audit.toml` triage note referenced in the Pre-release
 Checklist above for the Rust-side equivalent of "why is this pinned/ignored".

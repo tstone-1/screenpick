@@ -3,10 +3,10 @@
 
   // `capture` supplies the capture-mode registry the shortcut rows are keyed by
   // (and the quit button); everything the panel edits lives on `settingsStore`.
-  import { capture, settingsStore } from "$lib/captureOrchestration.svelte";
-  import { unlockCaptureSound } from "$lib/captureSound";
-  import { acceleratorFromKeyboardEvent } from "$lib/shortcutRecording";
-  import { update } from "$lib/updateState.svelte";
+  import { capture, settingsStore } from "#lib/captureOrchestration.svelte.ts";
+  import { unlockCaptureSound } from "#lib/captureSound.ts";
+  import { acceleratorFromKeyboardEvent } from "#lib/shortcutRecording.ts";
+  import { update } from "#lib/updateState.svelte.ts";
 
   let recordingShortcut = $state<string | null>(null);
   // Resolved from the backend (see UpdateState.loadTransition); null until it

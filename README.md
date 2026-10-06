@@ -134,6 +134,14 @@ If your saved preferences ever reset on their own, the log (and a startup
 notification) will say why, and the previous settings file is preserved next to
 the current one as `capture-settings.invalid-*.json`.
 
+At startup, ScreenPick moves any saved-document folder that its index does not
+list into `documents/recovered/<id>` inside the app data directory instead of
+deleting it. Each such folder holds `base.png` (the original capture),
+`current.png` (the capture with its annotations) and `annotations.json`. Nothing
+removes this folder automatically, so you can copy the PNGs out and then delete
+it. The app data directory is `%LOCALAPPDATA%\com.tstone1.screenpick\` on Windows
+and `~/Library/Application Support/com.tstone1.screenpick/` on macOS.
+
 ## Tech stack
 
 - Tauri 2 desktop shell (Rust, `src-tauri/`).

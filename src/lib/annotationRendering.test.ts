@@ -95,7 +95,7 @@ describe("arrowGeometry", () => {
   });
 
   it("omits line and head for a zero-length arrow", () => {
-    expect(arrowGeometry(baseArrow(0), 1)).toEqual({
+    expect(arrowGeometry(baseArrow(0))).toEqual({
       base: { x: 0, y: 0 },
       head: "",
       headPoints: null,
@@ -104,17 +104,19 @@ describe("arrowGeometry", () => {
   });
 
   it("hides the shaft when the arrow is shorter than its head", () => {
-    const geometry = arrowGeometry(baseArrow(8), 1);
+    const geometry = arrowGeometry(baseArrow(8));
 
     expect(geometry.hasLine).toBe(false);
     expect(geometry.headPoints).not.toBeNull();
   });
 
-  it("sizes the head in image coordinates from the current zoom", () => {
-    const geometry: ArrowGeometry = arrowGeometry(baseArrow(100, 4), 2);
+  // The stage and the export share this geometry, so it carries no zoom term:
+  // width 4 gives a 16 x 10.4 head in image pixels at every zoom.
+  it("sizes the head in image pixels from the stroke width alone", () => {
+    const geometry: ArrowGeometry = arrowGeometry(baseArrow(100, 4));
 
-    expect(geometry.base).toEqual({ x: 92, y: 0 });
-    expect(geometry.head).toBe("100,0 92,2.6 92,-2.6");
+    expect(geometry.base).toEqual({ x: 84, y: 0 });
+    expect(geometry.head).toBe("100,0 84,5.2 84,-5.2");
     expect(geometry.hasLine).toBe(true);
   });
 });

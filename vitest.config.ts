@@ -1,6 +1,4 @@
-import { fileURLToPath } from "node:url";
-
-import { svelte } from "@sveltejs/vite-plugin-svelte";
+import { svelte, vitePreprocess } from "@sveltejs/vite-plugin-svelte";
 import { defineConfig } from "vitest/config";
 
 // Vitest config: the Svelte plugin is wired in so `.svelte.ts` rune modules
@@ -10,7 +8,8 @@ import { defineConfig } from "vitest/config";
 // stay fast and Node-only and just need the runes runtime in scope; component
 // tests don't need it either, since none of the components under test import
 // `$app/*` (SvelteKit's own runtime, which the plugin wires up) — only
-// `$lib/*`, which the `resolve.alias` below handles directly. Revisit adding
+// `#lib/*`, a subpath import that package.json's `imports` field resolves
+// with no help from any plugin. Revisit adding
 // the SvelteKit plugin only if a component under test starts needing `$app/*`.
 //
 // Default environment stays "node" — pure-helper and rune-class tests are the
@@ -33,15 +32,11 @@ import { defineConfig } from "vitest/config";
 // proxy is live, so downgrading it to this default fails loudly instead of
 // leaving it green and blind. Read that file before changing anything here.
 export default defineConfig({
-  plugins: [svelte()],
+  // The preprocessor is passed here because there is no svelte.config.js for the
+  // plugin to read it from: SvelteKit 3 moved that configuration into
+  // vite.config.js, which this harness deliberately does not load.
+  plugins: [svelte({ preprocess: vitePreprocess() })],
   resolve: {
-    // Without the SvelteKit plugin (deliberately skipped above), `$lib` isn't
-    // resolved automatically — components under test import it directly
-    // (`$lib/editor.svelte`, etc.), so alias it straight at the source dir
-    // rather than pull in the full plugin just for this one alias.
-    alias: {
-      $lib: fileURLToPath(new URL("./src/lib", import.meta.url))
-    },
     // Vitest's default Node/SSR module resolution otherwise picks Svelte's
     // *server* runtime (`svelte/internal/server`), whose `mount()` throws
     // "not available on the server" — components need the client runtime

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
 
-  import { commands } from "$lib/bindings";
+  import { commands } from "#lib/bindings.ts";
 
   type Point = {
     x: number;

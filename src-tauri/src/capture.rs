@@ -571,6 +571,33 @@ pub(crate) fn open_screen_recording_settings() -> Result<(), String> {
     }
 }
 
+// The releases page the update banner points at. The frontend holds the same
+// string as RELEASES_URL in src/lib/updateState.svelte.ts. The command takes no
+// parameter on purpose: the webview must never choose which URL gets opened.
+const RELEASES_URL: &str = "https://github.com/tstone-1/screenpick/releases/latest";
+
+// The webview cannot open external URLs itself: no opener plugin is registered,
+// and without a new-window handler a target="_blank" link does nothing on macOS
+// and opens a bare in-app popup on Windows. The URL is a separate argv entry and
+// never passes through a shell.
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn open_releases_page() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let program = "open";
+    // explorer exits with 1 even when it opened the URL, so only a spawn
+    // failure counts as an error here.
+    #[cfg(target_os = "windows")]
+    let program = "explorer";
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let program = "xdg-open";
+    std::process::Command::new(program)
+        .arg(RELEASES_URL)
+        .spawn()
+        .map(|_| ())
+        .map_err(|err| format!("Could not open the releases page: {err}"))
+}
+
 fn should_skip_window_metadata(app_name: &str, title: &str) -> bool {
     if !cfg!(target_os = "macos") {
         return false;

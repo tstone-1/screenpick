@@ -8,7 +8,19 @@ ScreenPick is an open-source cross-platform screenshot, annotation, and screen u
 
 - Tauri 2 desktop app.
 - Rust backend in `src-tauri/`.
-- Svelte 5 + SvelteKit (static adapter) + TypeScript frontend in `src/`.
+- Svelte 5 + SvelteKit 3 (static adapter) + TypeScript frontend in `src/`.
+  SvelteKit 3 reads its configuration from the `sveltekit({...})` call in
+  `vite.config.js`; there is no `svelte.config.js`. `vitest.config.ts` does not
+  load the SvelteKit plugin and passes the preprocessor to `svelte()` itself.
+- Modules under `src/lib` are imported as `#lib/<file>` with the real extension
+  (`#lib/editor.svelte.ts`, `#lib/bindings.ts`). `#lib/*` is a subpath import in
+  `package.json`'s `imports` field (SvelteKit 3 removed `$lib`), and an
+  `imports` target is not extension-completed the way the old alias was.
+  **Import `.svelte` components by relative path, never through `#lib`:** through
+  `#lib` the tsgo pass of `npm run check` resolves the raw file and types the
+  component as a generic module, so wrong props pass (measured: three errors
+  appeared only for the one component whose callbacks needed its prop types;
+  with relative imports a deliberate wrong prop fails the tsgo pass).
 - Vite build tooling; Vitest for frontend unit tests, `cargo test` for Rust.
 - npm is the JavaScript package manager for this repo.
 - TypeScript 7 is installed as `@typescript/native` (npm alias); TypeScript 6
@@ -57,6 +69,14 @@ ScreenPick is an open-source cross-platform screenshot, annotation, and screen u
 - Keep direct frontend Tauri API imports in small adapter modules (for example
   `editorCommands.ts`), not in orchestration or editor state classes.
 - Keep UI state and editor interactions in Svelte components unless native access is required.
+- **Annotation geometry is in image pixels on the stage and in the export, with
+  no zoom term.** Stroke widths, arrow heads and seams scale with the zoom on
+  the stage, as text does. Do not put `vector-effect: non-scaling-stroke` or a
+  `/ zoom` on anything that is exported: until 26.10.0 strokes kept their screen
+  size at every zoom, so a 4 px pen on a capture shown at 25% covered 16 image
+  pixels on the stage and exported at 4. Only editor chrome that is never
+  exported (the blur outline, selection and crop frames) keeps a constant
+  screen size.
 - Support macOS and Windows as first-class targets.
 - Use ASCII-only console output in scripts and app diagnostics.
 - On Windows, `cargo test` excludes the GUI modules (they are gated
@@ -243,6 +263,14 @@ ScreenPick is an open-source cross-platform screenshot, annotation, and screen u
 
   `#pendingCreates` is keyed by capture path because rapid captures overlap;
   creation of one capture must not release another capture's operation.
+
+- **A drag or erase gesture must schedule a save when it ends.** Saving is
+  scheduled by `#recordHistory`, and a gesture records history once, at its
+  first change. A gesture that outlasts the 500 ms debounce therefore persists
+  its mid-gesture state, and nothing writes the end state. No log line
+  appears, because no save fails. Any new gesture that changes `annotations`
+  after its first history entry needs the same end-of-gesture save, and a test
+  that spans the debounce inside one gesture.
 
 - Startup quarantines unindexed document folders under `documents/recovered/`.
   A valid index can be a replacement written after corruption recovery, so its

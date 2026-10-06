@@ -6,6 +6,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [CalVer](https://calver.org/) `YY.M.MICRO` versioning
 (see [BUILD.md](BUILD.md#version-management)).
 
+## [26.10.0] - 2026-10-06
+
+### Fixed
+
+- Dragging an annotation, or erasing several annotations in one stroke, for
+  longer than half a second now saves the final result. Before, the saved
+  screenshot kept the position from half a second into the drag, or still
+  contained the annotations erased later in the stroke, until the next edit.
+- Closing a capture immediately after taking it no longer leaves a document
+  behind that reappears at the next start.
+- The "Download from GitHub" and release-notes links in the update notice open
+  the releases page in the default browser. Before, they did nothing on macOS
+  and opened a bare in-app window on Windows.
+- Keyboard shortcuts such as Ctrl+Z and Delete keep working after using a
+  slider, checkbox or color control in the tool panel.
+- A screenshot whose saved annotations contain a shape with a negative size or
+  a pen stroke with a single point now opens and exports; the invalid
+  annotation is dropped.
+
+### Changed
+
+- Pen strokes, arrows, shape outlines and cut seams on the editing stage now
+  scale with the zoom, as text already did, so the stage shows the thickness the
+  exported image will have. Exported images are unchanged. A stroke on a
+  zoomed-out capture looks thinner on the stage than before.
+- A global shortcut can only be recorded without a modifier for the function
+  keys and Print Screen. A bare punctuation or arrow key is no longer accepted;
+  shortcuts already saved are not changed.
+- The diagnostic log keeps up to 1 MB per file and the last three files instead
+  of a single 40 KB file.
+- A failed capture is written to the diagnostic log with the call that failed.
+- The public-safe push check also applies the commit-message rules of the shared
+  policy to pushed commits and tags, and scans UTF-16 text files.
+- Updated to SvelteKit 3 and adapter-static 4, and to Tauri 2.12.1 with its
+  plugins. SvelteKit's configuration moved from `svelte.config.js` into
+  `vite.config.js`, and library modules are imported through the `#lib` subpath
+  import instead of the removed `$lib` alias. The `cookie` override is gone;
+  SvelteKit 3 depends on a fixed version directly.
+- CI compiles the Windows capture code on every push, the release workflow runs
+  `cargo audit`, and both workflows pin third-party actions to commit hashes.
+
 ## [26.9.3] - 2026-09-25
 
 ### Fixed

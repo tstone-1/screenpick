@@ -78,9 +78,10 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 
 const { logError } = await import("./diagnosticsLog");
 
-// The class lives in a .svelte.ts file but its behavior is testable here:
-// vitest runs through Vite with the Svelte plugin so $state/$derived are
-// real reactivity in this environment.
+// The class lives in a .svelte.ts file but its logic is testable here: under
+// this file's default `node` environment the module compiles in SSR mode, where
+// `$state` is a plain value and `$derived` is computed on read. There is no
+// proxy and no reactive tracking, so a test here cannot observe either.
 const { CaptureOrchestration } = await import("./captureOrchestration.svelte");
 // The settings/shortcut half of the old class now lives in its own store,
 // composed as `orchestration.settingsStore` — its own suite is

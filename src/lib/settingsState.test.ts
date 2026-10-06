@@ -40,9 +40,10 @@ vi.mock("./editorCommands", () => ({
   pickDirectory: vi.fn()
 }));
 
-// The store lives in a .svelte.ts file but its behavior is testable here:
-// vitest runs through Vite with the Svelte plugin so $state/$derived are
-// real reactivity in this environment.
+// The store lives in a .svelte.ts file but its logic is testable here: under
+// this file's default `node` environment the module compiles in SSR mode, where
+// `$state` is a plain value and `$derived` is computed on read. There is no
+// proxy and no reactive tracking, so a test here cannot observe either.
 const { SettingsState, sanitizeShortcutOverrides } = await import("./settingsState.svelte");
 const { statusLine } = await import("./statusLine.svelte");
 

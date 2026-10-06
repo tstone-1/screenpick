@@ -263,7 +263,7 @@ export async function copyCaptureImage(
 }
 
 // Start a native OS drag of one or more Recent captures so they can be dropped
-// into other apps (a Claude Code session, a chat, Explorer) as real image
+// into other apps (a chat, an editor, Explorer) as real image
 // files. Drags each capture's flattened `current.png` (annotations baked in,
 // matching copy/export).
 //

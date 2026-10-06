@@ -9,7 +9,7 @@
     Trash2
   } from "@lucide/svelte";
 
-  import ColorPicker from "$lib/ColorPicker.svelte";
+  import ColorPicker from "./ColorPicker.svelte";
   import {
     editor,
     BLUR_RADIUS_MAX,
@@ -33,8 +33,8 @@
     TEXT_BACKGROUND_OPACITY_STEP,
     TEXT_FONT_SIZE_MAX,
     TEXT_FONT_SIZE_MIN
-  } from "$lib/editor.svelte";
-  import { statusLine } from "$lib/statusLine.svelte";
+  } from "#lib/editor.svelte.ts";
+  import { statusLine } from "#lib/statusLine.svelte.ts";
 
   // Stated as the exceptions rather than as a list of the eleven tools that do
   // have a panel: a tool added to the `Tool` union without a matching case used

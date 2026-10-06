@@ -10,6 +10,8 @@
 import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
 import { relaunch as relaunchApp } from "@tauri-apps/plugin-process";
 
+import { commands } from "./bindings";
+
 // What the UI needs from a pending update. The plugin's own `Update` object
 // carries a live handle (it owns the download), so it is passed back opaquely
 // rather than reconstructed.
@@ -70,4 +72,12 @@ export async function checkForUpdates(): Promise<PendingUpdate | null> {
 // effectively macOS-only in practice — it must never be the thing that throws.
 export function relaunch(): Promise<void> {
   return relaunchApp();
+}
+
+// Open the releases page in the system browser. The webview cannot open
+// external URLs itself (no opener plugin is registered: on macOS an anchor with
+// target="_blank" does nothing, on Windows it opens a bare in-app popup), so the
+// backend owns the launch. Resolves to the command's own ok/error result.
+export function openReleasesPage() {
+  return commands.openReleasesPage();
 }

@@ -155,21 +155,15 @@ pub(crate) fn is_valid_doc_id(id: &str) -> bool {
 /// The caller quarantines these folders: a healthy replacement manifest may
 /// follow an earlier recovery, so absence is never evidence that deletion is safe.
 ///
-/// - `manifest_load_failed` — a manifest that could not be read or parsed, as
-///   distinct from one that is legitimately empty — returns nothing at all. A
-///   manifest we cannot read is not evidence about any folder, and reading it
-///   as an empty list would condemn every document the user has.
-/// - a name that is not a valid document id is never returned. `is_valid_doc_id`
-///   is reused rather than a looser `doc-*` glob, so the sweep can only ever
-///   name a folder `create_document` could itself have created.
+/// A name that is not a valid document id is never returned. `is_valid_doc_id`
+/// is reused rather than a looser `doc-*` glob, so the quarantine can only ever
+/// name a folder `create_document` could itself have created. A manifest that
+/// could not be read must not reach this function; the caller returns its
+/// recovery first, because an unreadable manifest is not evidence about any folder.
 pub(crate) fn orphan_document_folders(
     folder_names: &[String],
     manifest_ids: &[String],
-    manifest_load_failed: bool,
 ) -> Vec<String> {
-    if manifest_load_failed {
-        return Vec::new();
-    }
     let known: HashSet<&str> = manifest_ids.iter().map(String::as_str).collect();
     folder_names
         .iter()
@@ -217,7 +211,7 @@ pub(crate) fn quarantine_unindexed_documents(
         .iter()
         .map(|meta| meta.id.clone())
         .collect::<Vec<_>>();
-    for id in orphan_document_folders(&folders, &ids, false) {
+    for id in orphan_document_folders(&folders, &ids) {
         match quarantine_document(root, &id) {
             Ok(()) => log::warn!("preserved unindexed document {id} in documents/recovered"),
             Err(err) => log::warn!("could not quarantine unindexed document {id}: {err}"),
@@ -519,7 +513,59 @@ mod tests {
             fs::read(recovered.join("base.png")).unwrap(),
             b"original image"
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    // The folder exists, so a missing source cannot explain the error: only the
+    // id check stands between this call and a rename out of the documents root.
+    #[test]
+    fn quarantine_refuses_an_id_that_escapes_the_root() {
+        let base = temp_dir_for("quarantine-traversal");
+        let root = base.join("documents");
+        let outside = base.join("outside");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("keep.txt"), b"keep").unwrap();
+
         assert!(quarantine_document(&root, "../outside").is_err());
+
+        assert_eq!(fs::read(outside.join("keep.txt")).unwrap(), b"keep");
+        assert!(!root.join("outside").exists());
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    // A recovery target that already exists is never overwritten or merged into.
+    #[test]
+    fn quarantine_does_not_touch_an_existing_recovery_target() {
+        let root = temp_dir_for("quarantine-existing-target");
+        let source = root.join("doc-5-1");
+        let target = root.join("recovered").join("doc-5-1");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("base.png"), b"new").unwrap();
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("base.png"), b"earlier").unwrap();
+
+        // The message is asserted because the OS refuses a rename onto a
+        // non-empty directory on its own; only the guard says "already exists".
+        let err = quarantine_document(&root, "doc-5-1").unwrap_err();
+        assert!(err.contains("already exists"), "unexpected error: {err}");
+
+        assert_eq!(fs::read(target.join("base.png")).unwrap(), b"earlier");
+        assert_eq!(fs::read(source.join("base.png")).unwrap(), b"new");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    // Without an index the store cannot tell what is unindexed, so nothing moves.
+    #[test]
+    fn quarantine_moves_nothing_when_there_is_no_index() {
+        let root = temp_dir_for("quarantine-no-index");
+        fs::create_dir_all(root.join("doc-6-1")).unwrap();
+        fs::write(root.join("doc-6-1").join("base.png"), b"img").unwrap();
+
+        assert!(quarantine_unindexed_documents(&root).unwrap().is_none());
+
+        assert!(root.join("doc-6-1").join("base.png").is_file());
+        assert!(!root.join("recovered").exists());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -702,18 +748,18 @@ mod tests {
         let folders = names(&["doc-1-1", "doc-2-1", "doc-3-1"]);
         let manifest = names(&["doc-2-1"]);
 
-        let orphans = orphan_document_folders(&folders, &manifest, false);
+        let orphans = orphan_document_folders(&folders, &manifest);
 
         assert_eq!(orphans, names(&["doc-1-1", "doc-3-1"]));
         assert!(
             !orphans.contains(&"doc-2-1".to_string()),
-            "a folder the manifest still references must never be swept"
+            "a folder the manifest still references must never be quarantined"
         );
     }
 
-    // The sweep deletes what it returns, so anything that isn't shaped exactly
-    // like a document id has to be invisible to it — including the manifest
-    // itself and the files a corruption recovery leaves beside it.
+    // The quarantine moves what this returns, so anything that isn't shaped
+    // exactly like a document id has to be invisible to it, including the
+    // manifest itself and the files a corruption recovery leaves beside it.
     #[test]
     fn orphan_sweep_ignores_names_that_are_not_document_ids() {
         let folders = names(&[
@@ -726,30 +772,20 @@ mod tests {
         ]);
 
         assert_eq!(
-            orphan_document_folders(&folders, &[], false),
+            orphan_document_folders(&folders, &[]),
             names(&["doc-1-1"]),
-            "only the well-formed document id is a sweep candidate"
+            "only the well-formed document id is a quarantine candidate"
         );
     }
 
-    // A manifest that could not be read says nothing about any folder. Read as
-    // an empty list it would condemn every document the user owns, which is why
-    // the load-failure flag is a parameter here and not the caller's judgement.
+    // A manifest that loaded but is empty leaves every folder unindexed. A
+    // manifest that could not be read never reaches this function:
+    // quarantine_unindexed_documents returns the recovery before listing folders.
     #[test]
-    fn orphan_sweep_deletes_nothing_when_the_manifest_could_not_be_loaded() {
+    fn orphan_sweep_names_every_folder_for_an_empty_loaded_manifest() {
         let folders = names(&["doc-1-1", "doc-2-1"]);
 
-        assert!(
-            orphan_document_folders(&folders, &[], true).is_empty(),
-            "a failed manifest load must never produce deletions"
-        );
-        // Control: the identical inputs with a SUCCESSFUL load do produce them,
-        // so the assertion above is about the flag and not about the fixture.
-        assert_eq!(
-            orphan_document_folders(&folders, &[], false),
-            folders,
-            "an empty manifest that really loaded leaves every folder orphaned"
-        );
+        assert_eq!(orphan_document_folders(&folders, &[]), folders);
     }
 
     #[test]

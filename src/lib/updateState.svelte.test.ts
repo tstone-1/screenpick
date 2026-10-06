@@ -7,7 +7,8 @@ import type { PendingUpdate } from "./updaterCommands";
 // is what lets the state machine be tested without a Tauri runtime.
 vi.mock("./updaterCommands", () => ({
   checkForUpdates: vi.fn(),
-  relaunch: vi.fn()
+  relaunch: vi.fn(),
+  openReleasesPage: vi.fn()
 }));
 
 // Logging is fire-and-forget over IPC and would reject under jsdom.
@@ -21,12 +22,13 @@ vi.mock("./bindings", () => ({
   events: { updateCheckRequested: { listen: vi.fn() } }
 }));
 
-const { checkForUpdates, relaunch } = await import("./updaterCommands");
+const { checkForUpdates, relaunch, openReleasesPage } = await import("./updaterCommands");
 const { commands, events } = await import("./bindings");
 const { logError, logWarn } = await import("./diagnosticsLog");
 
 const checkMock = vi.mocked(checkForUpdates);
 const relaunchMock = vi.mocked(relaunch);
+const openReleasesMock = vi.mocked(openReleasesPage);
 const transitionMock = vi.mocked(commands.updateTransition);
 const listenMock = vi.mocked(events.updateCheckRequested.listen);
 
@@ -279,5 +281,43 @@ describe("UpdateState.loadTransition", () => {
 
     expect(state.currentVersion).toBeNull();
     expect(state.justUpdated).toBe(false);
+  });
+});
+
+describe("UpdateState.openReleases", () => {
+  it("leaves the phase alone when the page opens", async () => {
+    openReleasesMock.mockResolvedValue({ status: "ok", data: null });
+    const state = new UpdateState();
+    state.phase = { kind: "available", version: "26.8.0", notes: null };
+
+    await state.openReleases();
+
+    expect(openReleasesMock).toHaveBeenCalledTimes(1);
+    expect(state.phase.kind).toBe("available");
+  });
+
+  it.each([
+    ["the command reports an error", () => openReleasesMock.mockResolvedValue({ status: "error", error: "no browser" })],
+    ["the command throws", () => openReleasesMock.mockRejectedValue(new Error("ipc down"))]
+  ])("shows an error with the address when %s", async (_name, arrange) => {
+    arrange();
+    const state = new UpdateState();
+    state.phase = { kind: "error", message: "Couldn't install 26.8.0. Download it manually instead." };
+
+    await state.openReleases();
+
+    expect(state.phase.kind).toBe("error");
+    expect((state.phase as { message: string }).message).toContain("github.com/tstone-1/screenpick/releases");
+    expect(logError).toHaveBeenCalled();
+  });
+
+  it("does not overwrite a running download with the error", async () => {
+    openReleasesMock.mockResolvedValue({ status: "error", error: "no browser" });
+    const state = new UpdateState();
+    state.phase = { kind: "downloading", version: "26.8.0", downloaded: 1, total: 10 };
+
+    await state.openReleases();
+
+    expect(state.phase.kind).toBe("downloading");
   });
 });

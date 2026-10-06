@@ -535,6 +535,18 @@ export class EditorState {
   // subsequent saves/lookups line up. If annotations were drawn during the
   // create window, persist them now.
   #attachDocumentIdentity(original: RecentCapture, record: DocumentRecord) {
+    // The capture may have been closed (or evicted from the strip) while the
+    // create round trip was in flight. closeDocument could not delete anything
+    // then, because the capture had no documentId yet, so the record that just
+    // arrived belongs to nobody and would reappear at the next launch.
+    const stillOpen = this.document?.capture.path === original.path;
+    const inRecents = this.#documentStore.recentCaptures.some(
+      (capture) => capture.path === original.path
+    );
+    if (!stillOpen && !inRecents) {
+      this.#documentStore.discardDocument({ ...original, documentId: record.id });
+      return;
+    }
     if (!this.#createdIdentities.has(original.path)) {
       this.#createdIdentities.set(original.path, {
         documentId: record.id, currentPath: record.currentPath
@@ -636,7 +648,14 @@ export class EditorState {
     const capture = this.document?.capture;
     const annotations = this.annotations;
     const pendingCreate = capture && this.#pendingCreates.has(capture.path);
-    const needsSave = this.#saveTimer || (pendingCreate && annotations.length > 0);
+    // A drag or erase still in progress has changed the annotations since its
+    // one history entry, possibly after the debounce already fired, so it
+    // counts as pending work even with no timer armed (a capture hotkey can
+    // switch documents mid-gesture).
+    const gestureMoved =
+      this.selectionDrag?.historyRecorded === true || this.eraserDrag?.historyRecorded === true;
+    const needsSave =
+      this.#saveTimer || gestureMoved || (pendingCreate && annotations.length > 0);
     if (this.#saveTimer) clearTimeout(this.#saveTimer);
     this.#saveTimer = null;
     if (!capture || !needsSave) return;
@@ -1642,16 +1661,27 @@ export class EditorState {
   finishSelectionDrag(event: PointerEvent) {
     if (!this.selectionDrag || this.activeTool !== "select") return;
     this.imageFrame?.releasePointerCapture(event.pointerId);
-    this.selectionDrag = null;
+    this.#endSelectionDrag();
   }
 
   cancelSelectionDrag() {
-    this.selectionDrag = null;
+    this.#endSelectionDrag();
   }
 
   clearSelection() {
     this.selectedAnnotationId = null;
+    this.#endSelectionDrag();
+  }
+
+  // History is recorded once, on the first move, and that is the only point
+  // that arms the save debounce. A drag longer than the debounce persists its
+  // mid-gesture state and then keeps moving the annotation with no timer armed,
+  // so every way a moved drag ends must schedule one more save for the final
+  // position.
+  #endSelectionDrag() {
+    const moved = this.selectionDrag?.historyRecorded === true;
     this.selectionDrag = null;
+    if (moved) this.#scheduleDocumentSave();
   }
 
   // Select a freshly placed annotation and switch to the select tool, so the
@@ -1807,12 +1837,20 @@ export class EditorState {
   finishErase(event: PointerEvent) {
     if (this.activeTool !== "erase") return;
     this.imageFrame?.releasePointerCapture(event.pointerId);
-    this.eraserDrag = null;
+    this.#endEraseDrag();
   }
 
   cancelErase() {
-    this.eraserDrag = null;
+    this.#endEraseDrag();
     this.eraserPointer = null;
+  }
+
+  // Same shape as #endSelectionDrag: only the first removal arms the debounce,
+  // so a gesture that erased anything schedules a save for its final state.
+  #endEraseDrag() {
+    const erased = this.eraserDrag?.historyRecorded === true;
+    this.eraserDrag = null;
+    if (erased) this.#scheduleDocumentSave();
   }
 
   clearEraserPointer() {
@@ -1925,8 +1963,8 @@ export class EditorState {
     return buildStrokePath(stroke);
   }
 
-  arrowGeometry(arrow: ArrowAnnotation, zoomOverride?: number): ArrowGeometry {
-    return buildArrowGeometry(arrow, zoomOverride ?? this.document?.zoom ?? 1);
+  arrowGeometry(arrow: ArrowAnnotation): ArrowGeometry {
+    return buildArrowGeometry(arrow);
   }
 
   cutPreviewSeamPoints(band: CropRect, edge: "start" | "end"): Point[] {

@@ -433,9 +433,10 @@ export class DocumentStore {
     }
   }
 
-  // Upgrade every `recentCaptures` entry matched by `matches` (typically an
-  // object-identity check against the pre-identity in-memory capture) via
-  // `upgrade`. Used by EditorState's #attachDocumentIdentity, which also has to
+  // Upgrade every `recentCaptures` entry matched by `matches` via `upgrade`.
+  // Callers must match on a stable key such as `path`, never by object identity:
+  // entries read back out of `$state` are proxies, so `===` against the original
+  // object never holds in the running app. Used by EditorState's #attachDocumentIdentity, which also has to
   // upgrade its own `document`/`currentCapture` fields with the same closures.
   upgradeRecentCapture(
     matches: (capture: RecentCapture) => boolean,

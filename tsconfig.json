@@ -1,6 +1,9 @@
 {
-  "extends": "./.svelte-kit/tsconfig.json",
+  "extends": "$app/tsconfig",
+  "include": ["src", "test", "*"],
+  "exclude": ["src/service-worker"],
   "compilerOptions": {
+    "allowImportingTsExtensions": true,
     "allowJs": true,
     "checkJs": true,
     "esModuleInterop": true,
@@ -11,9 +14,9 @@
     "strict": true,
     "moduleResolution": "bundler"
   }
-  // Path aliases are handled by https://svelte.dev/docs/kit/configuration#alias
-  // except $lib which is handled by https://svelte.dev/docs/kit/configuration#files
-  //
-  // If you want to overwrite includes/excludes, make sure to copy over the relevant includes/excludes
-  // from the referenced tsconfig.json - TypeScript does not merge them in
+  // SvelteKit 3 requires this file to extend $app/tsconfig and to state
+  // include/exclude itself; TypeScript does not merge them from the base.
+  // `#lib/*` is a subpath import declared in package.json's `imports` field;
+  // it names the real file, extension included (`#lib/editor.svelte.ts`),
+  // which is what allowImportingTsExtensions permits.
 }

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { statusLine } from "$lib/statusLine.svelte";
+  import { statusLine } from "#lib/statusLine.svelte.ts";
   import {
     editor,
     type Annotation,
@@ -11,7 +11,7 @@
     type HighlightAnnotation,
     type PenStroke,
     type ShapeAnnotation
-  } from "$lib/editor.svelte";
+  } from "#lib/editor.svelte.ts";
   import {
     annotationsInPaintOrder,
     annotationGroups,
@@ -19,14 +19,14 @@
     polygonShapePoints,
     CUT_SEAM_CASING_COLOR,
     CUT_SEAM_CASING_EXTRA_WIDTH
-  } from "$lib/annotations";
+  } from "#lib/annotations.ts";
   import {
     cropStyle,
     eraserStyle,
     samplePreviewStyle,
     selectionStyle
-  } from "$lib/editorStyles";
-  import { suppressMiddleClickAutoscroll, targetIsEditable } from "$lib/domUtils";
+  } from "#lib/editorStyles.ts";
+  import { suppressMiddleClickAutoscroll, targetIsEditable } from "#lib/domUtils.ts";
 
   const groups = $derived(annotationGroups([
     ...editor.annotations,
@@ -402,6 +402,7 @@
         {/snippet}
         {#snippet renderBlur(blur: BlurAnnotation)}
           <rect
+            class="blur-outline"
             x={blur.rect.x}
             y={blur.rect.y}
             width={blur.rect.width}
@@ -708,7 +709,6 @@
     fill: none;
     stroke-linecap: round;
     stroke-linejoin: round;
-    vector-effect: non-scaling-stroke;
   }
 
   .cut-seam-layer {
@@ -721,10 +721,13 @@
     pointer-events: none;
   }
 
-  .cut-seam-layer polyline,
-  .annotation-layer line,
-  .annotation-layer rect,
-  .annotation-layer ellipse {
+  /* Annotation strokes are in image pixels and scale with the zoom, exactly as
+     the export draws them (annotationRendering.ts uses the same width as
+     ctx.lineWidth). Do not add non-scaling-stroke to pen, arrow, shape or seam
+     strokes: a stroke that keeps its screen size at a zoom other than 100%
+     exports thinner or thicker than it was drawn. Only editor chrome that is
+     never exported keeps a constant screen width. */
+  .annotation-layer .blur-outline {
     vector-effect: non-scaling-stroke;
   }
 

@@ -30,18 +30,18 @@
     ZoomOut
   } from "@lucide/svelte";
 
-  import { commands } from "$lib/bindings";
-  import { capture, settingsStore } from "$lib/captureOrchestration.svelte";
-  import { statusLine } from "$lib/statusLine.svelte";
-  import { editor, recentThumbnailUrl, type RecentCapture, type Tool } from "$lib/editor.svelte";
-  import { confirmDiscard } from "$lib/editorCommands";
-  import { unlockCaptureSound } from "$lib/captureSound";
-  import { update, RELEASES_URL } from "$lib/updateState.svelte";
-  import { listenForExit } from "$lib/shutdown";
-  import { suppressMiddleClickAutoscroll, targetIsEditable } from "$lib/domUtils";
-  import EditorStage from "$lib/EditorStage.svelte";
-  import SettingsPanel from "$lib/SettingsPanel.svelte";
-  import ToolProperties from "$lib/ToolProperties.svelte";
+  import { commands } from "#lib/bindings.ts";
+  import { capture, settingsStore } from "#lib/captureOrchestration.svelte.ts";
+  import { statusLine } from "#lib/statusLine.svelte.ts";
+  import { editor, recentThumbnailUrl, type RecentCapture, type Tool } from "#lib/editor.svelte.ts";
+  import { confirmDiscard } from "#lib/editorCommands.ts";
+  import { unlockCaptureSound } from "#lib/captureSound.ts";
+  import { update } from "#lib/updateState.svelte.ts";
+  import { listenForExit } from "#lib/shutdown.ts";
+  import { suppressMiddleClickAutoscroll, targetIsEditable } from "#lib/domUtils.ts";
+  import EditorStage from "../lib/EditorStage.svelte";
+  import SettingsPanel from "../lib/SettingsPanel.svelte";
+  import ToolProperties from "../lib/ToolProperties.svelte";
 
   type ToolDescriptor = {
     id: Tool;
@@ -572,9 +572,9 @@
           >
             Install and restart
           </button>
-          <a class="notice-link" href={RELEASES_URL} target="_blank" rel="noreferrer">
+          <button type="button" class="notice-link" onclick={() => void update.openReleases()}>
             Release notes
-          </a>
+          </button>
         {:else if update.phase.kind === "downloading"}
           <!-- `total` is null until the Started event lands, and some servers
                omit the content length entirely — fall back to an indeterminate
@@ -586,9 +586,9 @@
           ></progress>
         {:else if update.phase.kind === "error"}
           <p>{update.phase.message}</p>
-          <a class="notice-link" href={RELEASES_URL} target="_blank" rel="noreferrer">
+          <button type="button" class="notice-link" onclick={() => void update.openReleases()}>
             Download from GitHub
-          </a>
+          </button>
         {/if}
       </div>
     {/if}
@@ -1177,11 +1177,16 @@
   }
 
   .notice-link {
+    padding: 0;
+    border: 0;
     color: #1c7c6d;
+    font: inherit;
     font-size: 11px;
     font-weight: 600;
     text-align: center;
     text-decoration: none;
+    background: none;
+    cursor: pointer;
   }
 
   .notice-link:hover {

@@ -4,8 +4,8 @@
   // picker (native OS color wheel + hex entry) and a recents row, so users are
   // no longer limited to the five presets. Defaults to the global `penColor`;
   // call sites can pass a value/change target for selected annotations.
-  import { normalizeHexColor } from "$lib/annotations";
-  import { editor, PEN_COLORS } from "$lib/editor.svelte";
+  import { normalizeHexColor } from "#lib/annotations.ts";
+  import { editor, PEN_COLORS } from "#lib/editor.svelte.ts";
 
   type ColorPickerProps = {
     label: string;

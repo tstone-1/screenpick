@@ -21,10 +21,9 @@ import {
   type TextAnnotation
 } from "./annotations";
 import { loadImage } from "./editorCommands";
-// Type-only: erased at compile time, so this does NOT reintroduce the
-// editor<->annotationRendering runtime cycle N3 removed (the constants above
-// used to come from here, which did create a runtime cycle).
-import type { RecentCapture } from "./editor.svelte";
+// Type-only: erased at compile time, so this adds no runtime import and cannot
+// form a cycle with the editor. The type is declared in the document store.
+import type { RecentCapture } from "./documentStore.svelte";
 
 const ARROW_HEAD_MIN_LENGTH = 12;
 const ARROW_HEAD_MIN_WIDTH = 8;
@@ -80,7 +79,9 @@ export function strokePath(stroke: PenStroke): string {
   return rest.reduce((path, point) => `${path} L ${point.x} ${point.y}`, `M ${first.x} ${first.y}`);
 }
 
-export function arrowGeometry(arrow: ArrowAnnotation, zoom: number): ArrowGeometry {
+// Head and shaft are sized in image pixels, with no zoom term: the stage SVG
+// and the export both draw this geometry, and they must agree at every zoom.
+export function arrowGeometry(arrow: ArrowAnnotation): ArrowGeometry {
   const dx = arrow.end.x - arrow.start.x;
   const dy = arrow.end.y - arrow.start.y;
   const length = Math.hypot(dx, dy);
@@ -96,9 +97,9 @@ export function arrowGeometry(arrow: ArrowAnnotation, zoom: number): ArrowGeomet
   const ux = dx / length;
   const uy = dy / length;
   const headLength =
-    Math.max(ARROW_HEAD_MIN_LENGTH, arrow.width * ARROW_HEAD_LENGTH_PER_WIDTH) / zoom;
+    Math.max(ARROW_HEAD_MIN_LENGTH, arrow.width * ARROW_HEAD_LENGTH_PER_WIDTH);
   const headWidth =
-    Math.max(ARROW_HEAD_MIN_WIDTH, arrow.width * ARROW_HEAD_WIDTH_PER_WIDTH) / zoom;
+    Math.max(ARROW_HEAD_MIN_WIDTH, arrow.width * ARROW_HEAD_WIDTH_PER_WIDTH);
   const baseX = arrow.end.x - ux * headLength;
   const baseY = arrow.end.y - uy * headLength;
   const perpX = -uy;
@@ -278,7 +279,7 @@ function drawErase(ctx: CanvasRenderingContext2D, erase: EraseStroke) {
 }
 
 function drawArrow(ctx: CanvasRenderingContext2D, arrow: ArrowAnnotation) {
-  const geometry = arrowGeometry(arrow, 1);
+  const geometry = arrowGeometry(arrow);
   ctx.save();
   ctx.strokeStyle = arrow.color;
   ctx.fillStyle = arrow.color;

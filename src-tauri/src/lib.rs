@@ -190,6 +190,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             capture::capture_active_window,
             capture::screen_recording_access,
             capture::open_screen_recording_settings,
+            capture::open_releases_page,
             documents::list_documents,
             documents::create_document,
             documents::replace_document_base,
@@ -376,6 +377,11 @@ pub fn run() {
                     }),
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stderr),
                 ])
+                // The plugin default is 40,000 bytes and one kept file. A save
+                // that fails in a loop must not rotate away its own first
+                // occurrence, so allow 1 MB per file and keep a few old ones.
+                .max_file_size(1_000_000)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(3))
                 .level(if cfg!(debug_assertions) {
                     log::LevelFilter::Debug
                 } else {
@@ -450,12 +456,12 @@ pub fn run() {
             // default $APPCACHE asset scope — widen it so the editor can render
             // each document's base/current image.
             documents::extend_asset_scope(app.handle());
-            // Sweep document folders no manifest entry references (a
-            // create_document that failed before appending its entry). Startup
-            // only; it reads the manifest through the same corruption-recovery
-            // path the commands use and refuses to delete anything unless that
-            // read succeeded — see the safety rules on the function.
-            documents::sweep_orphan_document_folders(app.handle());
+            // Move document folders no manifest entry references (a
+            // create_document that failed before appending its entry) into
+            // documents/recovered. Startup only; nothing is deleted, and the
+            // manifest is read through the same corruption-recovery path the
+            // commands use, so an unreadable manifest quarantines nothing.
+            documents::quarantine_unindexed_document_folders(app.handle());
 
             #[cfg(desktop)]
             shortcuts::register_shortcuts_with_settings(app, &settings);

@@ -4,17 +4,34 @@
 // `eventTargetIsEditable` did before this module existed (N2 in the 2026-07
 // code review: same intent, two slightly different implementations).
 
-// Whether `target` is inside an editable field (a text input/textarea, or a
-// contenteditable element) — used to bail out of keyboard shortcuts and tool
-// pointer handlers while the user is typing, so typing never triggers a
-// shortcut or gesture. `instanceof HTMLElement` guards the
+// Input types that take typed text. Every other input (range, checkbox, radio,
+// color, button, file, ...) keeps focus after a click or drag but consumes no
+// typing, so treating it as editable would leave Ctrl+Z, Delete and Space-pan
+// dead until focus moved elsewhere. An empty or unknown type attribute is a
+// text field by the HTML default, and `HTMLInputElement.type` already reports
+// that as "text".
+const TEXT_ENTRY_INPUT_TYPES = new Set([
+  "text",
+  "search",
+  "url",
+  "tel",
+  "email",
+  "password",
+  "number"
+]);
+
+// Whether `target` is inside an editable field (a text-entry input, textarea,
+// select, or a contenteditable element) — used to bail out of keyboard
+// shortcuts and tool pointer handlers while the user is typing, so typing never
+// triggers a shortcut or gesture. `instanceof HTMLElement` guards the
 // `isContentEditable` read so a non-HTMLElement EventTarget (rare, but the
 // type allows it) can't throw.
 export function targetIsEditable(target: EventTarget | null): boolean {
+  if (target instanceof HTMLInputElement) return TEXT_ENTRY_INPUT_TYPES.has(target.type);
   return (
-    target instanceof HTMLInputElement ||
     target instanceof HTMLTextAreaElement ||
-    (target instanceof HTMLElement && target.isContentEditable)
+    target instanceof HTMLSelectElement ||
+    (target instanceof HTMLElement && target.isContentEditable === true)
   );
 }
 
