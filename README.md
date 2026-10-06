@@ -1,12 +1,15 @@
 # ScreenPick
 
-A fast, cross-platform screenshot, annotation, and screen-capture utility for
-**macOS and Windows**. Capture a region, a window, or a whole display; mark it up
-in a built-in editor; and copy it to the clipboard or save it to disk — all from
-a small tray app driven by global shortcuts.
+**Screenshot capture and annotation for Windows and macOS.** Press a shortcut,
+select a region, a window or a display, mark it up, and copy it.
 
-Built with [Tauri 2](https://v2.tauri.app/) (Rust) and
-[Svelte 5](https://svelte.dev/).
+![Selecting a region, adding an arrow, blurring a key and copying the result](docs/media/screenpick-demo.gif)
+
+**[Download for Windows or macOS](https://github.com/tstone-1/screenpick/releases/latest)**
+&nbsp;·&nbsp; free and open source &nbsp;·&nbsp; no account &nbsp;·&nbsp; no telemetry
+
+ScreenPick is a small tray app. It stays out of the way until a shortcut calls
+it, and the only network request it makes is the check for a new version.
 
 ## Features
 
@@ -86,10 +89,14 @@ payload itself, on both platforms.
 - **Turn it off:** Settings → *Check for updates at startup*. Manual checks
   still work. The automatic check contacts GitHub, which is the only network
   request ScreenPick makes.
-- **Installed a version before 26.7.6?** Those builds have no updater. Install
-  the latest release manually once; updates are automatic after that.
 - **Windows portable `.exe`:** cannot self-update — download a new one, or use
   the installer.
+
+<details>
+<summary>Coming from a version <b>before 26.7.6</b>?</summary>
+
+- Those builds have no updater. Install the latest release manually once;
+  updates are automatic after that.
 - **macOS Screen Recording permission across updates:** signed builds keep it.
   Unsigned builds did not — macOS treated every update as a different app and
   silently dropped the grant. **Updating *to* 26.7.6 breaks it one last time**,
@@ -98,6 +105,8 @@ payload itself, on both platforms.
   Privacy & Security → Screen & System Audio Recording**, **remove ScreenPick
   from the list and add it again** — the switch often still looks enabled.
   ScreenPick shows a banner explaining this when it detects the situation.
+
+</details>
 
 ## Command line
 
@@ -183,8 +192,8 @@ and `~/Library/Application Support/com.tstone1.screenpick/` on macOS.
 
 ## Tech stack
 
-- Tauri 2 desktop shell (Rust, `src-tauri/`).
-- Svelte 5 + SvelteKit + TypeScript frontend (`src/`).
+- [Tauri 2](https://v2.tauri.app/) desktop shell (Rust, `src-tauri/`).
+- [Svelte 5](https://svelte.dev/) + SvelteKit + TypeScript frontend (`src/`).
 - Vite for bundling, Vitest for frontend unit tests, `cargo test` for Rust.
 - Typed IPC between Rust and the frontend via `tauri-specta` (Rust is the source
   of truth for command and event shapes).
