@@ -277,6 +277,32 @@ ScreenPick is an open-source cross-platform screenshot, annotation, and screen u
   omission of an old folder never proves that deleting the folder is safe.
   Recovery tests must span corruption, a new capture, and a later startup.
 
+## Command line
+
+`cli.rs` parses (pure, tested on Windows too); `run()` and `cli_capture.rs` act.
+The user-facing description is the README's *Command line* section.
+
+- **`--output` decides where a capture command runs.** With it, the capture
+  happens in the invoking process before Tauri is built (`run_without_app`), so
+  there is no AppHandle, no settings, no logger and no Recent entry. Without
+  it, the command is a request to the app: a second launch hands its argv to
+  the running process, which emits the same `CaptureShortcut` event a global
+  shortcut does (`handle_second_launch`). That is why `capture window` takes
+  the active window and `capture screen` the display under the cursor.
+- **A cold start cannot use that event**, because no webview listens yet. The
+  mode waits in `StartupCapture` and the frontend collects it with
+  `take_startup_capture` after its listeners exist.
+- **A release build prints nothing to a Windows terminal unless it attaches**
+  (`attach_parent_console`): it is a GUI-subsystem program. Attach only on the
+  paths that print, never on a normal launch. A terminal also does not wait for
+  it, so read the exit code through `| Out-Host` or `Start-Process -Wait`.
+- **Driving the app from a script without touching the installed copy:** build
+  with another identifier, `npx tauri build --no-bundle --config <file>` where
+  the file holds `{"identifier":"com.tstone1.screenpick.demo"}`. The identifier
+  keys the data directory and the single-instance lock, so that build has its
+  own settings, an empty Recent list, and does not hand its commands to the
+  installed ScreenPick. The installed copy still owns the global shortcuts.
+
 ## Platform Notes
 
 - On macOS, window capture can enumerate only `Menubar`; this is the top-of-screen menu bar owned by ScreenPick next to the Apple menu.

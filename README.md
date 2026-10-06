@@ -99,6 +99,45 @@ payload itself, on both platforms.
   from the list and add it again** — the switch often still looks enabled.
   ScreenPick shows a banner explaining this when it detects the situation.
 
+## Command line
+
+The installed program also takes commands, so a script, a launcher or a
+stream-deck button can drive it.
+
+```sh
+screenpick capture region        # open the region selector
+screenpick capture window        # capture the active window
+screenpick capture screen        # capture the display under the cursor
+screenpick capture screen-pick   # open the display picker
+```
+
+These do what the mode's global shortcut does, in the running ScreenPick. If it
+is not running, the command starts it in the tray first.
+
+With `--output`, the capture is taken at once, without any window, and written
+to a PNG. ScreenPick does not need to be running, and the capture does not
+appear in Recent:
+
+```sh
+screenpick capture screen --output shot.png
+screenpick capture screen --display 2 --output shot.png
+screenpick capture region --rect 100,200,800,600 --output part.png
+screenpick displays              # the numbers --display takes
+```
+
+`--rect` is `x,y,width,height` from the top-left corner of the display, in the
+units `screenpick displays` prints. An existing output file is replaced. The
+exit code is 0 on success, 1 when the capture failed and 2 when the command
+line is wrong; `screenpick --help` lists everything.
+
+Where the program is:
+
+- **Windows:** `%LOCALAPPDATA%\ScreenPick\screenpick.exe`. It is a window
+  program, so a terminal does not wait for it: in PowerShell, append
+  `| Out-Host` to see the output before the next prompt and to get
+  `$LASTEXITCODE`; in `cmd`, use `start /wait`.
+- **macOS:** `/Applications/ScreenPick.app/Contents/MacOS/screenpick`.
+
 ## Build from source
 
 Prerequisites: [Node.js](https://nodejs.org/) 24+ (with npm) and the

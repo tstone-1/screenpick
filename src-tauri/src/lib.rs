@@ -4,6 +4,7 @@ mod capture_backend;
 mod capture_color;
 mod capture_modes;
 mod capture_trust;
+mod cli;
 mod document_store;
 mod export_validation;
 mod monitor_pairing;
@@ -45,6 +46,8 @@ mod capture;
 // Root lookup only; the policy it feeds is pure and ungated in `capture_trust`.
 #[cfg(not(all(test, target_os = "windows")))]
 mod capture_trust_roots;
+#[cfg(not(all(test, target_os = "windows")))]
+mod cli_capture;
 #[cfg(not(all(test, target_os = "windows")))]
 mod documents;
 // Pure, but every consumer is one of the modules gated above, so leaving it
@@ -169,12 +172,84 @@ fn confirm_exit(app: tauri::AppHandle) {
     finish_shutdown(&app);
 }
 
+// The capture mode a `screenpick capture <mode>` command line asked for when
+// that command also started the app. A running app gets the request as a
+// `CaptureShortcut` event (see `handle_second_launch`); at a cold start no
+// webview is listening yet, so the mode waits here until the frontend collects
+// it with `take_startup_capture`.
+#[cfg(not(all(test, target_os = "windows")))]
+struct StartupCapture(std::sync::Mutex<Option<String>>);
+
+// Called once by the frontend, after its capture listeners exist. Takes the
+// value, so a webview reload cannot repeat the capture.
+#[cfg(not(all(test, target_os = "windows")))]
+#[tauri::command]
+#[specta::specta]
+fn take_startup_capture(state: tauri::State<'_, StartupCapture>) -> Option<String> {
+    state
+        .0
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take()
+}
+
+/// A second launch hands its arguments to the process that is already running.
+/// `capture <mode>` starts that capture the way the mode's global shortcut
+/// does, without touching the window; any other launch shows the window, as
+/// before. Commands that need no running app (`--output`, `displays`, `--help`)
+/// never get here: `run_without_app` ends their process first.
+#[cfg(not(all(test, target_os = "windows")))]
+fn handle_second_launch(app: &tauri::AppHandle, argv: Vec<String>) {
+    use tauri_specta::Event as _;
+
+    match cli::parse(argv.into_iter().skip(1)) {
+        cli::Invocation::Trigger(mode) => {
+            log::info!("capture requested from the command line: {mode}");
+            if let Err(err) = CaptureShortcut(mode).emit(app) {
+                log::warn!("failed to emit the command-line capture event: {err}");
+            }
+        }
+        _ => capture::restore_main_window(app),
+    }
+}
+
+/// Run a command that needs no app and return its exit code, or `None` when
+/// the app has to start (a plain launch, or a capture for the running app).
+#[cfg(not(all(test, target_os = "windows")))]
+fn run_without_app(invocation: &cli::Invocation) -> Option<i32> {
+    let outcome = match invocation {
+        cli::Invocation::Launch | cli::Invocation::Trigger(_) => return None,
+        cli::Invocation::Help => Ok(cli::USAGE.trim_end().to_string()),
+        cli::Invocation::Version => Ok(format!("screenpick {}", env!("CARGO_PKG_VERSION"))),
+        cli::Invocation::Displays => cli_capture::list_displays().map_err(|err| (1, err)),
+        cli::Invocation::Headless(request) => {
+            cli_capture::run_headless(request).map_err(|err| (1, err))
+        }
+        cli::Invocation::UsageError(message) => Err((
+            2,
+            format!("screenpick: {message}\nRun `screenpick --help` for the commands."),
+        )),
+    };
+    cli_capture::attach_parent_console();
+    Some(match outcome {
+        Ok(text) => {
+            println!("{text}");
+            0
+        }
+        Err((code, text)) => {
+            eprintln!("{text}");
+            code
+        }
+    })
+}
+
 #[cfg(not(all(test, target_os = "windows")))]
 fn specta_builder() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new()
         .commands(collect_commands![
             app_status,
             confirm_exit,
+            take_startup_capture,
             capture::list_capture_modes,
             shortcuts::shortcut_status,
             shortcuts::effective_shortcut_accelerators,
@@ -350,6 +425,18 @@ fn notify_settings_reset(app: &tauri::AppHandle, recovery: &settings::SettingsRe
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 #[cfg(not(all(test, target_os = "windows")))]
 pub fn run() {
+    let invocation = cli::parse(std::env::args().skip(1));
+    if let Some(code) = run_without_app(&invocation) {
+        std::process::exit(code);
+    }
+    // Only meaningful when this process becomes the app; a second launch
+    // passes its arguments on and exits inside the single-instance plugin.
+    let startup_capture = match invocation {
+        cli::Invocation::Trigger(mode) => Some(mode),
+        _ => None,
+    };
+    let started_by_capture_command = startup_capture.is_some();
+
     let builder = specta_builder();
 
     tauri::Builder::default()
@@ -357,8 +444,8 @@ pub fn run() {
         // process keeps running and the new one exits after handing us its argv;
         // we surface the already-running window instead of spawning a duplicate
         // (which would fight over the global shortcut and produce a second tray icon).
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            capture::restore_main_window(app);
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            handle_second_launch(app, argv);
         }))
         // File + stderr logging. In a packaged build stderr goes nowhere, so the
         // LogDir target is what makes "it didn't work" diagnosable; Stderr keeps
@@ -406,6 +493,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(ShortcutRegistry::default())
+        .manage(StartupCapture(std::sync::Mutex::new(startup_capture)))
         .manage(RegionPickerSession::default())
         .manage(ScreenPickerSession::default())
         .manage(WindowPickerSession::default())
@@ -476,6 +564,10 @@ pub fn run() {
             // "live in the tray". A manual launch shows the window as usual.
             if launched_hidden(std::env::args(), AUTOSTART_HIDDEN_FLAG) {
                 log::info!("launched at login; staying hidden in the tray");
+            } else if started_by_capture_command {
+                // Same as a shortcut pressed while the app sits in the tray:
+                // the capture decides whether the window comes forward.
+                log::info!("started by a capture command; staying hidden in the tray");
             } else if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.set_focus();

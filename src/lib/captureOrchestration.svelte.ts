@@ -448,6 +448,8 @@ export class CaptureOrchestration {
         uCaptureCompleted();
         uCaptureCancelled();
       };
+
+      await this.#runStartupCapture();
     } catch (error) {
       if (!this.#cancelled) {
         this.settingsStore.shortcutStatus = "Shortcut listener failed";
@@ -455,6 +457,22 @@ export class CaptureOrchestration {
           error instanceof Error ? error.message : "Unable to listen for shortcuts."
         );
       }
+    }
+  }
+
+  // `screenpick capture <mode>` on a command line that also started the app:
+  // Rust holds the mode until the capture listeners above exist, because an
+  // event emitted before that would reach nobody. It behaves as the mode's
+  // shortcut does. A failure here must not be reported as a listener failure,
+  // so it has its own catch.
+  async #runStartupCapture() {
+    try {
+      const mode = await commands.takeStartupCapture();
+      if (mode !== null && !this.#cancelled) {
+        void this.requestCapture(mode, "shortcut");
+      }
+    } catch (error) {
+      logError(`Could not read the startup capture request: ${String(error)}`);
     }
   }
 

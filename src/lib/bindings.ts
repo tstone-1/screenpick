@@ -7,6 +7,7 @@ import * as __TAURI_EVENT from "@tauri-apps/api/event";
 export const commands = {
 	appStatus: () => __TAURI_INVOKE<string>("app_status"),
 	confirmExit: () => __TAURI_INVOKE<void>("confirm_exit"),
+	takeStartupCapture: () => __TAURI_INVOKE<string | null>("take_startup_capture"),
 	listCaptureModes: () => __TAURI_INVOKE<CaptureMode[]>("list_capture_modes"),
 	shortcutStatus: () => __TAURI_INVOKE<ShortcutStatus[]>("shortcut_status"),
 	effectiveShortcutAccelerators: () => __TAURI_INVOKE<{ [key in string]: string[] }>("effective_shortcut_accelerators"),

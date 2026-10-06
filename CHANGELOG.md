@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [CalVer](https://calver.org/) `YY.M.MICRO` versioning
 (see [BUILD.md](BUILD.md#version-management)).
 
+## [26.10.1] - Unreleased
+
+### Added
+
+- Command line. `screenpick capture region`, `window`, `screen` and
+  `screen-pick` start a capture in the running app as the mode's shortcut does,
+  and start the app in the tray first when it is not running.
+  `screenpick capture screen --output <file.png>` and
+  `screenpick capture region --rect <x,y,width,height> --output <file.png>`
+  capture without any window and without the app running; `--display <n>`
+  selects the display and `screenpick displays` lists them. See the README.
+
+### Changed
+
+- Starting ScreenPick with an unknown command word, such as a mistyped
+  `captur`, prints an error and exits with code 2. Before, every argument was
+  ignored and the window opened. Unknown options starting with `-` are still
+  ignored.
+
 ## [26.10.0] - 2026-10-06
 
 ### Fixed

@@ -54,12 +54,12 @@ pub(crate) struct WindowBounds {
 pub(crate) struct CapturableMonitor {
     pub(crate) id: u32,
     pub(crate) name: String,
-    friendly_name: String,
+    pub(crate) friendly_name: String,
     pub(crate) x: i32,
     pub(crate) y: i32,
-    width: u32,
-    height: u32,
-    scale_factor: f32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) scale_factor: f32,
     pub(crate) primary: bool,
 }
 

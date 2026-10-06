@@ -24,6 +24,7 @@ const commandsMock = vi.hoisted(() => ({
   getSettings: vi.fn(),
   updateSettings: vi.fn(),
   autostartEnabled: vi.fn(),
+  takeStartupCapture: vi.fn(),
   startRegionSelection: vi.fn(),
   startWindowSelection: vi.fn(),
   startScreenSelection: vi.fn(),
@@ -168,6 +169,7 @@ beforeEach(() => {
     return { status: "ok", data: settingsHolder.current };
   });
   commandsMock.autostartEnabled.mockResolvedValue({ status: "ok", data: false });
+  commandsMock.takeStartupCapture.mockResolvedValue(null);
 });
 
 describe("startup", () => {
@@ -195,6 +197,78 @@ describe("startup", () => {
       expect(statusLine.message).toContain("startup unavailable");
     });
 
+    cleanup();
+  });
+});
+
+// `screenpick capture <mode>` on the command line that started the app.
+describe("startup capture", () => {
+  const windowShot = {
+    mode: "window",
+    title: "Notes",
+    path: "/captures/w.png",
+    width: 800,
+    height: 600
+  };
+
+  it("runs the requested mode as its shortcut would, once the listeners exist", async () => {
+    commandsMock.takeStartupCapture.mockResolvedValue("window");
+    commandsMock.captureActiveWindow.mockResolvedValue({ status: "ok", data: windowShot });
+    const o = new CaptureOrchestration();
+    const cleanup = o.setup();
+
+    await vi.waitFor(() => {
+      expect(editorMock.ingestCompleted).toHaveBeenCalledWith(windowShot);
+    });
+
+    // The shortcut path captures the active window; the button path would have
+    // opened the picker instead.
+    expect(commandsMock.captureActiveWindow).toHaveBeenCalledTimes(1);
+    expect(commandsMock.startWindowSelection).not.toHaveBeenCalled();
+    // Asking before the completion listener exists would lose an overlay
+    // capture's result.
+    const asked = commandsMock.takeStartupCapture.mock.invocationCallOrder[0];
+    for (const event of Object.values(eventsMock)) {
+      expect(event.listen.mock.invocationCallOrder[0]).toBeLessThan(asked);
+    }
+    cleanup();
+  });
+
+  it("starts nothing when the command line asked for no capture", async () => {
+    const o = new CaptureOrchestration();
+    const cleanup = o.setup();
+
+    await vi.waitFor(() => {
+      expect(commandsMock.takeStartupCapture).toHaveBeenCalledTimes(1);
+    });
+    await Promise.resolve();
+
+    expect(o.capturePending).toBe(false);
+    // A request for the mode `null` would be logged as an unknown mode.
+    expect(logError).not.toHaveBeenCalled();
+    for (const start of [
+      commandsMock.startRegionSelection,
+      commandsMock.startWindowSelection,
+      commandsMock.startScreenSelection,
+      commandsMock.captureScreenUnderCursor,
+      commandsMock.captureActiveWindow
+    ]) {
+      expect(start).not.toHaveBeenCalled();
+    }
+    cleanup();
+  });
+
+  it("logs a failed request without reporting the shortcut listeners as broken", async () => {
+    commandsMock.takeStartupCapture.mockRejectedValue(new Error("ipc down"));
+    const o = new CaptureOrchestration();
+    const cleanup = o.setup();
+
+    await vi.waitFor(() => {
+      expect(logError).toHaveBeenCalledWith(expect.stringContaining("ipc down"));
+    });
+
+    expect(o.settingsStore.shortcutStatus).not.toBe("Shortcut listener failed");
+    expect(o.capturePending).toBe(false);
     cleanup();
   });
 });
