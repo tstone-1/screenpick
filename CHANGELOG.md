@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [CalVer](https://calver.org/) `YY.M.MICRO` versioning
 (see [BUILD.md](BUILD.md#version-management)).
 
+## [26.10.2] - 2026-10-07
+
+### Added
+
+- Bent arrows. A selected arrow shows a round handle on the middle of its
+  shaft; dragging the handle bends the arrow into a curve through that point,
+  and the head turns with the curve. Dragging the handle back onto the straight
+  line makes the arrow straight again. Dragging the arrow anywhere else moves
+  it, as before.
+
+### Changed
+
+- Pen strokes are drawn as a smooth curve. A slow stroke no longer shows the
+  steps of single pixels and a fast one no longer shows a corner at every
+  point. This applies to strokes in existing documents too, on the stage and
+  in the exported image; the stored points are unchanged.
+
 ## [26.10.1] - 2026-10-06
 
 ### Added

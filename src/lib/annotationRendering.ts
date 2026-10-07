@@ -1,8 +1,10 @@
 import {
   annotationsInPaintOrder,
+  arrowControlPoint,
   colorWithAlpha,
   cutSeamPoints,
   polygonShapePoints,
+  quadraticPoint,
   CUT_SEAM_CASING_COLOR,
   CUT_SEAM_CASING_EXTRA_WIDTH,
   TEXT_BACKGROUND_PADDING_X,
@@ -55,6 +57,10 @@ export function measureTextWidth(text: string, fontSize: number): number {
 
 export type ArrowGeometry = {
   base: Point;
+  // Control point of the shaft from `start` to `base`; null on a straight arrow.
+  control: Point | null;
+  // The shaft as an SVG path, from `start` to `base`.
+  shaft: string;
   head: string;
   headPoints: [Point, Point, Point] | null;
   hasLine: boolean;
@@ -73,33 +79,147 @@ export function textStyle(text: TextAnnotation, zoom: number): string {
   return background ? `${base} ${boxStyle} background-color: ${background};` : `${base} ${boxStyle}`;
 }
 
+// A pen stroke is stored as the points the pointer reported and drawn as a
+// curve through them. Drawn as straight segments, a slow stroke shows the steps
+// of whole image pixels and a fast one shows a corner at every sample.
+//
+// Two steps. Each point becomes the weighted mean of the points near it along
+// the stroke, which takes out the pixel steps; the result is drawn with one
+// quadratic curve per point, from the middle of one segment to the middle of
+// the next, which leaves no corner. The first and the last point stay where
+// they were put.
+//
+// "Near" is a distance in image pixels, not a number of points, because the
+// spacing of the points depends on the speed of the hand and on the zoom:
+// measured on stored strokes it ran from 1.3 to 112 pixels. Averaging a fixed
+// number of neighbours that cleans the slow stroke shrinks the loops of the
+// fast one. The pixel steps are one image pixel high at every zoom, so a
+// radius of a few image pixels reaches them and leaves a fast stroke alone.
+const STROKE_SMOOTHING_RADIUS = 3;
+
+export type StrokeCurve = {
+  start: Point;
+  // One curve per inner point: `control` is the point, `end` the middle of the
+  // segment to the next one.
+  curves: { control: Point; end: Point }[];
+  end: Point;
+};
+
+export function smoothedStrokePoints(
+  points: Point[],
+  radius = STROKE_SMOOTHING_RADIUS
+): Point[] {
+  if (points.length < 3) return points;
+  // Distance along the stroke from its first point to each point.
+  const along = [0];
+  for (let index = 1; index < points.length; index += 1) {
+    const step = Math.hypot(
+      points[index].x - points[index - 1].x,
+      points[index].y - points[index - 1].y
+    );
+    along.push(along[index - 1] + step);
+  }
+  const total = along[along.length - 1];
+  return points.map((point, index) => {
+    // The reach shrinks to nothing toward both ends, so the ends stay put and
+    // no point is pulled toward the side that has more of the stroke.
+    const reach = Math.min(radius * 3, along[index], total - along[index]);
+    if (reach <= 0) return point;
+    let x = 0;
+    let y = 0;
+    let weights = 0;
+    const add = (other: number) => {
+      const distance = Math.abs(along[other] - along[index]);
+      if (distance > reach) return false;
+      const weight = Math.exp(-(distance * distance) / (2 * radius * radius));
+      x += points[other].x * weight;
+      y += points[other].y * weight;
+      weights += weight;
+      return true;
+    };
+    add(index);
+    for (let other = index - 1; other >= 0 && add(other); other -= 1);
+    for (let other = index + 1; other < points.length && add(other); other += 1);
+    return { x: x / weights, y: y / weights };
+  });
+}
+
+export function strokeCurve(points: Point[]): StrokeCurve | null {
+  const smoothed = smoothedStrokePoints(points);
+  const start = smoothed[0];
+  if (!start) return null;
+  const curves: StrokeCurve["curves"] = [];
+  for (let index = 1; index < smoothed.length - 1; index += 1) {
+    const control = smoothed[index];
+    const next = smoothed[index + 1];
+    curves.push({
+      control,
+      end: { x: (control.x + next.x) / 2, y: (control.y + next.y) / 2 }
+    });
+  }
+  return { start, curves, end: smoothed[smoothed.length - 1] };
+}
+
 export function strokePath(stroke: PenStroke): string {
-  const [first, ...rest] = stroke.points;
-  if (!first) return "";
-  return rest.reduce((path, point) => `${path} L ${point.x} ${point.y}`, `M ${first.x} ${first.y}`);
+  const curve = strokeCurve(stroke.points);
+  if (!curve) return "";
+  let path = `M ${curve.start.x} ${curve.start.y}`;
+  for (const { control, end } of curve.curves) {
+    path += ` Q ${control.x} ${control.y} ${end.x} ${end.y}`;
+  }
+  if (stroke.points.length > 1) path += ` L ${curve.end.x} ${curve.end.y}`;
+  return path;
 }
 
 // Head and shaft are sized in image pixels, with no zoom term: the stage SVG
 // and the export both draw this geometry, and they must agree at every zoom.
+//
+// On a bent arrow the head sits on the curve: its base is the point of the
+// curve one head length before the tip, and it points from there to the tip.
+// The shaft is the part of the curve up to that point, so it still passes
+// through `bend`.
 export function arrowGeometry(arrow: ArrowAnnotation): ArrowGeometry {
-  const dx = arrow.end.x - arrow.start.x;
-  const dy = arrow.end.y - arrow.start.y;
-  const length = Math.hypot(dx, dy);
-  if (length === 0) {
+  const headLength =
+    Math.max(ARROW_HEAD_MIN_LENGTH, arrow.width * ARROW_HEAD_LENGTH_PER_WIDTH);
+  const headWidth =
+    Math.max(ARROW_HEAD_MIN_WIDTH, arrow.width * ARROW_HEAD_WIDTH_PER_WIDTH);
+  const control = arrowControlPoint(arrow);
+  const length = Math.hypot(arrow.end.x - arrow.start.x, arrow.end.y - arrow.start.y);
+
+  // Where the shaft ends, and the control point of the shaft up to there.
+  let shaftEnd: Point;
+  let shaftControl: Point | null = null;
+  let hasLine: boolean;
+  if (control) {
+    const split = curveParameterAtDistanceFromEnd(arrow.start, control, arrow.end, headLength);
+    hasLine = split > 0;
+    shaftEnd = quadraticPoint(arrow.start, control, arrow.end, split);
+    shaftControl = {
+      x: arrow.start.x + (control.x - arrow.start.x) * split,
+      y: arrow.start.y + (control.y - arrow.start.y) * split
+    };
+  } else {
+    hasLine = length > headLength;
+    shaftEnd = arrow.start;
+  }
+
+  // The head points from the end of the shaft to the tip. An arrow shorter
+  // than its head has no shaft, and its head points from `start`.
+  const dx = arrow.end.x - shaftEnd.x;
+  const dy = arrow.end.y - shaftEnd.y;
+  const distance = Math.hypot(dx, dy);
+  if (distance === 0) {
     return {
       base: { x: arrow.start.x, y: arrow.start.y },
+      control: null,
+      shaft: "",
       head: "",
       headPoints: null,
       hasLine: false
     };
   }
-
-  const ux = dx / length;
-  const uy = dy / length;
-  const headLength =
-    Math.max(ARROW_HEAD_MIN_LENGTH, arrow.width * ARROW_HEAD_LENGTH_PER_WIDTH);
-  const headWidth =
-    Math.max(ARROW_HEAD_MIN_WIDTH, arrow.width * ARROW_HEAD_WIDTH_PER_WIDTH);
+  const ux = dx / distance;
+  const uy = dy / distance;
   const baseX = arrow.end.x - ux * headLength;
   const baseY = arrow.end.y - uy * headLength;
   const perpX = -uy;
@@ -113,13 +233,41 @@ export function arrowGeometry(arrow: ArrowAnnotation): ArrowGeometry {
     y: baseY - perpY * (headWidth / 2)
   };
   const tip = { x: arrow.end.x, y: arrow.end.y };
+  const from = `M ${arrow.start.x} ${arrow.start.y}`;
+  const curved = hasLine && shaftControl !== null;
 
   return {
     base: { x: baseX, y: baseY },
+    control: curved ? shaftControl : null,
+    shaft: !hasLine
+      ? ""
+      : curved && shaftControl
+        ? `${from} Q ${shaftControl.x} ${shaftControl.y} ${baseX} ${baseY}`
+        : `${from} L ${baseX} ${baseY}`,
     head: `${arrow.end.x},${arrow.end.y} ${left.x},${left.y} ${right.x},${right.y}`,
     headPoints: [tip, left, right],
-    hasLine: length > headLength
+    hasLine
   };
+}
+
+// The parameter of the point on the curve that lies `distance` before its end,
+// measured in a straight line. 0 when the start is already nearer than that.
+function curveParameterAtDistanceFromEnd(
+  start: Point,
+  control: Point,
+  end: Point,
+  distance: number
+): number {
+  if (Math.hypot(end.x - start.x, end.y - start.y) <= distance) return 0;
+  let low = 0;
+  let high = 1;
+  for (let step = 0; step < 24; step += 1) {
+    const middle = (low + high) / 2;
+    const point = quadraticPoint(start, control, end, middle);
+    if (Math.hypot(end.x - point.x, end.y - point.y) > distance) low = middle;
+    else high = middle;
+  }
+  return low;
 }
 
 export async function renderFlattenedPng(
@@ -235,16 +383,19 @@ function drawCutSeam(ctx: CanvasRenderingContext2D, seam: CutSeamAnnotation) {
 }
 
 function drawPenStroke(ctx: CanvasRenderingContext2D, stroke: PenStroke) {
-  const [first, ...rest] = stroke.points;
-  if (!first) return;
+  const curve = strokeCurve(stroke.points);
+  if (!curve) return;
   ctx.save();
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   ctx.strokeStyle = stroke.color;
   ctx.lineWidth = stroke.width;
   ctx.beginPath();
-  ctx.moveTo(first.x, first.y);
-  for (const point of rest) ctx.lineTo(point.x, point.y);
+  ctx.moveTo(curve.start.x, curve.start.y);
+  for (const { control, end } of curve.curves) {
+    ctx.quadraticCurveTo(control.x, control.y, end.x, end.y);
+  }
+  ctx.lineTo(curve.end.x, curve.end.y);
   ctx.stroke();
   ctx.restore();
 }
@@ -287,7 +438,16 @@ function drawArrow(ctx: CanvasRenderingContext2D, arrow: ArrowAnnotation) {
   if (geometry.hasLine) {
     ctx.beginPath();
     ctx.moveTo(arrow.start.x, arrow.start.y);
-    ctx.lineTo(geometry.base.x, geometry.base.y);
+    if (geometry.control) {
+      ctx.quadraticCurveTo(
+        geometry.control.x,
+        geometry.control.y,
+        geometry.base.x,
+        geometry.base.y
+      );
+    } else {
+      ctx.lineTo(geometry.base.x, geometry.base.y);
+    }
     ctx.stroke();
   }
   if (geometry.headPoints) {

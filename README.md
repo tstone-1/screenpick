@@ -15,8 +15,8 @@ it, and the only network request it makes is the check for a new version.
 
 - **Capture modes** — region select, window pick (click the window you want),
   full screen, pick-a-display, and a screen color picker.
-- **Annotation editor** — arrows, shapes, freehand pen, text, highlighter, blur,
-  crop, and cut, with undo/redo, pan, and zoom.
+- **Annotation editor** — straight and bent arrows, shapes, freehand pen, text,
+  highlighter, blur, crop, and cut, with undo/redo, pan, and zoom.
 - **Global shortcuts** — trigger any capture mode from anywhere without focusing
   the app; shortcuts are configurable in Settings.
 - **Clipboard & file export** — copy the result straight to the clipboard or save

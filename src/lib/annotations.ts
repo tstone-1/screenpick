@@ -29,6 +29,9 @@ export type ArrowAnnotation = {
   id: number;
   start: Point;
   end: Point;
+  // The point the shaft passes through at its middle. Absent on a straight
+  // arrow, which is every arrow drawn before bent arrows existed.
+  bend?: Point;
   color: string;
   width: number;
 };
@@ -266,6 +269,7 @@ const ANNOTATION_VALIDATORS: Record<AnnotationKind, AnnotationValidator> = {
   arrow: (entry) =>
     isPoint(entry.start) &&
     isPoint(entry.end) &&
+    (entry.bend === undefined || isPoint(entry.bend)) &&
     typeof entry.color === "string" &&
     isFiniteNumber(entry.width),
   shape: (entry) =>
@@ -440,7 +444,7 @@ export function annotationBounds(annotation: Annotation): AnnotationBounds {
     case "erase":
       return pointsBounds(annotation.points, annotation.width / 2);
     case "arrow":
-      return pointsBounds([annotation.start, annotation.end], annotation.width / 2);
+      return pointsBounds(arrowOutlinePoints(annotation), annotation.width / 2);
     case "shape":
       return annotation.rect;
     case "highlight":
@@ -556,8 +560,9 @@ export function annotationHitTest(annotation: Annotation, point: Point, toleranc
     case "erase":
       return polylineHitTest(annotation.points, point, Math.max(tolerance, annotation.width / 2));
     case "arrow":
-      return (
-        distanceToSegment(point, annotation.start, annotation.end) <=
+      return polylineHitTest(
+        arrowOutlinePoints(annotation),
+        point,
         Math.max(tolerance, annotation.width / 2)
       );
     case "shape":
@@ -582,6 +587,51 @@ export function cutSeamPoints(seam: CutSeamAnnotation): Point[] {
     points.push(
       seam.orientation === "horizontal" ? { x: along, y: off } : { x: off, y: along }
     );
+  }
+  return points;
+}
+
+// A bent arrow's shaft is a quadratic curve from start to end that passes
+// through `bend` at its middle. The curve's control point follows from that:
+// B(0.5) = (start + 2 * control + end) / 4.
+export function arrowControlPoint(arrow: ArrowAnnotation): Point | null {
+  if (!arrow.bend) return null;
+  return {
+    x: 2 * arrow.bend.x - (arrow.start.x + arrow.end.x) / 2,
+    y: 2 * arrow.bend.y - (arrow.start.y + arrow.end.y) / 2
+  };
+}
+
+// Where the bend handle sits: on the shaft's middle, bent or straight.
+export function arrowBendHandle(arrow: ArrowAnnotation): Point {
+  return (
+    arrow.bend ?? {
+      x: (arrow.start.x + arrow.end.x) / 2,
+      y: (arrow.start.y + arrow.end.y) / 2
+    }
+  );
+}
+
+export function quadraticPoint(start: Point, control: Point, end: Point, t: number): Point {
+  const u = 1 - t;
+  return {
+    x: u * u * start.x + 2 * u * t * control.x + t * t * end.x,
+    y: u * u * start.y + 2 * u * t * control.y + t * t * end.y
+  };
+}
+
+const ARROW_OUTLINE_SEGMENTS = 16;
+
+// The shaft as a polyline, for bounds and hit testing. Using the control point
+// instead would make the selection box of a bent arrow twice as deep as the
+// curve, because the control point lies as far beyond `bend` as `bend` lies
+// from the straight line.
+export function arrowOutlinePoints(arrow: ArrowAnnotation): Point[] {
+  const control = arrowControlPoint(arrow);
+  if (!control) return [arrow.start, arrow.end];
+  const points: Point[] = [];
+  for (let i = 0; i <= ARROW_OUTLINE_SEGMENTS; i += 1) {
+    points.push(quadraticPoint(arrow.start, control, arrow.end, i / ARROW_OUTLINE_SEGMENTS));
   }
   return points;
 }
@@ -729,7 +779,10 @@ export function translateAnnotation(annotation: Annotation, dx: number, dy: numb
       return {
         ...annotation,
         start: { x: annotation.start.x + dx, y: annotation.start.y + dy },
-        end: { x: annotation.end.x + dx, y: annotation.end.y + dy }
+        end: { x: annotation.end.x + dx, y: annotation.end.y + dy },
+        ...(annotation.bend
+          ? { bend: { x: annotation.bend.x + dx, y: annotation.bend.y + dy } }
+          : {})
       };
     case "shape":
       return {

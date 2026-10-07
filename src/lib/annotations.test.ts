@@ -7,6 +7,9 @@ import {
   annotationLayerForBase,
   annotationsInPaintOrder,
   annotationsInVisualHitOrder,
+  arrowBendHandle,
+  arrowControlPoint,
+  arrowOutlinePoints,
   colorWithAlpha,
   cropAnnotations,
   cutoutAnnotations,
@@ -17,6 +20,7 @@ import {
   normalizeHexColor,
   pointInPolygon,
   pointsBounds,
+  quadraticPoint,
   rectsIntersect,
   rgbToHex,
   serializeAnnotations,
@@ -24,6 +28,7 @@ import {
   shapeOutlinePoints,
   translateAnnotation,
   type Annotation,
+  type ArrowAnnotation,
   type CutSeamAnnotation,
   type ShapeAnnotation,
   type ShapeKind,
@@ -695,6 +700,7 @@ describe("deserializeAnnotations", () => {
     ["erase with a numeric color", { ...VALID_ANNOTATIONS.erase, color: 255 }],
     ["arrow without an end", { ...VALID_ANNOTATIONS.arrow, end: undefined }],
     ["arrow with a null color", { ...VALID_ANNOTATIONS.arrow, color: null }],
+    ["arrow with a half bend point", { ...VALID_ANNOTATIONS.arrow, bend: { x: 5 } }],
     ["shape with an unknown shape", { ...VALID_ANNOTATIONS.shape, shape: "hexagon" }],
     [
       "shape with a rect missing height",
@@ -825,5 +831,55 @@ describe("annotation layer base stamp", () => {
       baseFile: null
     });
     expect(deserializeAnnotationLayer("not json")).toEqual({ annotations: [], baseFile: null });
+  });
+});
+
+describe("bent arrow", () => {
+  const straight: ArrowAnnotation = {
+    kind: "arrow",
+    id: 1,
+    start: { x: 0, y: 0 },
+    end: { x: 100, y: 0 },
+    color: "#000000",
+    width: 4
+  };
+  const bent: ArrowAnnotation = { ...straight, bend: { x: 50, y: 30 } };
+
+  it("passes through the bend point at its middle", () => {
+    const control = arrowControlPoint(bent);
+    expect(control).toEqual({ x: 50, y: 60 });
+    expect(quadraticPoint(bent.start, control!, bent.end, 0.5)).toEqual({ x: 50, y: 30 });
+    expect(arrowControlPoint(straight)).toBeNull();
+  });
+
+  it("has its handle on the bend, and on the middle while straight", () => {
+    expect(arrowBendHandle(bent)).toEqual({ x: 50, y: 30 });
+    expect(arrowBendHandle(straight)).toEqual({ x: 50, y: 0 });
+  });
+
+  it("bounds the curve, not the control point", () => {
+    expect(arrowOutlinePoints(straight)).toEqual([straight.start, straight.end]);
+    // Half the stroke width (2) around a curve 30 deep; the control point is at
+    // y = 60.
+    expect(annotationBounds(bent)).toEqual({ x: -2, y: -2, width: 104, height: 34 });
+  });
+
+  it("is hit on the curve and missed on the straight line it left", () => {
+    expect(annotationHitTest(bent, { x: 50, y: 30 }, 4)).toBe(true);
+    expect(annotationHitTest(bent, { x: 50, y: 0 }, 4)).toBe(false);
+    expect(annotationHitTest(straight, { x: 50, y: 0 }, 4)).toBe(true);
+  });
+
+  it("moves the bend with the arrow", () => {
+    expect(translateAnnotation(bent, 5, -5)).toMatchObject({
+      start: { x: 5, y: -5 },
+      end: { x: 105, y: -5 },
+      bend: { x: 55, y: 25 }
+    });
+    expect(translateAnnotation(straight, 5, -5)).not.toHaveProperty("bend");
+  });
+
+  it("is read back from a saved layer", () => {
+    expect(deserializeAnnotations(serializeAnnotations([bent, straight]))).toEqual([bent, straight]);
   });
 });

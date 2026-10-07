@@ -340,14 +340,7 @@
         {#snippet renderArrow(arrow: ArrowAnnotation)}
           {@const geom = editor.arrowGeometry(arrow)}
           {#if geom.hasLine}
-            <line
-              x1={arrow.start.x}
-              y1={arrow.start.y}
-              x2={geom.base.x}
-              y2={geom.base.y}
-              stroke={arrow.color}
-              stroke-width={arrow.width}
-            />
+            <path class="arrow-shaft" d={geom.shaft} stroke={arrow.color} stroke-width={arrow.width} />
           {/if}
           <polygon points={geom.head} fill={arrow.color} />
         {/snippet}
@@ -484,6 +477,12 @@
             <span></span>
             <span></span>
           </div>
+          {#if editor.selectedArrowBendHandle}
+            <div
+              class="bend-handle"
+              style={`left: ${editor.selectedArrowBendHandle.x * editor.document.zoom}px; top: ${editor.selectedArrowBendHandle.y * editor.document.zoom}px;`}
+            ></div>
+          {/if}
         {/if}
         {#if editor.activeTool === "region" && (editor.regionDraft ?? editor.regionRect)}
           {@const region = (editor.regionDraft ?? editor.regionRect)!}
@@ -711,6 +710,11 @@
     stroke-linejoin: round;
   }
 
+  /* The export draws the shaft with the canvas default, a flat end. */
+  .annotation-layer path.arrow-shaft {
+    stroke-linecap: butt;
+  }
+
   .cut-seam-layer {
     position: absolute;
     z-index: 1;
@@ -780,6 +784,21 @@
     background: #ffffff;
     border: 1px solid #1c7c6d;
     border-radius: 2px;
+  }
+
+  /* Sits on the middle of a selected arrow's shaft; dragging it bends the
+     arrow. The press is handled by the image frame, as every stage gesture is. */
+  .bend-handle {
+    position: absolute;
+    z-index: 6;
+    width: 9px;
+    height: 9px;
+    margin: -6.5px 0 0 -6.5px;
+    pointer-events: none;
+    background: #1c7c6d;
+    border: 2px solid #ffffff;
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px #1c7c6d;
   }
 
   .selection-outline span:nth-child(1) {

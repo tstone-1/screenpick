@@ -4,6 +4,7 @@ import {
   arrowGeometry,
   drawAnnotation,
   measureTextWidth,
+  smoothedStrokePoints,
   strokePath,
   textStyle,
   type ArrowGeometry
@@ -80,7 +81,97 @@ describe("strokePath", () => {
       width: 4
     };
 
-    expect(strokePath(stroke)).toBe("M 1 2 L 3 4 L 5 6");
+    // Points on one line stay where they are; the middle one becomes the
+    // control of a curve that ends halfway to the last.
+    expect(strokePath(stroke)).toBe("M 1 2 Q 3 4 4 5 L 5 6");
+  });
+
+  it("draws a two-point stroke as one straight segment", () => {
+    const stroke: PenStroke = {
+      kind: "pen",
+      id: 1,
+      points: [
+        { x: 1, y: 2 },
+        { x: 3, y: 4 }
+      ],
+      color: "#000000",
+      width: 4
+    };
+
+    expect(strokePath(stroke)).toBe("M 1 2 L 3 4");
+  });
+});
+
+describe("smoothedStrokePoints", () => {
+  // A slow horizontal stroke that steps down one image pixel, as whole-pixel
+  // pointer positions give it.
+  const step = Array.from({ length: 21 }, (_, x) => ({ x, y: x < 10 ? 0 : 1 }));
+
+  it("keeps the first and the last point and spreads a one-pixel step", () => {
+    const smoothed = smoothedStrokePoints(step);
+
+    expect(smoothed[0]).toEqual({ x: 0, y: 0 });
+    expect(smoothed[20]).toEqual({ x: 20, y: 1 });
+    // The step from 0 to 1 between x = 9 and x = 10 becomes a slope.
+    expect(smoothed[9].y).toBeGreaterThan(0.1);
+    expect(smoothed[10].y).toBeLessThan(0.9);
+    for (let x = 1; x <= 20; x += 1) {
+      expect(smoothed[x].y).toBeGreaterThanOrEqual(smoothed[x - 1].y);
+    }
+  });
+
+  // The radius is a distance in image pixels. A fast stroke has its points far
+  // apart, and each of them is a place the hand went: none may move.
+  it("leaves a stroke alone whose points lie further apart than the radius", () => {
+    const fast = [
+      { x: 0, y: 0 },
+      { x: 60, y: 0 },
+      { x: 60, y: 60 },
+      { x: 0, y: 60 }
+    ];
+
+    expect(smoothedStrokePoints(fast)).toEqual(fast);
+  });
+
+  // Many points one pixel apart around a corner: the corner is rounded within
+  // a few pixels and the stroke further away is not moved.
+  it("changes a dense stroke only near the place that is not smooth", () => {
+    const corner = [
+      ...Array.from({ length: 41 }, (_, i) => ({ x: i, y: 0 })),
+      ...Array.from({ length: 40 }, (_, i) => ({ x: 40, y: i + 1 }))
+    ];
+    const smoothed = smoothedStrokePoints(corner);
+
+    expect(smoothed[40].x).toBeLessThan(40);
+    expect(smoothed[40].y).toBeGreaterThan(0);
+    expect(smoothed[20].x).toBeCloseTo(20, 6);
+    expect(smoothed[20].y).toBeCloseTo(0, 6);
+    expect(smoothed[60].x).toBeCloseTo(40, 6);
+    expect(smoothed[60].y).toBeCloseTo(20, 6);
+  });
+
+  it("leaves a stroke of two points as it is", () => {
+    expect(smoothedStrokePoints(step.slice(0, 2))).toEqual(step.slice(0, 2));
+  });
+
+  it("gives the stage and the export the same curve", () => {
+    const stroke: PenStroke = { kind: "pen", id: 1, points: step, color: "#000000", width: 4 };
+    const drawn: string[] = [];
+    const ctx = {
+      save() {},
+      restore() {},
+      beginPath() {},
+      stroke() {},
+      moveTo: (x: number, y: number) => drawn.push(`M ${x} ${y}`),
+      lineTo: (x: number, y: number) => drawn.push(`L ${x} ${y}`),
+      quadraticCurveTo: (cx: number, cy: number, x: number, y: number) =>
+        drawn.push(`Q ${cx} ${cy} ${x} ${y}`)
+    };
+
+    drawAnnotation(ctx as unknown as CanvasRenderingContext2D, stroke);
+
+    expect(drawn.join(" ")).toBe(strokePath(stroke));
+    expect(drawn.join(" ")).toContain("Q");
   });
 });
 
@@ -97,6 +188,8 @@ describe("arrowGeometry", () => {
   it("omits line and head for a zero-length arrow", () => {
     expect(arrowGeometry(baseArrow(0))).toEqual({
       base: { x: 0, y: 0 },
+      control: null,
+      shaft: "",
       head: "",
       headPoints: null,
       hasLine: false
@@ -118,6 +211,55 @@ describe("arrowGeometry", () => {
     expect(geometry.base).toEqual({ x: 84, y: 0 });
     expect(geometry.head).toBe("100,0 84,5.2 84,-5.2");
     expect(geometry.hasLine).toBe(true);
+    expect(geometry.shaft).toBe("M 0 0 L 84 0");
+    expect(geometry.control).toBeNull();
+  });
+
+  describe("bent", () => {
+    // Bent 30 pixels down at its middle; the head is 16 long at width 4.
+    const bent: ArrowAnnotation = { ...baseArrow(100, 4), bend: { x: 50, y: 30 } };
+    const geometry = arrowGeometry(bent);
+
+    it("puts the base of the head on the curve, one head length before the tip", () => {
+      expect(Math.hypot(100 - geometry.base.x, 0 - geometry.base.y)).toBeCloseTo(16, 3);
+      // The curve comes up to the tip from below, so the base is below the
+      // straight line; a head on the straight line would have y = 0.
+      expect(geometry.base.y).toBeGreaterThan(5);
+      expect(geometry.headPoints?.[0]).toEqual({ x: 100, y: 0 });
+    });
+
+    it("draws the shaft as one curve from the start to the base of the head", () => {
+      expect(geometry.hasLine).toBe(true);
+      expect(geometry.control).not.toBeNull();
+      expect(geometry.shaft).toBe(
+        `M 0 0 Q ${geometry.control?.x} ${geometry.control?.y} ${geometry.base.x} ${geometry.base.y}`
+      );
+    });
+
+    it("keeps the shaft passing through the bend point", () => {
+      // The shaft is the first part of the full curve, so some point of it is
+      // the bend. Sample it and take the nearest.
+      const control = geometry.control!;
+      let nearest = Infinity;
+      for (let i = 0; i <= 1000; i += 1) {
+        const t = i / 1000;
+        const u = 1 - t;
+        const x = 2 * u * t * control.x + t * t * geometry.base.x;
+        const y = 2 * u * t * control.y + t * t * geometry.base.y;
+        nearest = Math.min(nearest, Math.hypot(x - 50, y - 30));
+      }
+      expect(nearest).toBeLessThan(0.1);
+    });
+
+    it("exports the shaft as a curve", () => {
+      const ctx = recordingContext();
+      drawAnnotation(asContext(ctx), bent);
+      expect(ctx.calls).toContain("quadraticCurveTo");
+
+      const straight = recordingContext();
+      drawAnnotation(asContext(straight), baseArrow(100, 4));
+      expect(straight.calls).not.toContain("quadraticCurveTo");
+    });
   });
 });
 

@@ -17,8 +17,10 @@ import {
   annotationHitTest,
   annotationLayer,
   annotationsInVisualHitOrder,
+  arrowBendHandle,
   cropAnnotations,
   cutoutAnnotations,
+  distanceToSegment,
   cutSeamPoints,
   nextAnnotationIdFor,
   normalizeHexColor,
@@ -102,6 +104,9 @@ type SelectionDrag = {
   id: number;
   last: Point;
   historyRecorded: boolean;
+  // Set when the drag started on a selected arrow's bend handle: the drag then
+  // bends the arrow and does not move it.
+  bend?: true;
 };
 
 type EraserDrag = {
@@ -152,6 +157,13 @@ export const PEN_WIDTH_MAX = 20;
 // Shared misclick threshold: drags smaller than this on the relevant axis are
 // discarded instead of committed to history.
 const MIN_COMMITTED_ANNOTATION_PX = 4;
+
+// The bend handle of a selected arrow, in screen pixels: how near a press must
+// be to grab it, and how near the straight line a bend becomes straight again.
+// Both are divided by the zoom where they are used. They are editor chrome and
+// never exported.
+const BEND_HANDLE_GRAB_PX = 9;
+const BEND_STRAIGHTEN_PX = 5;
 
 // The annotations placed by a rectangle drag. `arrow` is excluded on purpose —
 // it is a two-point drag, not a rect (see the rectangle-tools section below).
@@ -340,6 +352,10 @@ export class EditorState {
   );
   selectedAnnotationBounds = $derived(
     this.selectedAnnotation ? annotationBounds(this.selectedAnnotation) : null
+  );
+  // Where the stage draws the bend handle; null unless an arrow is selected.
+  selectedArrowBendHandle = $derived(
+    this.selectedAnnotation?.kind === "arrow" ? arrowBendHandle(this.selectedAnnotation) : null
   );
   selectionCanBringForward = $derived.by(() => this.#selectionLayerIndex().forward);
   selectionCanSendBackward = $derived.by(() => this.#selectionLayerIndex().backward);
@@ -1605,6 +1621,25 @@ export class EditorState {
     const point = this.#pointInImage(event);
     if (!point) return;
     event.preventDefault();
+    // The bend handle is tested before the annotations: it lies on the shaft
+    // of the selected arrow, so a press there would otherwise start a move, and
+    // an annotation stacked above the arrow would take the press.
+    const handle = this.selectedArrowBendHandle;
+    if (
+      handle &&
+      this.selectedAnnotationId !== null &&
+      Math.hypot(point.x - handle.x, point.y - handle.y) <=
+        BEND_HANDLE_GRAB_PX / this.document.zoom
+    ) {
+      this.imageFrame?.setPointerCapture(event.pointerId);
+      this.selectionDrag = {
+        id: this.selectedAnnotationId,
+        last: point,
+        historyRecorded: false,
+        bend: true
+      };
+      return;
+    }
     const hit = this.#annotationAt(point);
     this.selectedAnnotationId = hit?.id ?? null;
     if (!hit) {
@@ -1640,6 +1675,19 @@ export class EditorState {
       this.selectionDrag = null;
       return;
     }
+    if (drag.bend) {
+      if (annotation.kind !== "arrow") return;
+      const bent = this.#arrowBentThrough(annotation, point);
+      // A straight arrow that stays straight has not changed: no undo step.
+      if (!bent.bend && !annotation.bend) {
+        this.selectionDrag = { ...drag, last: point };
+        return;
+      }
+      if (!drag.historyRecorded) this.#recordHistory();
+      this.annotations = this.annotations.map((entry) => (entry.id === drag.id ? bent : entry));
+      this.selectionDrag = { ...drag, last: point, historyRecorded: true };
+      return;
+    }
     const delta = this.#boundedAnnotationDelta(annotation, dx, dy);
     if (delta.x === 0 && delta.y === 0) {
       this.selectionDrag = { ...drag, last: point };
@@ -1656,6 +1704,17 @@ export class EditorState {
       last: point,
       historyRecorded: true
     };
+  }
+
+  // The arrow with its shaft passing through `point`. A point on the straight
+  // line from start to end, or within a few screen pixels of it, makes the
+  // arrow straight again: that is the only way back to a straight arrow, and
+  // without the margin it would need the exact pixel.
+  #arrowBentThrough(arrow: ArrowAnnotation, point: Point): ArrowAnnotation {
+    const { bend: _previous, ...straight } = arrow;
+    const margin = BEND_STRAIGHTEN_PX / (this.document?.zoom ?? 1);
+    if (distanceToSegment(point, arrow.start, arrow.end) <= margin) return straight;
+    return { ...straight, bend: point };
   }
 
   finishSelectionDrag(event: PointerEvent) {

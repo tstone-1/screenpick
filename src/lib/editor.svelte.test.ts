@@ -731,6 +731,89 @@ describe("EditorState", () => {
     expect(state.panning).toBe(false);
   });
 
+  // A horizontal arrow from 10,50 to 90,50 on a 100x100 capture at zoom 1: its
+  // bend handle is at 50,50.
+  function selectedArrow(state: InstanceType<typeof EditorState>, patch: Partial<ArrowAnnotation> = {}) {
+    state.openCapture(capture("/bend.png", 100, 100));
+    state.imageFrame = imageFrame();
+    state.activeTool = "select";
+    state.annotations = [
+      arrowAnnotation(1, { start: { x: 10, y: 50 }, end: { x: 90, y: 50 }, ...patch })
+    ];
+    state.selectedAnnotationId = 1;
+  }
+
+  it("bends a selected arrow when its middle handle is dragged, in one undo step", () => {
+    const state = new EditorState();
+    selectedArrow(state);
+
+    state.startSelectionDrag(pointer(50, 50));
+    state.updateSelectionDrag(pointer(50, 60));
+    state.updateSelectionDrag(pointer(55, 80));
+    state.finishSelectionDrag(pointer(55, 80));
+
+    expect(state.annotations[0]).toMatchObject({
+      start: { x: 10, y: 50 },
+      end: { x: 90, y: 50 },
+      bend: { x: 55, y: 80 }
+    });
+    expect(state.selectedAnnotationId).toBe(1);
+    expect(state.historyPast).toHaveLength(1);
+
+    state.undo();
+    expect(state.annotations[0]).not.toHaveProperty("bend");
+  });
+
+  it("moves the arrow, without bending it, when the drag starts away from the handle", () => {
+    const state = new EditorState();
+    selectedArrow(state);
+
+    state.startSelectionDrag(pointer(20, 50));
+    state.updateSelectionDrag(pointer(20, 60));
+
+    expect(state.annotations[0]).toMatchObject({ start: { x: 10, y: 60 }, end: { x: 90, y: 60 } });
+    expect(state.annotations[0]).not.toHaveProperty("bend");
+  });
+
+  it("makes a bent arrow straight again when the handle is dragged back onto the line", () => {
+    const state = new EditorState();
+    selectedArrow(state, { bend: { x: 50, y: 80 } });
+
+    state.startSelectionDrag(pointer(50, 80));
+    state.updateSelectionDrag(pointer(52, 53));
+
+    expect(state.annotations[0]).not.toHaveProperty("bend");
+    expect(state.historyPast).toHaveLength(1);
+  });
+
+  it("records no undo step for a handle drag that leaves a straight arrow straight", () => {
+    const state = new EditorState();
+    selectedArrow(state);
+
+    state.startSelectionDrag(pointer(50, 50));
+    state.updateSelectionDrag(pointer(52, 52));
+    state.finishSelectionDrag(pointer(52, 52));
+
+    expect(state.annotations[0]).not.toHaveProperty("bend");
+    expect(state.historyPast).toHaveLength(0);
+  });
+
+  it("gives the handle of the selected arrow the press, over an annotation lying above it", () => {
+    const state = new EditorState();
+    selectedArrow(state);
+    state.annotations = [
+      ...state.annotations,
+      shapeAnnotation(2, { rect: { x: 40, y: 40, width: 20, height: 20 }, fill: true })
+    ];
+
+    state.startSelectionDrag(pointer(50, 50));
+    state.updateSelectionDrag(pointer(50, 70));
+
+    expect(state.selectedAnnotationId).toBe(1);
+    expect(state.annotations[0]).toMatchObject({ bend: { x: 50, y: 70 } });
+    expect(state.annotations[1]).toMatchObject({ rect: { x: 40, y: 40 } });
+  });
+
   it("restores annotations and history when switching back to a recent capture", () => {
     const state = new EditorState();
     const first = capture("/first.png");

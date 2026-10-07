@@ -646,6 +646,24 @@ describe("a gesture that outlasts the save debounce", () => {
     expect(lastSavedLayer("long")).toContain('"x":50');
   });
 
+  it("saves the final bend of an arrow when the bend drag outlasts the debounce", async () => {
+    const editor = new EditorState();
+    await create(editor, "bend.png", "bend");
+    editor.activeTool = "arrow";
+    editor.startArrowDrag(pointer(20, 50));
+    editor.updateArrowDrag(pointer(120, 50));
+    editor.finishArrowDrag(pointer(120, 50)); // Selects the arrow; its handle is at 70,50.
+    await editor.flushPendingSave();
+    editor.startSelectionDrag(pointer(70, 50));
+    editor.updateSelectionDrag(pointer(70, 70)); // The first move arms the debounce.
+    await vi.advanceTimersByTimeAsync(600); // It fires mid-drag.
+    editor.updateSelectionDrag(pointer(70, 90));
+    editor.finishSelectionDrag(pointer(70, 90));
+    await editor.flushPendingSave();
+    expect(editor.annotations[0]).toMatchObject({ bend: { x: 70, y: 90 } });
+    expect(lastSavedLayer("bend")).toContain('"bend":{"x":70,"y":90}');
+  });
+
   it("saves every removal of an erase gesture that outlasts the debounce", async () => {
     const editor = new EditorState();
     await create(editor, "erase.png", "erase");
