@@ -20,8 +20,8 @@ Nothing in flight.
 ### 1. Package and release workflow
 ScreenPick now has published builds — installers ship via tagged GitHub Releases (first cut: v26.7.4). What remains is hardening that release path, not creating it.
 
-**Decision (2026-05-30): ship unsigned.** *Superseded for macOS on 2026-07-25 —
-see below; still current for Windows.* No $99/year Apple Developer ID and no
+**Decision (2026-05-30): ship unsigned.** *Superseded for macOS on 2026-07-25
+and for Windows on 2026-10-08 — see below.* No $99/year Apple Developer ID and no
 Windows code-signing cert. Builds are ad-hoc-signed so they run on Apple
 Silicon; users bypass Gatekeeper / SmartScreen on first launch (steps in
 `README.md`). Channel is **GitHub Releases**, built by
@@ -59,10 +59,16 @@ what justified the cost, not Gatekeeper.
 
 Procedure and gotchas: [BUILD.md](BUILD.md#macos-code-signing-and-notarization).
 
-**Still deferred — Windows:** Authenticode signing cert (EV preferred) for
-SmartScreen reputation. Separate purchase (~$200–400/yr), and OV certs need
-reputation-building before SmartScreen stops warning, so the money buys less
-than the Apple cert does. Windows installs stay unsigned for now.
+**Windows signing — wired into `release.yml` on 2026-10-08, first used by the
+release after 26.10.2.** A Certum Open Source Code Signing certificate, subject
+*Open Source Developer Timo Stein*, valid until 2027-10-07; the same certificate
+signs the maintainer's other projects. It is not an EV certificate, so
+SmartScreen can keep warning until the certificate has built reputation. There
+is no `.msi` any more, because the signing client cannot sign one. Procedure and
+rules: [BUILD.md](BUILD.md#windows-code-signing).
+
+- [ ] First release with a signed installer, `screenpick.exe` and uninstaller,
+      read back by the Windows leg.
 
 **~~Concrete recurring cost of staying ad-hoc-signed — the macOS Screen Recording
 grant dies on every version bump.~~ Resolved by signing, from 26.7.6.** Kept here

@@ -32,7 +32,13 @@ Download the latest installer from the
 
 - **macOS:** `ScreenPick_<version>_universal.dmg` (one file, runs on Apple
   Silicon and Intel)
-- **Windows:** `ScreenPick_<version>_x64-setup.exe`
+- **Windows:** `ScreenPick_<version>_x64-setup.exe` (installs for your user
+  account, no administrator rights; code-signed, see below)
+
+The `.sig`, `.tar.gz` and `latest.json` files beside them belong to the built-in
+updater; you do not need them. There is no `.msi` any more: if you installed
+ScreenPick from one, uninstall it once in Windows **Settings → Apps** and
+install the `-setup.exe`.
 
 ### macOS first launch
 
@@ -71,8 +77,17 @@ actually damaged — that is the quarantine message for unsigned apps. Use
 
 ### Windows first launch
 
-SmartScreen shows a **"Windows protected your PC"** dialog for unsigned apps.
-Click **More info → Run anyway** to install.
+Releases after **26.10.2** are code-signed: the publisher reads *Open Source
+Developer Timo Stein*. The certificate is new, so Windows can still show
+**"Windows protected your PC"** the first time you run the installer: choose
+**More info**, check the publisher, then **Run anyway**. Whether a computer with
+Smart App Control switched on accepts it has not been tested. The installer is
+built and signed from this repository by the public
+[release workflow](.github/workflows/release.yml);
+[Code signing policy](#code-signing-policy) has who signs and what.
+
+**26.10.2 and earlier** are unsigned. SmartScreen shows the same dialog for
+them, with an unknown publisher: **More info → Run anyway**.
 
 ## Updates
 
@@ -83,8 +98,8 @@ the tray menu.
 
 Every update is cryptographically signed, and ScreenPick verifies that
 signature before installing — so an update can only come from this project.
-That signature is separate from Apple code signing: it protects the update
-payload itself, on both platforms.
+That signature is separate from Apple and Windows code signing: it protects the
+update payload itself, on both platforms.
 
 - **Turn it off:** Settings → *Check for updates at startup*. Manual checks
   still work. The automatic check contacts GitHub, which is the only network
@@ -107,6 +122,42 @@ payload itself, on both platforms.
   ScreenPick shows a banner explaining this when it detects the situation.
 
 </details>
+
+## Code signing policy
+
+Windows releases after 26.10.2 are signed with a
+[Certum](https://www.certum.eu/) Open Source Code Signing certificate issued to
+the maintainer. Windows shows the publisher as *Open Source Developer Timo
+Stein*. 26.10.2 and the releases before it are unsigned on Windows. macOS
+releases use Apple Developer ID signing and notarization.
+
+The committer, reviewer and release approver is
+[Timo Stein (tstone-1)](https://github.com/tstone-1). Nobody else can sign.
+
+- **What is signed.** The installer, `screenpick.exe` and the uninstaller. All
+  three are built from this repository. No file from anywhere else is signed
+  for a ScreenPick release.
+- **Where.** Only in the public
+  [release workflow](.github/workflows/release.yml), on a GitHub-hosted runner,
+  for a version tag the maintainer pushes. The workflow reads the installer's
+  signature back, installs it, reads the signature of every executable it
+  installed, and fails if one is missing or not his.
+- **Approval.** The workflow produces a draft. The maintainer checks it and
+  publishes it by hand; nothing reaches a reader without that step.
+- **The key.** It is held in Certum's signing service and cannot be exported.
+  The login to that service is a secret of this repository that only the
+  release workflow and its rehearsal can read, and a pull request cannot. The
+  GitHub account uses two-factor authentication, and every login to the signing
+  service needs a one-time code.
+
+### Privacy
+
+ScreenPick has no account, no analytics and no telemetry, and it uploads no
+capture. The one network request it makes is the check for a new version: an
+ordinary HTTPS request to GitHub, which carries the connection's IP address and
+request metadata and is covered by GitHub's
+[privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
+**Settings → Check for updates at startup** turns the automatic check off.
 
 ## Command line
 

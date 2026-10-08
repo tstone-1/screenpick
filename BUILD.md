@@ -5,11 +5,14 @@ ScreenPick is a Tauri 2 (Rust) + Svelte 5 / SvelteKit 3 (TypeScript) desktop app
 
 > **Distribution model:** **macOS release builds are signed with a Developer ID
 > identity and notarized by Apple** (since 26.7.6) — users open them normally.
-> **Windows is still unsigned**, with no Authenticode cert, so SmartScreen warns
-> on first launch; those user-facing steps live in the **Install** section of
-> [`README.md`](README.md).
+> **Windows release builds are signed with a Certum Open Source Code Signing
+> certificate** (from the release after 26.10.2) — see
+> [Windows code signing](#windows-code-signing). The certificate is new, so
+> SmartScreen can still warn on first launch; those user-facing steps live in
+> the **Install** section of [`README.md`](README.md). A local Windows build is
+> unsigned.
 >
-> Signing is applied by CI when the Apple secrets are present. **Local builds
+> Apple signing is applied by CI when the Apple secrets are present. **Local builds
 > stay ad-hoc-signed** (`bundle.macOS.signingIdentity: "-"` in
 > `tauri.conf.json`) unless you export `APPLE_SIGNING_IDENTITY` yourself — see
 > [macOS code signing and notarization](#macos-code-signing-and-notarization).
@@ -93,8 +96,9 @@ Artifacts land in `src-tauri/target/release/bundle/`:
   or a universal binary with `--target universal-apple-darwin`.
 
 ### Windows
-- `nsis/ScreenPick_<version>_x64-setup.exe` — NSIS installer.
-- `msi/ScreenPick_<version>_x64_en-US.msi` — MSI installer.
+- `nsis/ScreenPick_<version>_x64-setup.exe` — NSIS installer. It is the only
+  Windows installer: no `.msi` is built, see
+  [Windows code signing](#windows-code-signing).
 - Portable executable: `src-tauri/target/release/screenpick.exe`.
 
 ## Updater
@@ -103,8 +107,9 @@ Artifacts land in `src-tauri/target/release/bundle/`:
 
 Every update payload is signed with a **minisign** keypair (Tauri's updater
 format). Clients verify it against `plugins.updater.pubkey` in
-`tauri.conf.json` before installing anything. This is independent of Apple/
-Windows code signing and is *not* fixed by adding a Developer ID.
+`tauri.conf.json` before installing anything. This is independent of Apple and
+Windows code signing and is *not* fixed by adding a Developer ID or an
+Authenticode certificate.
 
 - **Private key + password: KeePass**, and mirrored into the repo secrets
   `TAURI_SIGNING_PRIVATE_KEY` (the key file's **contents**) and
@@ -483,6 +488,177 @@ perl -e 'alarm 25; exec @ARGV' codesign --force --options runtime --timestamp \
 
 This does not affect CI, which builds in a fresh keychain each run.
 
+## Windows code signing
+
+**Status: wired into `release.yml` on 2026-10-08, not yet run in this
+repository.** The first run of `sign-rehearsal.yml` and the first release tag
+are the evidence still missing; see *What has been seen and what has not* below.
+
+The certificate is Certum *Open Source Code Signing in the Cloud*, subject
+`CN=Open Source Developer Timo Stein`, issued by *Certum Code Signing 2021 CA*,
+valid until 2027-10-07. The key is in Certum's SimplySign service and cannot be
+exported.
+
+**The certificate, the account and every rule below are shared with
+[`tpdf`](https://github.com/tstone-1/tpdf)**, where this was built and
+rehearsed first, and with any other project of the maintainer that signs with
+it. `tpdf`'s `BUILD.md`, *Signing with the Certum certificate*, has the
+measurements behind each rule. A certificate certifies the developer and not
+one program, so there is one of it: renewing it, or changing the login, means
+updating the `signing` environment in every repository that uses it.
+
+This is **independent of the updater's minisign key** — different key,
+different purpose, different failure mode. See
+[Updater signing key](#updater-signing-key). An installed copy accepts an
+update by the minisign key alone, so somebody who steals the Certum login can
+sign their own program under this name and cannot update anybody's ScreenPick.
+
+### How a release is signed
+
+`release.yml` builds [`ssign`](https://github.com/Le-Syl21/ssign), an unofficial
+client (MIT) for the SimplySign service, from a pinned commit, and names it as
+Tauri's `signCommand` through the overlay `src-tauri/tauri.signing.conf.json`,
+on the Windows leg only. Tauri then starts the command once for
+`screenpick.exe`, once for each NSIS plugin DLL, once for the uninstaller (from
+inside makensis) and once for the installer. The first start logs in and the
+later ones reuse that session, so one build is one login.
+
+| Piece | What it is for |
+|---|---|
+| `src-tauri/tauri.signing.conf.json` | The overlay with `bundle.windows.signCommand`. It is not in `tauri.conf.json`, because there every local Windows build would ask for a signing login |
+| `tools/sign-windows.cmd` | What Tauri and makensis start. It finds the PowerShell script through `SCREENPICK_SIGN_SCRIPT`, not beside itself |
+| `tools/sign-windows.ps1` | Runs `ssign` into a folder of its own, copies the signed bytes back over the file with retries, and logs everything to `%RUNNER_TEMP%\ssign.log` |
+| `tools/verify_signature.ps1` | Reads signatures back with `signtool` and PowerShell; fails unless each is valid, timestamped and by the named signer |
+| `.github/workflows/sign-rehearsal.yml` | Signs a plain executable and the installer of a published release, without building ScreenPick |
+| `src/lib/windowsSigning.test.ts` | Runs with the unit tests on every platform: no `.msi` target, the sign command only in the overlay, the wrapper not looking beside itself, one pinned `ssign` commit, one concurrency group and one environment in both workflows |
+
+The login is two secrets of the GitHub environment `signing`: `CERTUM_EMAIL`
+and `CERTUM_OTP_URI`, the whole `otpauth://` address Certum shows once, at
+activation. Keep the whole address and not only its `secret`: `ssign` reads
+`algorithm`, `digits` and `period` from it. The environment accepts the `main`
+branch and `v*` tags. Set a secret from the clipboard, so that the value is in
+no command line:
+
+```sh
+pbpaste | gh secret set CERTUM_EMAIL --env signing --repo tstone-1/screenpick
+pbpaste | gh secret set CERTUM_OTP_URI --env signing --repo tstone-1/screenpick
+```
+
+After the build the Windows leg reads the installer's signature back, installs
+it silently, and reads the signature of every `.exe` and `.dll` in
+`%LOCALAPPDATA%\ScreenPick`, which has to contain `screenpick.exe` and
+`uninstall.exe`. It fails unless each is valid, timestamped and by that signer,
+and it fails if an `.msi` was built.
+
+### Rules the login brings
+
+- **One code is one login.** Two jobs that log in within the same 30 seconds
+  make the second fail, and repeated failed logins can lock the account.
+  Everything that signs here is in the concurrency group `certum-signing`, and
+  nothing in it is cancelled.
+- **That group holds inside this repository only.** GitHub does not share a
+  concurrency group between repositories, and the account is shared. Do not
+  start a release or a rehearsal here while one runs in another project that
+  signs with this certificate.
+- **Do not log in to Certum's desktop program while a signing job runs**, for
+  the same reason.
+- **`ssign` keeps its session in a file for twenty minutes** (`%TEMP%\ssign`, or
+  `.cache\ssign` under the home folder). Both workflows remove it in a step
+  that runs whether the job passed or not.
+- **The secrets reach the Windows leg only.** Both legs of the release job name
+  the environment, because a job has one; the build step hands the two values
+  to the Windows leg and an empty string to the macOS one.
+- **`ssign` is pinned by commit** (`SSIGN_REV`, v0.1.7), not by tag, in both
+  workflows. Run the rehearsal before a release whenever it changes.
+
+### Four failures already paid for
+
+Each of these cost `tpdf` one rehearsal tag or one release. The files here are
+written so as not to repeat them; do not simplify them back.
+
+| What was tried | What happened |
+|---|---|
+| The overlay's path put together in the job matrix | `github.workspace` is empty there, so Tauri was given `/src-tauri/tauri.signing.conf.json`. The path is put together in the build step's `args` |
+| `ssign` named directly as the sign command | `failed to run ssign` and no reason: Tauri shows nothing of a sign command that failed. Hence the wrapper and its log, which the step *Show what the signing client said* prints |
+| `ssign` writing the file in place | `atomically replacing ...: Access is denied. (os error 5)`, a fraction of a second after Tauri had written the executable. `ssign` replaces a file by renaming a signed copy over it. Hence `sign-windows.ps1`, which lets it sign into its own folder and copies the bytes back, again for up to thirty seconds |
+| The wrapper finding its script through `%~dp0` | A release with an unsigned `uninstall.exe`. makensis starts the wrapper by its quoted name through `PATH` from `target\release\nsis\x64`, cmd then gives that folder for `%~dp0`, the script is not there, makensis prints `UninstFinalize command returned 64` and goes on. Hence `SCREENPICK_SIGN_SCRIPT`, and hence the leg installs what it built and reads `uninstall.exe` where it lands |
+
+`npx tauri build --verbose` is the one way to see what makensis says; without
+it Tauri shows none of it.
+
+### No `.msi`
+
+`ssign` signs executables only: it refuses an `.msi` with `not a PE (no MZ
+signature)`. A release with a signed installer beside an unsigned package is
+worse than one without the package, so `bundle.targets` in `tauri.conf.json` is
+`["app", "dmg", "nsis"]` and no `.msi` is built from the release after 26.10.2
+on. `"all"` would bring it back, and the Windows leg fails if one appears.
+
+What that costs: the `.msi` was downloaded five times in all, twice each from
+26.7.4 and 26.7.5 and once from 26.7.6, and never from 26.7.7 to 26.10.2 (read
+from the release assets on 2026-10-08). A copy installed from an `.msi` finds
+no `windows-x86_64-msi` in `latest.json`, falls back to `windows-x86_64` and
+runs the NSIS installer, which leaves the `.msi` registered beside its own
+entry: two installed copies. That was measured for `tpdf` and not for
+ScreenPick. The release notes and the README say to uninstall the `.msi` once.
+
+### Rehearsing
+
+`sign-rehearsal.yml` proves the build of `ssign` and the login without building
+ScreenPick. It downloads the installer of a published release that is unsigned
+(default `v26.10.2`, the last one built before signing), checks that it is
+unsigned, signs it and a plain executable the way makensis starts the command,
+holds one of the two open against writing so that the retry has to wait, reads
+both signatures back and installs from the signed installer.
+
+```sh
+gh workflow run sign-rehearsal.yml --ref main
+gh run list --workflow sign-rehearsal.yml --limit 1
+```
+
+Run it before the first release that signs, whenever `SSIGN_REV` changed, and
+when a release leg fails in the build step with a login error.
+
+It does not cover the build itself: the overlay, Tauri starting the command,
+and the uninstaller signed inside makensis are first exercised by a tag. The
+tag filter of `release.yml` also matches a name such as `vYY.M.MICRO-rc1`,
+which builds and signs everything and ends in a draft that nobody publishes.
+Delete that draft and the tag afterwards, and delete the tag on the remote by
+name. A draft is never served by `releases/latest`, so no installed copy sees
+it.
+
+### Signing by hand
+
+The fallback when the workflow cannot sign. Certum supports one way to use the
+key: log in to its desktop program with the account's e-mail address and a
+six-digit code, after which the certificate appears in the user's certificate
+store and `signtool` can use it.
+
+```
+signtool sign /sha1 <thumbprint> /fd sha256 /tr http://time.certum.pl /td sha256 <file>
+tools/verify_signature.ps1 -Signer 'Open Source Developer Timo Stein' -Path <file>
+```
+
+An installer signed after the build no longer matches its updater `.sig`,
+which is over the installer's bytes: make the `.sig` again with
+`npx tauri signer sign` and put its contents into `latest.json`, or the updater
+refuses the download. An installer signed by hand also contains an unsigned
+`screenpick.exe` and uninstaller, because those are signed during the build
+or not at all.
+
+### What has been seen and what has not
+
+Seen in `tpdf`, with these scripts and this pin, on `windows-2025`: one login
+signing every file of a build, each signature valid, timestamped and by the
+signer, the uninstaller included; the updater `.sig` verifying against the
+signed installer; the signed installer installing.
+
+Not yet seen here: any run of either workflow. In particular the installation
+folder holding exactly `screenpick.exe` and `uninstall.exe` as its executables
+is read from the Tauri configuration (no `resources`, no `externalBin`) and
+not from an installed copy; the rehearsal prints that folder's executables for
+this reason.
+
 ## Release Procedure
 
 ### 1. Pre-release Checklist
@@ -548,6 +724,12 @@ entirely, and its clippy line lacked `--all-targets -- -D warnings`).
       `BINDINGS_UPDATE=1` first to regenerate `src/lib/bindings.ts`, commit that, then
       re-run without the env var to confirm it's back in sync.
 - [ ] Manually smoke-tested via `npm run tauri dev`.
+- [ ] **Windows signing rehearsed, if anything it depends on changed** since the
+      last signed release: `SSIGN_REV`, `tools/sign-windows.*`,
+      `tools/verify_signature.ps1`, the signing steps of `release.yml`, or the
+      secrets of the `signing` environment. `gh workflow run sign-rehearsal.yml --ref main`,
+      then read the run; see [Rehearsing](#rehearsing). No other project that
+      signs with the same certificate may be releasing at the same time.
 
 **Version & documentation:**
 - [ ] Bump the version in all four files (must match exactly):
@@ -667,8 +849,8 @@ git push origin vYY.M.MICRO
 
 **Channel: GitHub Releases, built by CI on a pushed tag.** Pushing a CalVer tag
 (`vYY.M.MICRO`) triggers [`.github/workflows/release.yml`](.github/workflows/release.yml),
-which builds the **macOS universal DMG** and **Windows x64 installers** and publishes
-them to a **draft** GitHub Release for you to review and publish. This repo is public,
+which builds the **macOS universal DMG** and the **Windows x64 installer**, signs
+both, and publishes them to a **draft** GitHub Release for you to review and publish. This repo is public,
 so GitHub Actions minutes are free and unlimited — the tag-push path is the primary
 release channel.
 
@@ -682,18 +864,22 @@ gh release create vYY.M.MICRO --title "ScreenPick vYY.M.MICRO" --notes-from-tag 
   src-tauri/target/universal-apple-darwin/release/bundle/dmg/ScreenPick_*_universal.dmg
 ```
 
-- [ ] Build the Windows installers on a Windows machine (`npx tauri build`, see
-      [Build Output](#build-output)) and attach them to the same release:
-      `gh release upload vYY.M.MICRO src-tauri/target/release/bundle/nsis/ScreenPick_*_x64-setup.exe src-tauri/target/release/bundle/msi/ScreenPick_*_x64_en-US.msi`.
+- [ ] Build the Windows installer on a Windows machine (`npx tauri build`, see
+      [Build Output](#build-output)) and attach it to the same release:
+      `gh release upload vYY.M.MICRO src-tauri/target/release/bundle/nsis/ScreenPick_*_x64-setup.exe`.
+      **That installer is unsigned**: a local build has no sign command. Sign it
+      as [Signing by hand](#signing-by-hand) says, or say in the release notes
+      that it is not signed.
 - [ ] `gh release view vYY.M.MICRO` confirms it points to the tag and lists the
-      `.dmg` + `.exe`/`.msi` assets.
+      `.dmg` + `-setup.exe` assets.
 
 **Updater checks — after publishing the draft, not before.** The endpoint
 resolves `releases/latest`, which ignores drafts and prereleases, so the update
 only goes live when the release does.
 
-- [ ] The release lists `latest.json`, plus `.app.tar.gz`/`.nsis.zip` and their
-      `.sig` files. **No `latest.json` means no update reaches anyone** — the
+- [ ] The release lists six assets: `latest.json`, the `.dmg`, the
+      `-setup.exe` and its `.sig`, and the `.app.tar.gz` and its `.sig`. There
+      is no `.msi`. **No `latest.json` means no update reaches anyone** — the
       most likely cause is a missing/empty signing secret, since `tauri-action`
       logs "Signature not found for the updater JSON. Skipping upload..." and
       still finishes green.
@@ -701,9 +887,17 @@ only goes live when the release does.
       reports the new version and **both** `darwin-*` and `windows-x86_64` keys.
       A manifest with only one platform means the release matrix raced (see the
       `max-parallel: 1` comment in `release.yml`) — re-run the missing leg.
-- [ ] The `windows-x86_64` URL points at the **NSIS** bundle, not the MSI
-      (`updaterJsonPreferNsis: true`). An MSI update on top of an NSIS install
-      creates a second parallel installation instead of upgrading.
+- [ ] The `windows-x86_64` and `windows-x86_64-nsis` URLs both point at the
+      `-setup.exe`, and there is no `windows-x86_64-msi` key. An MSI update on
+      top of an NSIS install creates a second parallel installation instead of
+      upgrading.
+- [ ] **The Windows leg's step *Verify the Windows build is signed* printed
+      `[OK]` for the installer, `screenpick.exe` and `uninstall.exe`**, and the
+      downloaded installer reads as signed on a Windows computer:
+      `(Get-AuthenticodeSignature .\ScreenPick_*_x64-setup.exe) | Format-List Status, SignerCertificate, TimeStamperCertificate`
+      — `Valid`, subject `CN=Open Source Developer Timo Stein`, and a timestamp
+      certificate. A signature without a timestamp stops being valid on the day
+      the certificate expires.
 
 > **Local universal builds need `rustup`, not Homebrew Rust.** `brew install
 > rust` ships only the host target's stdlib, so `--target universal-apple-darwin`
@@ -843,5 +1037,5 @@ git describe --tags --exact-match
 #
 # Local publish alternative (skip the CI build):
 # gh release create vYY.M.MICRO --title "ScreenPick vYY.M.MICRO" --notes-from-tag <dmg-path>
-# gh release upload vYY.M.MICRO <exe/msi paths>   # Windows installers, built on Windows
+# gh release upload vYY.M.MICRO <setup.exe path>   # Windows installer, built on Windows (unsigned)
 ```

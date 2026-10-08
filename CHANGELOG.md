@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [CalVer](https://calver.org/) `YY.M.MICRO` versioning
 (see [BUILD.md](BUILD.md#version-management)).
 
+## [26.10.3] - Unreleased
+
+### Changed
+
+- The Windows installer, `screenpick.exe` and the uninstaller are code-signed.
+  Windows shows the publisher as *Open Source Developer Timo Stein*. The
+  certificate is new, so SmartScreen can still warn the first time the
+  installer runs. See *Code signing policy* in the README.
+
+### Removed
+
+- The Windows `.msi` package. The `-setup.exe` is the only Windows installer:
+  the signing service used cannot sign an `.msi`. If you installed ScreenPick
+  from an `.msi`, uninstall it once in Windows *Settings* → *Apps* and install
+  the `-setup.exe`; otherwise the next update installs a second copy beside
+  it.
+
 ## [26.10.2] - 2026-10-07
 
 ### Added

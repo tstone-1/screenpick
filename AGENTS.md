@@ -158,7 +158,7 @@ ScreenPick is an open-source cross-platform screenshot, annotation, and screen u
   in `tauri.conf.json`. Losing it permanently orphans every installed copy — a
   new key cannot sign for clients holding the old public key, so each user would
   have to reinstall by hand. It is unrelated to OS code signing and is not fixed
-  by adding an Apple Developer ID. Never print, echo, or paste the private key
+  by adding an Apple Developer ID or a Windows certificate. Never print, echo, or paste the private key
   into a tool call; regeneration and rotation live in
   [BUILD.md](BUILD.md#updater-signing-key).
 - **A release with no `latest.json` updates nobody, and looks green.** When the
@@ -184,6 +184,21 @@ ScreenPick is an open-source cross-platform screenshot, annotation, and screen u
   secrets. Forget one and that repo silently drops to
   signed-but-unverifiable on its next release — which, per the point above,
   still looks green.
+- **Windows releases are signed with a certificate shared with the maintainer's
+  other projects, so its login is a multi-repo matter.** A Certum Open Source
+  Code Signing certificate (`CN=Open Source Developer Timo Stein`, valid until
+  2027-10-07) whose key stays in Certum's service; `release.yml` logs in with
+  `ssign`, an unofficial client built from a pinned commit, using two secrets of
+  the GitHub environment `signing`. One code is one login: every signing job
+  here is in the concurrency group `certum-signing`, **which GitHub does not
+  share between repositories**, so never start a release or a rehearsal here
+  while another project signs. `tools/sign-windows.cmd` and
+  `tools/sign-windows.ps1` look more complicated than they need to be and are
+  not: each part answers a failure already paid for. There is **no `.msi`**,
+  because the client cannot sign one; `bundle.targets` must not go back to
+  `"all"`. Local builds never sign (the sign command is in an overlay only the
+  Windows release leg passes). Rules, rehearsal and the fallback by hand:
+  [BUILD.md](BUILD.md#windows-code-signing).
 - **The release matrix must stay `max-parallel: 1`.** `tauri-action` builds
   `latest.json` by read-modify-write against the release asset, so parallel legs
   can clobber each other's platform entries and produce a manifest that updates

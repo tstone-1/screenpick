@@ -1,0 +1,165 @@
+name: Windows signing rehearsal
+
+# Signs two files that are already public with the Certum Open Source
+# certificate and reads every signature back. It publishes nothing and uploads
+# nothing: the question it answers is whether a hosted runner can sign, without
+# building ScreenPick and without a tag.
+#
+# The key is in Certum's SimplySign service. Certum supports a login from its
+# desktop program only, so the login here is done by ssign, an unofficial
+# client (MIT) that is built from a pinned commit of its source.
+#
+# Only executables are signed: ssign 0.1.7 refuses an MSI with "not a PE (no MZ
+# signature)", which is why no MSI is built any more.
+#
+# Start it by hand:
+#   gh workflow run sign-rehearsal.yml --ref main
+#   gh run list --workflow sign-rehearsal.yml --limit 1
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Published release whose unsigned Windows installer is signed as a test
+        required: true
+        # The last release built before signing. Its installer is unsigned,
+        # which the run checks first, so it can show that signing works.
+        default: v26.10.2
+
+# A SimplySign code is good for one login. Two jobs logging in inside the same
+# 30 seconds make the second one fail, and repeated failed logins can lock the
+# account, so every job that signs shares this group and none is cancelled.
+concurrency:
+  group: certum-signing
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  rehearse:
+    name: Sign and verify
+    runs-on: windows-2025
+    timeout-minutes: 30
+    # The two secrets live in this environment and nowhere else, so a workflow
+    # that does not name it cannot read them.
+    environment: signing
+    env:
+      # ssign v0.1.7. A commit and not a tag: a tag can be moved.
+      SSIGN_REV: 5fd4daf22155b19b645aef3dd467f3c4c9e440b3
+      SIGNER: Open Source Developer Timo Stein
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      # Built outside the checkout, so nothing in this repository decides how
+      # somebody else's program is built.
+      - name: Build ssign from the pinned commit
+        shell: pwsh
+        working-directory: ${{ runner.temp }}
+        run: |
+          cargo install --locked --git https://github.com/Le-Syl21/ssign --rev $env:SSIGN_REV ssign
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          ssign --version
+          # The wrapper release.yml gives to Tauri, found where ssign is found.
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'tools\sign-windows.cmd') (Split-Path (Get-Command ssign).Source)
+
+      - name: Fetch the files to sign
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE: ${{ inputs.release }}
+        run: |
+          New-Item -ItemType Directory -Force work | Out-Null
+          gh release download $env:RELEASE --repo $env:GITHUB_REPOSITORY --dir work --pattern '*_x64-setup.exe'
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          # A plain executable, as the control beside the installer.
+          Copy-Item (Get-Command ssign).Source work\plain.exe
+          $files = Get-ChildItem work -File
+          if ($files.Count -ne 2) { Write-Output "::error::expected 2 files to sign, found $($files.Count)"; exit 1 }
+          foreach ($file in $files) {
+            $status = (Get-AuthenticodeSignature $file.FullName).Status
+            Write-Output "$($file.Name): $status before signing"
+            if ($status -ne 'NotSigned') { Write-Output "::error::$($file.Name) is already signed, so it cannot show that signing works"; exit 1 }
+          }
+
+      - name: Sign
+        shell: pwsh
+        env:
+          CERTUM_EMAIL: ${{ secrets.CERTUM_EMAIL }}
+          CERTUM_OTP: ${{ secrets.CERTUM_OTP_URI }}
+          SCREENPICK_SIGN_SCRIPT: ${{ github.workspace }}/tools/sign-windows.ps1
+        run: |
+          if (-not $env:CERTUM_EMAIL -or -not $env:CERTUM_OTP) { Write-Output '::error::CERTUM_EMAIL or CERTUM_OTP_URI is not set in the signing environment'; exit 1 }
+          # One file at a time and stop at the first failure: a second attempt
+          # with the same account is a second login.
+          #
+          # The plain executable is held open for twenty seconds by another
+          # process that lets nobody write to it, which is the state a release
+          # build can leave the application's executable in. Signing it has to
+          # wait and then succeed.
+          $held = (Resolve-Path work\plain.exe).Path
+          $holder = Start-Job -ArgumentList $held -ScriptBlock {
+            param($path)
+            $file = [IO.File]::Open($path, 'Open', 'Read', 'Read')
+            Start-Sleep -Seconds 20
+            $file.Dispose()
+          }
+          Start-Sleep -Seconds 3
+          #
+          # Each file is signed the way makensis signs the uninstaller: from
+          # another folder, through the shell, by the quoted name of the
+          # wrapper. A wrapper that looks for its script beside itself fails
+          # when started so, and makensis goes on with an unsigned uninstaller.
+          Push-Location $env:RUNNER_TEMP
+          foreach ($file in Get-ChildItem (Join-Path $env:GITHUB_WORKSPACE work) -File | Sort-Object Name) {
+            cmd /c "`"sign-windows.cmd`" `"$($file.FullName)`""
+            if ($LASTEXITCODE -ne 0) { Pop-Location; Write-Output "::error::signing failed on $($file.Name)"; exit 1 }
+          }
+          Pop-Location
+          $waited = @(Select-String -Path (Join-Path $env:RUNNER_TEMP 'ssign.log') -Pattern '^attempt \d+:').Count
+          Write-Output "write attempts that had to wait: $waited"
+          if ($waited -lt 1) { Write-Output '::error::the held file was written at once, so the wait was not exercised'; exit 1 }
+
+      - name: Show what the signing client said
+        if: always()
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'ssign.log'
+          if (Test-Path $log) { Get-Content $log | Where-Object { $_ -notmatch 'card ' } } else { Write-Output 'no signing log: the sign command never ran' }
+
+      - name: Remove the cached session
+        if: always()
+        shell: pwsh
+        run: |
+          $places = @((Join-Path ([IO.Path]::GetTempPath()) 'ssign'))
+          foreach ($root in $env:HOME, $env:USERPROFILE) { if ($root) { $places += Join-Path $root '.cache\ssign' } }
+          foreach ($place in $places) { Write-Output "$place present: $(Test-Path $place)"; Remove-Item -Recurse -Force $place -ErrorAction SilentlyContinue }
+
+      - name: Read every signature back
+        shell: pwsh
+        run: tools/verify_signature.ps1 -Signer $env:SIGNER -Path (Get-ChildItem work -File | Sort-Object Name).FullName
+
+      # A signature is appended to the file, and an NSIS installer checks its
+      # own bytes when it starts. Installing it is what shows that the signed
+      # installer still works, which reading the signature cannot.
+      #
+      # Only the installer was signed here, after it was built, so the
+      # executable and the uninstaller it installs are the unsigned ones of
+      # that release. They are listed and not judged.
+      - name: Install from the signed installer
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem work -Filter '*_x64-setup.exe' | Select-Object -First 1
+          $folder = Join-Path $env:LOCALAPPDATA 'ScreenPick'
+          if (Test-Path $folder) { Write-Output "::error::$folder exists before installing"; exit 1 }
+          $run = Start-Process $setup.FullName -ArgumentList '/S' -Wait -PassThru
+          Write-Output "installer exit code: $($run.ExitCode)"
+          if ($run.ExitCode -ne 0) { Write-Output '::error::the signed installer did not install'; exit 1 }
+          $installed = Join-Path $folder 'screenpick.exe'
+          if (-not (Test-Path $installed)) { Write-Output "::error::the signed installer left no $installed"; exit 1 }
+          # What release.yml reads after its own build: every .exe and .dll in
+          # this folder. Printed, so a file nobody expected is seen here first.
+          Get-ChildItem $folder -Recurse -File | Where-Object Extension -in '.exe', '.dll' |
+            ForEach-Object { Write-Output "installed: $($_.FullName.Substring($folder.Length + 1)) $((Get-AuthenticodeSignature $_.FullName).Status)" }

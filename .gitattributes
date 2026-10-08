@@ -8,9 +8,10 @@
 # next diff.
 #
 # LF in the repository and LF in the working tree, on every platform. The tree
-# holds no shell scripts or .bat/.cmd files, so nothing here needs CRLF to
-# stay executable; CI runs on macOS and Linux, where LF is what the toolchain
-# expects anyway.
+# holds no shell scripts. Its one .cmd file, tools/sign-windows.cmd, is a few
+# lines without a label or a goto, and the same file with LF endings is what
+# the tpdf release workflow runs, so nothing here needs CRLF to stay
+# executable.
 * text=auto eol=lf
 
 # Binary assets: never normalise, never diff as text. A newline "fixed" inside

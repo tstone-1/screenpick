@@ -3,12 +3,14 @@ name: Release
 # Builds installers and publishes them to a GitHub Release.
 #
 # macOS is signed with a Developer ID identity and notarized by Apple, so it
-# installs without a Gatekeeper bypass. Windows has no Authenticode cert and is
-# still unsigned — users bypass SmartScreen on first launch; see the "Install"
-# section of README.md.
+# installs without a Gatekeeper bypass. Windows is signed with a Certum Open
+# Source Code Signing certificate, whose key is in Certum's SimplySign service;
+# the "Build the Windows signing client" step has the detail, and BUILD.md the
+# rules ("Windows code signing").
 #
-# Signing is conditional on the Apple secrets being present, so a fork without
-# them still builds (ad-hoc signed, unnotarized).
+# Apple signing is conditional on the Apple secrets being present, so a
+# checkout without them still builds (ad-hoc signed, unnotarized). Windows
+# signing is not conditional: a Windows leg that cannot sign fails.
 #
 # Trigger by pushing a CalVer tag, e.g.:
 #   git tag v26.5.1 && git push origin v26.5.1
@@ -100,14 +102,34 @@ jobs:
             label: macOS (universal)
             args: "--target universal-apple-darwin"
             rust-targets: "aarch64-apple-darwin,x86_64-apple-darwin"
+            signs-windows: false
           - platform: windows-2025
             label: Windows (x64)
             args: ""
             rust-targets: ""
+            signs-windows: true
 
     runs-on: ${{ matrix.platform }}
+    # The Certum login is in this environment and in no other place, and the
+    # environment accepts the main branch and `v*` tags only. Both legs name it
+    # because a job has one environment; only the Windows leg reads its secrets.
+    environment: signing
+    # One SimplySign code is good for one login. A second job logging in
+    # inside the same 30 seconds fails, and repeated failed logins can lock the
+    # account, so everything that signs shares this group and nothing in it is
+    # cancelled. `sign-rehearsal.yml` is the other member. The group holds for
+    # this repository only: see BUILD.md for the other projects that sign with
+    # the same account.
+    concurrency:
+      group: certum-signing
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v5
+        with:
+          # This job holds the signing logins and runs `npm ci` beside them.
+          # Nothing after the checkout needs git to authenticate: the steps
+          # that talk to GitHub take a token through the environment.
+          persist-credentials: false
 
       - name: Install Node
         uses: actions/setup-node@v5
@@ -181,10 +203,41 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "Apple signing enabled for this build."
 
+      # Windows files are signed by ssign, an unofficial client (MIT) for
+      # Certum's SimplySign service: Certum supports a login from its desktop
+      # program only, and that program needs a person and a phone. Built from a
+      # pinned commit of its source, and a commit and not a tag, so that a later
+      # change to the tool cannot reach the login without a change here. Built
+      # outside the checkout, so nothing in this repository decides how
+      # somebody else's program is built. `sign-rehearsal.yml` proves the same
+      # build and login without building ScreenPick.
+      - name: Build the Windows signing client
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: ${{ runner.temp }}
+        env:
+          # ssign v0.1.7
+          SSIGN_REV: 5fd4daf22155b19b645aef3dd467f3c4c9e440b3
+        run: |
+          cargo install --locked --git https://github.com/Le-Syl21/ssign --rev $env:SSIGN_REV ssign
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          ssign --version
+          # Tauri is given the wrapper and finds it where it finds ssign.
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'tools\sign-windows.cmd') (Split-Path (Get-Command ssign).Source)
+
       - name: Build and publish release
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Read by ssign, which Tauri starts once for every Windows executable
+          # it bundles and once for the installer. The first start logs in and
+          # the later ones reuse that session, so one build is one login. Empty
+          # on the macOS leg, which signs nothing with them.
+          CERTUM_EMAIL: ${{ runner.os == 'Windows' && secrets.CERTUM_EMAIL || '' }}
+          CERTUM_OTP: ${{ runner.os == 'Windows' && secrets.CERTUM_OTP_URI || '' }}
+          # Where sign-windows.cmd finds the script that does the work. It
+          # cannot look beside itself: see the file.
+          SCREENPICK_SIGN_SCRIPT: ${{ github.workspace }}/tools/sign-windows.ps1
           # Minisign key for the updater. Every update payload is signed with it
           # and verified against `plugins.updater.pubkey` before install — the
           # only cryptographic control on the update path. Losing this key
@@ -193,10 +246,11 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          # The action defaults this to false, which would put the MSI in
-          # latest.json while README.md points users at the NSIS setup.exe. An
-          # MSI update on top of an NSIS install produces a second, parallel
-          # installation instead of an upgrade.
+          # No MSI is built any more (`bundle.targets` in tauri.conf.json), so
+          # the NSIS setup.exe is the only Windows payload there is. Kept so
+          # that `windows-x86_64` in latest.json stays the setup.exe if an MSI
+          # target ever comes back: an MSI update on top of an NSIS install
+          # produces a second, parallel installation instead of an upgrade.
           updaterJsonPreferNsis: true
           # Reuse the pushed tag (refs/tags/v26.5.1 -> v26.5.1) as the release
           # tag, so the release lines up with BUILD.md's tagging step.
@@ -206,11 +260,80 @@ jobs:
             **macOS** — signed with a Developer ID identity and notarized by
             Apple. Open it normally; no Gatekeeper bypass needed.
 
-            **Windows** — unsigned. SmartScreen warns on first launch: choose
-            *More info* → *Run anyway*.
+            **Windows** — signed; the publisher reads *Open Source Developer
+            Timo Stein*. The certificate is new, so SmartScreen can still warn
+            on first launch: choose *More info* → *Run anyway*.
+
+            **Which file to take.** macOS: the `.dmg`. Windows: the
+            `-setup.exe`. There is no `.msi` any more: if you installed
+            ScreenPick from one, uninstall it once in Windows *Settings* →
+            *Apps* and install the `-setup.exe`. The `.sig`, `.tar.gz` and
+            `latest.json` files belong to the built-in updater.
+
+            [Code signing policy](https://github.com/tstone-1/screenpick#code-signing-policy)
           releaseDraft: true
           prerelease: false
-          args: ${{ matrix.args }}
+          # The overlay, on the Windows leg only, names the program Tauri signs
+          # every Windows executable with. It is an overlay and not part of
+          # tauri.conf.json because there it would make every build on a
+          # development machine ask for a signing login. Its path is put
+          # together here and not in the matrix, where `github.workspace` is
+          # empty and the path would come out as
+          # `/src-tauri/tauri.signing.conf.json`.
+          args: ${{ matrix.args }} ${{ matrix.signs-windows && format('--config {0}/src-tauri/tauri.signing.conf.json', github.workspace) || '' }}
+
+      # ssign keeps its session in a file for twenty minutes, under %HOME%\.cache
+      # where HOME is set and under the temporary folder where it is not.
+      # Nothing after the build signs, so it goes, whether the build passed or not.
+      - name: Remove the Windows signing session
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $places = @((Join-Path ([IO.Path]::GetTempPath()) 'ssign'))
+          foreach ($root in $env:HOME, $env:USERPROFILE) { if ($root) { $places += Join-Path $root '.cache\ssign' } }
+          foreach ($place in $places) { Write-Output "$place present: $(Test-Path $place)"; Remove-Item -Recurse -Force $place -ErrorAction SilentlyContinue }
+
+      # Tauri prints nothing of a sign command that failed, so this is where a
+      # failed signature gets its reason. The line naming the card is left out.
+      - name: Show what the signing client said
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'ssign.log'
+          if (Test-Path $log) { Get-Content $log | Where-Object { $_ -notmatch 'card ' } } else { Write-Output 'no signing log: the sign command never ran' }
+
+      # Nothing in the build reads a signature back, so this step does. The
+      # installer on the release is this one: the updater signature beside it
+      # is over these bytes.
+      #
+      # What ScreenPick consists of is then read where the installer puts it,
+      # and not from a list of names: every .exe and .dll in the installation
+      # folder has to be signed, so a file the bundle gains later is covered
+      # without a change here. The uninstaller is the reason to install at
+      # all. It is not a file in the installer: the installer writes it, and
+      # makensis signs it while building and goes on when that fails.
+      - name: Verify the Windows build is signed
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          SIGNER: Open Source Developer Timo Stein
+        run: |
+          $setup = @(Get-ChildItem 'src-tauri/target/release/bundle/nsis' -Filter '*-setup.exe')
+          if ($setup.Count -ne 1) { Write-Output "::error::expected one NSIS installer, found $($setup.Count)"; exit 1 }
+          $msi = @(Get-ChildItem 'src-tauri/target/release/bundle' -Recurse -Filter '*.msi' -ErrorAction SilentlyContinue)
+          if ($msi.Count -ne 0) { Write-Output "::error::an .msi was built, and nothing here can sign one: $($msi.Name -join ', ')"; exit 1 }
+          tools/verify_signature.ps1 -Signer $env:SIGNER -Path $setup[0].FullName
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+          $folder = Join-Path $env:LOCALAPPDATA 'ScreenPick'
+          if (Test-Path $folder) { Write-Output "::error::$folder exists before installing, so its files would not show what this build installs"; exit 1 }
+          $run = Start-Process $setup[0].FullName -ArgumentList '/S' -Wait -PassThru
+          if ($run.ExitCode -ne 0) { Write-Output "::error::the signed installer did not install (exit code $($run.ExitCode))"; exit 1 }
+          $installed = @(Get-ChildItem $folder -Recurse -File -ErrorAction SilentlyContinue | Where-Object Extension -in '.exe', '.dll')
+          foreach ($name in 'screenpick.exe', 'uninstall.exe') {
+            if ($installed.Name -notcontains $name) { Write-Output "::error::the installer left no $name in $folder"; exit 1 }
+          }
+          tools/verify_signature.ps1 -Signer $env:SIGNER -Path $installed.FullName
 
       # Tauri's bundler notarizes and staples the .app, then builds the DMG and
       # only SIGNS it — the DMG itself is left unnotarized, and
