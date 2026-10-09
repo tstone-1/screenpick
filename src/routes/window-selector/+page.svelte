@@ -8,7 +8,12 @@
     type StrictWindowBounds
   } from "#lib/windowPickerCommands.ts";
 
+  // Two flags, as in the other three overlays: a confirm in flight and a
+  // cancel in flight each block the other, and each is released again only if
+  // its own command fails.
   let selectionPending = $state(false);
+  let selectionCancelling = $state(false);
+  let locked = $derived(selectionPending || selectionCancelling);
   let highlight = $state<StrictWindowBounds | null>(null);
 
   // Latest pointer position and a single-flight guard so rapid pointermove
@@ -23,7 +28,7 @@
   let rafScheduled = false;
 
   async function refreshHighlight() {
-    if (selectionPending || queryInFlight) return;
+    if (locked || queryInFlight) return;
     if (pointerX === queriedX && pointerY === queriedY) return;
 
     queryInFlight = true;
@@ -33,14 +38,14 @@
     queriedY = y;
     try {
       const result = await windowRectAtPoint(x, y);
-      if (result.status === "ok" && !selectionPending) {
+      if (result.status === "ok" && !locked) {
         highlight = result.data;
       }
     } catch {
       // Transient enumeration errors shouldn't break selection; keep last box.
     } finally {
       queryInFlight = false;
-      if (!selectionPending && (pointerX !== x || pointerY !== y)) void refreshHighlight();
+      if (!locked && (pointerX !== x || pointerY !== y)) void refreshHighlight();
     }
   }
 
@@ -59,7 +64,7 @@
   }
 
   async function selectWindow(event: PointerEvent) {
-    if (selectionPending) return;
+    if (locked) return;
     selectionPending = true;
     highlight = null;
     try {
@@ -71,13 +76,13 @@
   }
 
   async function cancelSelection() {
-    if (selectionPending) return;
-    selectionPending = true;
+    if (locked) return;
+    selectionCancelling = true;
     try {
       const result = await commands.cancelWindowSelection();
-      if (result.status === "error") selectionPending = false;
+      if (result.status === "error") selectionCancelling = false;
     } catch {
-      selectionPending = false;
+      selectionCancelling = false;
     }
   }
 
@@ -98,8 +103,8 @@
   <title>ScreenPick Window</title>
 </svelte:head>
 
-<main class:pending={selectionPending} onpointerdown={selectWindow} onpointermove={handlePointerMove}>
-  {#if highlight && !selectionPending}
+<main class:pending={locked} onpointerdown={selectWindow} onpointermove={handlePointerMove}>
+  {#if highlight && !locked}
     <div
       class="highlight"
       style="left: {highlight.x}px; top: {highlight.y}px; width: {highlight.width}px; height: {highlight.height}px;"

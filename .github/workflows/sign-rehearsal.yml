@@ -45,7 +45,8 @@ jobs:
     # that does not name it cannot read them.
     environment: signing
     env:
-      # ssign v0.1.7. A commit and not a tag: a tag can be moved.
+      # ssign v0.1.7. A commit and not a tag: a tag can be moved. The key of
+      # the cache below is made from it.
       SSIGN_REV: 5fd4daf22155b19b645aef3dd467f3c4c9e440b3
       SIGNER: Open Source Developer Timo Stein
     steps:
@@ -53,17 +54,42 @@ jobs:
         with:
           persist-credentials: false
 
+      # The built client is kept in a cache under a key made of the runner and
+      # the pinned commit, with no `restore-keys`, so a client built from
+      # another commit is never restored. A run of this workflow on `main` is
+      # what saves the cache a release tag reads: a tag can read a cache saved
+      # on the default branch and cannot use one saved on another branch or
+      # tag. The cache is saved only when every step of this job passed, so
+      # the client a release restores is one that signed and was verified
+      # here. BUILD.md, "The cached signing client", has the rules.
+      - name: Restore ssign
+        id: ssign
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}\ssign-client
+          key: ssign-${{ runner.os }}-${{ runner.arch }}-${{ env.SSIGN_REV }}
+
       # Built outside the checkout, so nothing in this repository decides how
-      # somebody else's program is built.
+      # somebody else's program is built. Into a folder of its own, which is
+      # what the cache holds.
       - name: Build ssign from the pinned commit
+        if: steps.ssign.outputs.cache-hit != 'true'
         shell: pwsh
         working-directory: ${{ runner.temp }}
         run: |
-          cargo install --locked --git https://github.com/Le-Syl21/ssign --rev $env:SSIGN_REV ssign
+          cargo install --locked --git https://github.com/Le-Syl21/ssign --rev $env:SSIGN_REV --root "$env:RUNNER_TEMP\ssign-client" ssign
           if ($LASTEXITCODE -ne 0) { exit 1 }
-          ssign --version
-          # The wrapper release.yml gives to Tauri, found where ssign is found.
-          Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'tools\sign-windows.cmd') (Split-Path (Get-Command ssign).Source)
+
+      # Always, restored or built: the client has to start, and the wrapper
+      # release.yml gives to Tauri is found where ssign is found.
+      - name: Put ssign on the path
+        shell: pwsh
+        run: |
+          $bin = Join-Path $env:RUNNER_TEMP 'ssign-client\bin'
+          & (Join-Path $bin 'ssign.exe') --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'tools\sign-windows.cmd') $bin -Force
+          Add-Content -Path $env:GITHUB_PATH -Value $bin -Encoding utf8
 
       - name: Fetch the files to sign
         shell: pwsh

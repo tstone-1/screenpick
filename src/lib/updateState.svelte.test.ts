@@ -32,14 +32,13 @@ const openReleasesMock = vi.mocked(openReleasesPage);
 const transitionMock = vi.mocked(commands.updateTransition);
 const listenMock = vi.mocked(events.updateCheckRequested.listen);
 
-function pending(
-  version = "26.8.0",
-  downloadAndInstall?: PendingUpdate["downloadAndInstall"]
-): PendingUpdate {
+function pending(version = "26.8.0", overrides: Partial<PendingUpdate> = {}): PendingUpdate {
   return {
     version,
     notes: null,
-    downloadAndInstall: downloadAndInstall ?? vi.fn().mockResolvedValue(undefined)
+    download: vi.fn().mockResolvedValue(undefined),
+    install: vi.fn().mockResolvedValue(undefined),
+    ...overrides
   };
 }
 
@@ -130,19 +129,18 @@ describe("UpdateState.installAndRestart", () => {
   it("reports download progress, then installing, then relaunches", async () => {
     const state = new UpdateState();
     const seen: UpdatePhase[] = [];
-    const downloadAndInstall = vi.fn<PendingUpdate["downloadAndInstall"]>(
-      async ({ onProgress, onInstalling }) => {
-        onProgress(0, 100);
-        seen.push(state.phase);
-        onProgress(40, 100);
-        seen.push(state.phase);
-        // The install starts here, not after this promise resolves — by then it
-        // has already finished.
-        onInstalling();
-        seen.push(state.phase);
-      }
-    );
-    checkMock.mockResolvedValue(pending("26.8.0", downloadAndInstall));
+    const download = vi.fn<PendingUpdate["download"]>(async (onProgress) => {
+      onProgress(0, 100);
+      seen.push(state.phase);
+      onProgress(40, 100);
+      seen.push(state.phase);
+    });
+    // The installing state has to be up while the install runs: once this
+    // promise resolves the install has already finished.
+    const install = vi.fn<PendingUpdate["install"]>(async () => {
+      seen.push(state.phase);
+    });
+    checkMock.mockResolvedValue(pending("26.8.0", { download, install }));
     await state.check("manual");
 
     await state.installAndRestart();
@@ -156,11 +154,81 @@ describe("UpdateState.installAndRestart", () => {
     expect(state.phase).toEqual({ kind: "installing", version: "26.8.0" });
   });
 
+  // On Windows the installer ends the process from inside `install`, past the
+  // exit handshake, so this flush is the only thing that saves an annotation
+  // drawn during the download. It has to finish before `install` starts.
+  it("flushes pending work after the download and before the install", async () => {
+    const order: string[] = [];
+    let finishFlush = () => {};
+    const flush = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          order.push("flush started");
+          finishFlush = () => {
+            order.push("flush finished");
+            resolve();
+          };
+        })
+    );
+    const download = vi.fn<PendingUpdate["download"]>(async () => {
+      order.push("download");
+    });
+    const install = vi.fn<PendingUpdate["install"]>(async () => {
+      order.push("install");
+    });
+    checkMock.mockResolvedValue(pending("26.8.0", { download, install }));
+    const state = new UpdateState();
+    state.flushBeforeInstall(flush);
+    await state.check("manual");
+
+    const done = state.installAndRestart();
+    await vi.waitFor(() => expect(flush).toHaveBeenCalledTimes(1));
+    // The flush is still running: the install must be waiting for it.
+    expect(install).not.toHaveBeenCalled();
+    finishFlush();
+    await done;
+
+    expect(order).toEqual(["download", "flush started", "flush finished", "install"]);
+  });
+
+  // Same rule as the exit handshake: losing the pending write is bad, an
+  // update that can never be installed is worse.
+  it("installs anyway when the flush fails, and logs it", async () => {
+    const install = vi.fn<PendingUpdate["install"]>().mockResolvedValue(undefined);
+    checkMock.mockResolvedValue(pending("26.8.0", { install }));
+    const state = new UpdateState();
+    state.flushBeforeInstall(() => Promise.reject(new Error("disk full")));
+    await state.check("manual");
+
+    await state.installAndRestart();
+
+    expect(install).toHaveBeenCalledTimes(1);
+    expect(relaunchMock).toHaveBeenCalledTimes(1);
+    expect(logWarn).toHaveBeenCalledWith(
+      "Could not flush pending work before installing the update",
+      expect.any(Error)
+    );
+  });
+
+  it("offers a manual download when the download fails", async () => {
+    const download = vi.fn().mockRejectedValue(new Error("connection reset"));
+    const install = vi.fn();
+    checkMock.mockResolvedValue(pending("26.8.0", { download, install }));
+    const state = new UpdateState();
+    await state.check("manual");
+
+    await state.installAndRestart();
+
+    expect(state.phase.kind).toBe("error");
+    expect(install).not.toHaveBeenCalled();
+    expect(relaunchMock).not.toHaveBeenCalled();
+  });
+
   it("offers a manual download when the install fails", async () => {
     // The realistic macOS failure: the .app is somewhere unwritable, which no
     // amount of retrying the same download can fix.
-    const downloadAndInstall = vi.fn().mockRejectedValue(new Error("Permission denied"));
-    checkMock.mockResolvedValue(pending("26.8.0", downloadAndInstall));
+    const install = vi.fn().mockRejectedValue(new Error("Permission denied"));
+    checkMock.mockResolvedValue(pending("26.8.0", { install }));
     const state = new UpdateState();
     await state.check("manual");
 

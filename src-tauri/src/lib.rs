@@ -1,3 +1,4 @@
+mod atomic_write;
 #[cfg(not(all(test, target_os = "windows")))]
 mod capture_backend;
 #[cfg(target_os = "windows")]
@@ -56,6 +57,8 @@ mod documents;
 mod errors;
 #[cfg(not(all(test, target_os = "windows")))]
 mod events;
+#[cfg(not(all(test, target_os = "windows")))]
+mod main_window;
 #[cfg(not(all(test, target_os = "windows")))]
 mod picker_session;
 #[cfg(not(all(test, target_os = "windows")))]
@@ -172,16 +175,53 @@ fn confirm_exit(app: tauri::AppHandle) {
     finish_shutdown(&app);
 }
 
-// The capture mode a `screenpick capture <mode>` command line asked for when
-// that command also started the app. A running app gets the request as a
-// `CaptureShortcut` event (see `handle_second_launch`); at a cold start no
-// webview is listening yet, so the mode waits here until the frontend collects
-// it with `take_startup_capture`.
-#[cfg(not(all(test, target_os = "windows")))]
-struct StartupCapture(std::sync::Mutex<Option<String>>);
+// Where a `screenpick capture <mode>` request goes while the frontend may not
+// be listening yet. A running app gets the request as a `CaptureShortcut`
+// event, but an event emitted before the webview has registered its listener
+// succeeds and reaches nobody. So until the frontend has collected once with
+// `take_startup_capture` (which it calls after its listeners exist), a request
+// is parked here instead: the mode from the cold-start command line, or one
+// from a second launch that arrived while this process was still starting.
+//
+// One slot, last request wins: two capture commands inside the startup window
+// start one capture, the later one. Queueing both would open a second picker
+// on top of the first.
+struct StartupCaptureState {
+    ready: bool,
+    parked: Option<String>,
+}
 
-// Called once by the frontend, after its capture listeners exist. Takes the
-// value, so a webview reload cannot repeat the capture.
+impl StartupCaptureState {
+    fn parked(mode: Option<String>) -> Self {
+        Self {
+            ready: false,
+            parked: mode,
+        }
+    }
+
+    // A capture request from a second launch. Returns the mode when it should
+    // be emitted now; parks it and returns `None` while the frontend is not
+    // ready.
+    fn request(&mut self, mode: String) -> Option<String> {
+        if self.ready {
+            return Some(mode);
+        }
+        self.parked = Some(mode);
+        None
+    }
+
+    // The frontend collecting what is parked. From here on requests are
+    // emitted. Takes the value, so a webview reload cannot repeat the capture.
+    fn take(&mut self) -> Option<String> {
+        self.ready = true;
+        self.parked.take()
+    }
+}
+
+#[cfg(not(all(test, target_os = "windows")))]
+struct StartupCapture(std::sync::Mutex<StartupCaptureState>);
+
+// Called once by the frontend, after its capture listeners exist.
 #[cfg(not(all(test, target_os = "windows")))]
 #[tauri::command]
 #[specta::specta]
@@ -204,12 +244,25 @@ fn handle_second_launch(app: &tauri::AppHandle, argv: Vec<String>) {
 
     match cli::parse(argv.into_iter().skip(1)) {
         cli::Invocation::Trigger(mode) => {
+            let to_emit = app
+                .state::<StartupCapture>()
+                .0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .request(mode.clone());
+            let Some(mode) = to_emit else {
+                log::info!(
+                    "capture requested from the command line before the window was ready; \
+                     it starts once the window is: {mode}"
+                );
+                return;
+            };
             log::info!("capture requested from the command line: {mode}");
             if let Err(err) = CaptureShortcut(mode).emit(app) {
                 log::warn!("failed to emit the command-line capture event: {err}");
             }
         }
-        _ => capture::restore_main_window(app),
+        _ => main_window::restore_main_window(app),
     }
 }
 
@@ -265,7 +318,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             capture::capture_active_window,
             capture::screen_recording_access,
             capture::open_screen_recording_settings,
-            capture::open_releases_page,
+            updates::open_releases_page,
             documents::list_documents,
             documents::create_document,
             documents::replace_document_base,
@@ -493,7 +546,9 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(ShortcutRegistry::default())
-        .manage(StartupCapture(std::sync::Mutex::new(startup_capture)))
+        .manage(StartupCapture(std::sync::Mutex::new(
+            StartupCaptureState::parked(startup_capture),
+        )))
         .manage(RegionPickerSession::default())
         .manage(ScreenPickerSession::default())
         .manage(WindowPickerSession::default())
@@ -599,7 +654,7 @@ pub fn run() {
             // tray emits Reopen with no window to activate — bring ours back.
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = &event {
-                capture::restore_main_window(app);
+                main_window::restore_main_window(app);
             }
 
             // Covers the exit paths that never touch a window close: the tray's
@@ -629,6 +684,44 @@ mod tray_decision_tests {
         assert!(!should_hide_to_tray(true, false));
         assert!(!should_hide_to_tray(false, true));
         assert!(!should_hide_to_tray(false, false));
+    }
+}
+
+#[cfg(test)]
+mod startup_capture_tests {
+    use super::StartupCaptureState;
+
+    #[test]
+    fn a_cold_start_mode_waits_for_the_frontend() {
+        let mut state = StartupCaptureState::parked(Some("region".to_string()));
+        assert_eq!(state.take(), Some("region".to_string()));
+        // Taken once: a webview reload must not repeat the capture.
+        assert_eq!(state.take(), None);
+    }
+
+    #[test]
+    fn a_request_before_the_frontend_is_ready_is_parked_not_emitted() {
+        let mut state = StartupCaptureState::parked(None);
+        assert_eq!(state.request("window".to_string()), None);
+        assert_eq!(state.take(), Some("window".to_string()));
+    }
+
+    #[test]
+    fn the_last_request_before_ready_wins() {
+        let mut state = StartupCaptureState::parked(Some("region".to_string()));
+        assert_eq!(state.request("screen".to_string()), None);
+        assert_eq!(state.take(), Some("screen".to_string()));
+    }
+
+    #[test]
+    fn a_request_after_the_frontend_collected_is_emitted_and_not_kept() {
+        let mut state = StartupCaptureState::parked(None);
+        assert_eq!(state.take(), None);
+        assert_eq!(
+            state.request("region".to_string()),
+            Some("region".to_string())
+        );
+        assert_eq!(state.take(), None);
     }
 }
 

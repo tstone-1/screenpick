@@ -160,8 +160,9 @@ export function nextThumbnailRevision(
 // percent-encodes the whole path, so a query can neither collide with the file
 // name nor reach the file lookup — it changes only the webview's cache key.
 // The CORS/asset-boundary discipline documented at `toAssetUrl`/`loadImage` in
-// editorCommands.ts is untouched: the origin is unchanged, and this URL is only
-// ever fed to a plain <img> (no canvas readback), so it needs no crossOrigin.
+// editorCommands.ts applies here too: the strip's <img> is read back from a
+// canvas for the drag preview (dragPreview.ts), so it carries
+// `crossorigin="anonymous"` in +page.svelte.
 export function recentThumbnailUrl(capture: RecentCapture): string {
   if (!capture.currentPath) return capture.assetUrl;
   const url = toAssetUrl(capture.currentPath);
@@ -172,8 +173,9 @@ export function recentThumbnailUrl(capture: RecentCapture): string {
 // Reflect a freshly persisted document's metadata (dirty flag, current.png
 // path) onto an in-memory RecentCapture, leaving every other capture and every
 // other field untouched. Deliberately does NOT patch title/width/height from
-// `record` — the live in-memory capture (already updated by crop/cut or
-// undo/redo) is the source of truth for the working raster's dimensions; see
+// `record` — the live in-memory capture is the source of truth for the working
+// raster's dimensions. Crop/cut put it into the strip with pushRecent, and
+// undo/redo with syncRecentImage; this patch must not undo either. See
 // the fuller rationale on DocumentStore#persistDocument. Shared by
 // DocumentStore.applyRecordToRecent (patches `recentCaptures`) and
 // EditorState's #persistCurrentDocument wrapper (patches its own `document`/
@@ -226,7 +228,7 @@ export class DocumentStore {
   // (create, autosave, or crop/cut re-base) failed — sanitized message; full
   // detail always goes to the diagnostics log (console + the on-disk log
   // file, via logError) alongside it. Rendered as a status-bar badge
-  // (+page.svelte) next to captureActivity, which plays the same role for
+  // (+page.svelte) next to the status line, which plays the same role for
   // capture-side failures. Cleared on the next successful persist.
   persistError = $state<string | null>(null);
 
@@ -368,6 +370,26 @@ export class DocumentStore {
       : this.recentCaptures;
     this.recentCaptures = [capture, ...rest];
     this.enforceRetention(openCapture, currentCapture);
+  }
+
+  // Make the strip entry of `capture`'s document show that capture's image:
+  // path, size, title. In place, because this is for a document whose working
+  // image changed back (undo or redo across a crop or cut), which is not a new
+  // capture and must not move in the strip. The entry keeps its own saved-state
+  // fields: a capture restored from an undo snapshot carries the values from
+  // when the snapshot was taken, and the entry's are the newer ones.
+  syncRecentImage(capture: RecentCapture): void {
+    const key = workspaceKeyFor(capture);
+    this.recentCaptures = this.recentCaptures.map((entry) =>
+      workspaceKeyFor(entry) === key && entry.path !== capture.path
+        ? {
+            ...capture,
+            currentPath: entry.currentPath,
+            dirty: entry.dirty,
+            thumbnailRevision: entry.thumbnailRevision
+          }
+        : entry
+    );
   }
 
   removeFromRecents(capture: RecentCapture): void {

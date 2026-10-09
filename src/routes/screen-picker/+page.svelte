@@ -1,10 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { listen } from "@tauri-apps/api/event";
   import { LoaderCircle, Monitor, RefreshCcw, X } from "@lucide/svelte";
 
   import { commands, type CapturableMonitor } from "#lib/bindings.ts";
-  import { screenTargetChangedEvent, type ScreenTargetChanged } from "#lib/screenSelectionEvents.ts";
+  import { listenForScreenTargetChanged } from "#lib/screenSelectionEvents.ts";
 
   let screens = $state<CapturableMonitor[]>([]);
   let status = $state("Loading displays");
@@ -68,8 +67,7 @@
   onMount(() => {
     window.addEventListener("keydown", handleKeydown);
     void loadScreens();
-    const unlistenTargetChanged = listen<ScreenTargetChanged>(screenTargetChangedEvent, (event) => {
-      const { monitorId, hovered } = event.payload;
+    const unlistenTargetChanged = listenForScreenTargetChanged(({ monitorId, hovered }) => {
       if (hovered) {
         targetedDisplayId = monitorId;
       } else if (targetedDisplayId === monitorId) {

@@ -72,7 +72,10 @@ fn has_png_extension(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{has_png_extension, validate_png_export, verify_export_destination};
+    use super::{
+        has_png_extension, validate_png_export, verify_export_destination, MAX_EXPORT_BYTES,
+        PNG_SIGNATURE,
+    };
     use std::path::PathBuf;
 
     #[test]
@@ -98,6 +101,22 @@ mod tests {
     #[test]
     fn validate_png_export_rejects_wrong_extension() {
         assert!(validate_png_export("/tmp/shot.jpg", b"\x89PNG\r\n\x1a\nextra").is_err());
+    }
+
+    #[test]
+    fn validate_png_export_rejects_a_payload_over_the_size_cap() {
+        // Zeroed, so the allocator maps the pages without touching them; only
+        // the signature is written. A real PNG signature, so that without the
+        // cap this payload would be accepted.
+        let mut bytes = vec![0_u8; MAX_EXPORT_BYTES + 1];
+        bytes[..PNG_SIGNATURE.len()].copy_from_slice(PNG_SIGNATURE);
+
+        let err = validate_png_export("/tmp/shot.png", &bytes).unwrap_err();
+        assert!(err.contains("too large"), "{err}");
+
+        // The control: one byte less is exactly at the cap and passes.
+        bytes.pop();
+        assert!(validate_png_export("/tmp/shot.png", &bytes).is_ok());
     }
 
     fn temp_root(label: &str) -> PathBuf {
@@ -134,6 +153,31 @@ mod tests {
         assert!(result.is_err(), "unexpected ok for {result:?}");
         let _ = std::fs::remove_dir_all(allowed);
         let _ = std::fs::remove_dir_all(other);
+    }
+
+    #[test]
+    fn verify_export_destination_rejects_a_sibling_whose_name_starts_with_a_root() {
+        // `<root>-evil` is outside `<root>`, but its path text begins with the
+        // root's. Containment is by path component, not by string prefix.
+        let allowed = temp_root("sibling");
+        let sibling = PathBuf::from(format!("{}-evil", allowed.display()));
+        std::fs::create_dir_all(&sibling).unwrap();
+        let dest = sibling.join("shot.png");
+
+        let result =
+            verify_export_destination(dest.to_str().unwrap(), std::slice::from_ref(&allowed));
+
+        assert!(result.is_err(), "unexpected ok for {result:?}");
+        // The control: a directory really inside the root is accepted.
+        let inside = allowed.join("nested");
+        std::fs::create_dir_all(&inside).unwrap();
+        let dest = inside.join("shot.png");
+        assert!(
+            verify_export_destination(dest.to_str().unwrap(), std::slice::from_ref(&allowed))
+                .is_ok()
+        );
+        let _ = std::fs::remove_dir_all(allowed);
+        let _ = std::fs::remove_dir_all(sibling);
     }
 
     #[test]

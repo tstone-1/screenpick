@@ -169,6 +169,54 @@ describe("screen picker window", () => {
     expect(commandsMock.cancelScreenSelection).not.toHaveBeenCalled();
   });
 
+  // Escape and the click arrive in the same tick, before the re-render that
+  // disables the buttons, so only the handler's own guard can stop the click.
+  it("ignores a click on a display while a cancel is in flight", async () => {
+    const { container } = await mountPicker();
+    await vi.waitFor(() => expect(displayButtons(container)).toHaveLength(2));
+    commandsMock.cancelScreenSelection.mockReturnValueOnce(new Promise(() => {}));
+
+    pressEscape();
+    displayButtons(container)[0]!.click();
+    await vi.waitFor(() => expect(commandsMock.cancelScreenSelection).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+
+    expect(commandsMock.finishScreenSelection).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["the backend refuses", () => Promise.resolve({ status: "error", error: "session ended" })],
+    ["the call throws", () => Promise.reject(new Error("ipc down"))]
+  ])("takes a second click after a confirm that failed because %s", async (_name, outcome) => {
+    const { container } = await mountPicker();
+    await vi.waitFor(() => expect(displayButtons(container)).toHaveLength(2));
+    commandsMock.finishScreenSelection.mockImplementationOnce(outcome);
+
+    displayButtons(container)[0]!.click();
+    await vi.waitFor(() => expect(commandsMock.finishScreenSelection).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(displayButtons(container)[1]!.disabled).toBe(false));
+
+    displayButtons(container)[1]!.click();
+    await vi.waitFor(() => expect(commandsMock.finishScreenSelection).toHaveBeenCalledTimes(2));
+    expect(commandsMock.finishScreenSelection).toHaveBeenLastCalledWith(7);
+  });
+
+  it.each([
+    ["the backend refuses", () => Promise.resolve({ status: "error", error: "session ended" })],
+    ["the call throws", () => Promise.reject(new Error("ipc down"))]
+  ])("accepts Escape again after a cancel that failed because %s", async (_name, outcome) => {
+    const { container } = await mountPicker();
+    await vi.waitFor(() => expect(displayButtons(container)).toHaveLength(2));
+    commandsMock.cancelScreenSelection.mockImplementationOnce(outcome);
+
+    pressEscape();
+    await vi.waitFor(() => expect(commandsMock.cancelScreenSelection).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(displayButtons(container)[0]!.disabled).toBe(false));
+
+    pressEscape();
+    await vi.waitFor(() => expect(commandsMock.cancelScreenSelection).toHaveBeenCalledTimes(2));
+  });
+
   it("cancels from the header Cancel button", async () => {
     const { getByLabelText } = await mountPicker();
 

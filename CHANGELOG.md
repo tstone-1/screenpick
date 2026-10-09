@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [CalVer](https://calver.org/) `YY.M.MICRO` versioning
 (see [BUILD.md](BUILD.md#version-management)).
 
-## [26.10.3] - Unreleased
+## [26.10.3] - 2026-10-09
 
 ### Changed
 
@@ -14,6 +14,45 @@ and this project uses [CalVer](https://calver.org/) `YY.M.MICRO` versioning
   Windows shows the publisher as *Open Source Developer Timo Stein*. The
   certificate is new, so SmartScreen can still warn the first time the
   installer runs. See *Code signing policy* in the README.
+- The release workflow no longer repeats the tests when CI has already passed
+  the tagged commit, takes `cargo-audit` as a released binary instead of
+  compiling it, and keeps the built Windows signing client in a cache.
+- The release workflow fails when `latest.json` is missing or lacks a
+  platform, and when the Apple signing secrets are not set.
+- A command-line option given twice is an error. `--help` now lists `-o` and
+  the `--option=value` form.
+- The unused `@tauri-apps/plugin-global-shortcut` npm package and the unused
+  notification permission of the main window were removed.
+
+### Fixed
+
+- After a crop or cut was undone or redone, *Save image as...* on the Recent
+  entry saved the wrong image, with the annotations in the wrong place. The
+  Recent entry now follows undo and redo.
+- Installing an update on Windows could lose annotations made in the last
+  moments before the installer started. The open screenshot is saved before
+  the install begins.
+- When the chosen save folder had been deleted or renamed, every settings
+  change and every capture failed. Settings can be changed again, and a
+  missing save folder inside the user profile is created at the next capture.
+- A settings file that cannot be read is kept as a backup instead of being
+  overwritten at startup.
+- `screenpick capture <mode>` sent while ScreenPick was still starting did
+  nothing. The capture now starts once the window is ready.
+- Picking a display in the screen picker could, rarely, be reported as
+  cancelled.
+- Undo and redo no longer reset zoom and pan.
+- Copying a large selection failed with "Selection is too large". It now
+  reaches the clipboard; only pasting it into the screenshot or cutting it is
+  refused.
+- Pressing a slider or the colour input without changing the value left an
+  undo step that did nothing.
+- A strongly bent arrow whose ends are close together lost its shaft.
+- `--output` no longer leaves a truncated file when writing fails.
+- A failed copy to the clipboard after a capture is reported in the status
+  line.
+- Dragging a capture out of Recent showed the whole screenshot at full size
+  under the pointer. The preview is now a small thumbnail.
 
 ### Removed
 

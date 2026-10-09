@@ -166,13 +166,54 @@ describe("region selector overlay", () => {
     drag(main, [10, 10], [120, 120]);
     await vi.waitFor(() => expect(commandsMock.finishRegionSelection).toHaveBeenCalledTimes(1));
 
-    // The route only clears `selectionPending` when the IPC layer itself
-    // throws; if it did not, the overlay would sit there with no way back --
-    // visible as the wait cursor never lifting.
+    // If the route did not clear `selectionPending` here, the overlay would
+    // sit there with no way back -- visible as the wait cursor never lifting.
     await vi.waitFor(() => expect(main.classList.contains("pending")).toBe(false));
 
     drag(main, [10, 10], [120, 120]);
     await vi.waitFor(() => expect(commandsMock.finishRegionSelection).toHaveBeenCalledTimes(2));
+  });
+
+  // The other way a confirm fails: the command answers, with an error. The
+  // overlay can still be on screen then, so it must take a second gesture.
+  it("stays usable after a confirm the backend refuses", async () => {
+    const { main } = mountOverlay();
+    commandsMock.finishRegionSelection.mockResolvedValueOnce({ status: "error", error: "session ended" });
+
+    drag(main, [10, 10], [120, 120]);
+    await vi.waitFor(() => expect(commandsMock.finishRegionSelection).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(main.classList.contains("pending")).toBe(false));
+
+    drag(main, [10, 10], [120, 120]);
+    await vi.waitFor(() => expect(commandsMock.finishRegionSelection).toHaveBeenCalledTimes(2));
+  });
+
+  it.each([
+    ["the backend refuses", () => Promise.resolve({ status: "error", error: "session ended" })],
+    ["the call throws", () => Promise.reject(new Error("ipc down"))]
+  ])("accepts Escape again after a cancel that failed because %s", async (_name, outcome) => {
+    mountOverlay();
+    commandsMock.cancelRegionSelection.mockImplementationOnce(outcome);
+
+    pressEscape();
+    await vi.waitFor(() => expect(commandsMock.cancelRegionSelection).toHaveBeenCalledTimes(1));
+
+    await vi.waitFor(() => {
+      pressEscape();
+      expect(commandsMock.cancelRegionSelection).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("ignores a drag while a cancel is in flight, so one overlay never both cancels and confirms", async () => {
+    const { main } = mountOverlay();
+    commandsMock.cancelRegionSelection.mockReturnValueOnce(new Promise(() => {}));
+
+    pressEscape();
+    drag(main, [10, 10], [120, 120]);
+    await vi.waitFor(() => expect(commandsMock.cancelRegionSelection).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+
+    expect(commandsMock.finishRegionSelection).not.toHaveBeenCalled();
   });
 
   it("stops listening for Escape after unmount", async () => {

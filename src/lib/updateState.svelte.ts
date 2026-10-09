@@ -45,6 +45,7 @@ export class UpdateState {
   justUpdated = $state(false);
 
   #pending: PendingUpdate | null = null;
+  #flushBeforeInstall: (() => Promise<void>) | null = null;
   #startupTimer: ReturnType<typeof setTimeout> | null = null;
 
   showBanner = $derived(
@@ -158,6 +159,13 @@ export class UpdateState {
     }
   }
 
+  // Registers the work that must be saved before an install. Injected, like
+  // the flush of the exit handshake in shutdown.ts, so this state machine does
+  // not import the editor.
+  flushBeforeInstall(flush: () => Promise<void>): void {
+    this.#flushBeforeInstall = flush;
+  }
+
   // Downloads and installs the pending update, then restarts. Windows never
   // reaches the relaunch — the NSIS installer terminates the app first.
   async installAndRestart(): Promise<void> {
@@ -166,16 +174,23 @@ export class UpdateState {
 
     this.phase = { kind: "downloading", version: update.version, downloaded: 0, total: null };
     try {
-      await update.downloadAndInstall({
-        onProgress: (downloaded, total) => {
-          this.phase = { kind: "downloading", version: update.version, downloaded, total };
-        },
-        // Fires between download and install, so the state is shown while the
-        // install is actually happening rather than after it already finished.
-        onInstalling: () => {
-          this.phase = { kind: "installing", version: update.version };
-        }
+      await update.download((downloaded, total) => {
+        this.phase = { kind: "downloading", version: update.version, downloaded, total };
       });
+      // Set before the install starts, so the state is shown while the install
+      // is actually happening rather than after it already finished.
+      this.phase = { kind: "installing", version: update.version };
+      // After the download, so it also covers what was drawn while it ran. On
+      // Windows the installer ends the process without the exit handshake, and
+      // this is then the only save the last edits get.
+      try {
+        await this.#flushBeforeInstall?.();
+      } catch (error) {
+        // Same rule as the exit handshake: losing the pending write is bad, an
+        // update that can never be installed is worse.
+        logWarn("Could not flush pending work before installing the update", error);
+      }
+      await update.install();
       await relaunch();
     } catch (error) {
       logError("Update install failed", error);

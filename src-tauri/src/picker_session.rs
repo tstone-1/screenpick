@@ -10,8 +10,9 @@ use std::{
 use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, Position, Size, WebviewWindow};
 use tauri_specta::Event;
 
-use crate::capture::{restore_main_window, CaptureResult};
+use crate::capture::CaptureResult;
 use crate::events::{CaptureCancelled, CaptureCompleted};
+use crate::main_window::restore_main_window;
 
 /// Emit the terminal capture event for a finished picker session and return the
 /// original result unchanged. Centralises the "emit only when this session is
@@ -144,6 +145,39 @@ pub(crate) fn finish_capture(
     end_session: impl FnOnce(&AppHandle, Option<u64>) -> bool,
     capture: impl FnOnce(&AppHandle) -> Result<CaptureResult, String>,
 ) -> Result<CaptureResult, String> {
+    let Some((still_active, result)) = finish_sequence(
+        session_id,
+        cancelled_message,
+        || {
+            hide(app);
+            thread::sleep(Duration::from_millis(PICKER_HIDE_DELAY_MS));
+        },
+        |expected_id| end_session(app, expected_id),
+        || capture(app),
+    ) else {
+        return Err(cancelled_message.to_string());
+    };
+    if still_active {
+        restore_main_window(app);
+    }
+
+    emit_capture_outcome(app, still_active, result)
+}
+
+/// The order of a finish, without the windows: refuse a finish that saw no
+/// session, hide and settle, end the session, and capture only if this call
+/// still owned it. Kept free of `AppHandle` so the order itself is testable;
+/// `finish_capture` and the picker-less screen capture supply the real steps.
+///
+/// Returns `None` when the finish was refused before anything ran, otherwise
+/// whether this call ended the session together with the capture result.
+pub(crate) fn finish_sequence<T>(
+    session_id: Option<u64>,
+    cancelled_message: &str,
+    hide_and_settle: impl FnOnce(),
+    end_session: impl FnOnce(Option<u64>) -> bool,
+    capture: impl FnOnce() -> Result<T, String>,
+) -> Option<(bool, Result<T, String>)> {
     if !finish_may_proceed(session_id) {
         // Nothing was active when this finish started, so it is reporting on a
         // session that a cancel command or the overlay's Destroyed handler
@@ -151,23 +185,33 @@ pub(crate) fn finish_capture(
         // BEFORE the hide: the labels this path hides and ends are per-picker,
         // not per-session, so carrying on would hide and close a newer
         // session's overlay and capture with this one's stale selection.
-        return Err(cancelled_message.to_string());
+        return None;
     }
 
-    hide(app);
-    thread::sleep(Duration::from_millis(PICKER_HIDE_DELAY_MS));
+    hide_and_settle();
 
-    let still_active = end_session(app, session_id);
+    let still_active = end_session(session_id);
     let result = if still_active {
-        capture(app)
+        capture()
     } else {
         Err(cancelled_message.to_string())
     };
-    if still_active {
-        restore_main_window(app);
-    }
+    Some((still_active, result))
+}
 
-    emit_capture_outcome(app, still_active, result)
+/// End a session, then run the picker's own teardown only if this call ended
+/// it. The order matters when the teardown closes windows whose `Destroyed`
+/// handler ends the session too: closing first lets such a handler win the
+/// race against a finish on another thread, end the session and report a
+/// cancellation for a pick that was made. With the session ended first, the
+/// handler finds nothing to end. A caller that does not own the session also
+/// must not close windows that may belong to a newer one.
+pub(crate) fn end_then_teardown(end: impl FnOnce() -> bool, teardown: impl FnOnce()) -> bool {
+    let ended = end();
+    if ended {
+        teardown();
+    }
+    ended
 }
 
 /// Whether a `finish_*` path may run its hide-and-capture sequence at all.
@@ -254,13 +298,10 @@ impl PickerSession {
         self.end_inner(app, label, expected_id, false)
     }
 
-    fn end_inner(
-        &self,
-        app: &AppHandle,
-        label: &str,
-        expected_id: Option<u64>,
-        restore_main: bool,
-    ) -> bool {
+    /// Clear the active session if `expected_id` may end it (see `should_end`).
+    /// The check and the clear happen under one lock, so of two callers racing
+    /// to end the same session exactly one gets `true`.
+    fn release(&self, expected_id: Option<u64>) -> bool {
         let mut current = self
             .current_id
             .lock()
@@ -269,7 +310,19 @@ impl PickerSession {
             return false;
         }
         *current = None;
-        drop(current);
+        true
+    }
+
+    fn end_inner(
+        &self,
+        app: &AppHandle,
+        label: &str,
+        expected_id: Option<u64>,
+        restore_main: bool,
+    ) -> bool {
+        if !self.release(expected_id) {
+            return false;
+        }
 
         if let Some(window) = app.get_webview_window(label) {
             let _ = window.close();
@@ -283,7 +336,83 @@ impl PickerSession {
 
 #[cfg(test)]
 mod tests {
-    use super::{finish_may_proceed, should_end, PickerSession};
+    use super::{
+        end_then_teardown, finish_may_proceed, finish_sequence, should_end, PickerSession,
+    };
+    use std::cell::RefCell;
+
+    // What `finish_sequence` returns: whether the session was ended by this
+    // call and the capture result, or None for a finish refused up front.
+    type FinishOutcome = Option<(bool, Result<u8, String>)>;
+
+    // Runs `finish_sequence` with steps that only write their name down.
+    fn recorded_finish(session_id: Option<u64>, ends: bool) -> (Vec<&'static str>, FinishOutcome) {
+        let steps = RefCell::new(Vec::new());
+        let outcome = finish_sequence(
+            session_id,
+            "cancelled",
+            || steps.borrow_mut().push("hide"),
+            |_| {
+                steps.borrow_mut().push("end");
+                ends
+            },
+            || {
+                steps.borrow_mut().push("capture");
+                Ok(7)
+            },
+        );
+        (steps.into_inner(), outcome)
+    }
+
+    #[test]
+    fn a_finish_that_saw_no_session_runs_nothing() {
+        // Not even the hide: the windows it would hide and end may belong to a
+        // session started since.
+        let (steps, outcome) = recorded_finish(None, true);
+        assert!(steps.is_empty(), "ran {steps:?}");
+        assert!(outcome.is_none());
+    }
+
+    #[test]
+    fn a_finish_ends_its_session_before_it_captures() {
+        let (steps, outcome) = recorded_finish(Some(3), true);
+        assert_eq!(steps, ["hide", "end", "capture"]);
+        assert_eq!(outcome, Some((true, Ok(7))));
+    }
+
+    #[test]
+    fn a_finish_that_lost_its_session_does_not_capture() {
+        let (steps, outcome) = recorded_finish(Some(3), false);
+        assert_eq!(steps, ["hide", "end"]);
+        assert_eq!(outcome, Some((false, Err("cancelled".to_string()))));
+    }
+
+    #[test]
+    fn teardown_runs_after_the_session_ended_and_only_for_its_owner() {
+        let session = PickerSession::default();
+        let id = session.next_id();
+        session.record(id);
+
+        // What a window's Destroyed handler does while the teardown closes it.
+        let handler_ended_it = RefCell::new(None);
+        let ended = end_then_teardown(
+            || session.release(Some(id)),
+            || *handler_ended_it.borrow_mut() = Some(session.release(Some(id))),
+        );
+        assert!(ended);
+        // The session was already over when the teardown ran, so the handler
+        // had nothing to end and reports no cancellation.
+        assert_eq!(handler_ended_it.into_inner(), Some(false));
+
+        // A caller that does not own the session tears nothing down.
+        session.record(session.next_id());
+        let tore_down = RefCell::new(false);
+        assert!(!end_then_teardown(
+            || session.release(Some(id)),
+            || *tore_down.borrow_mut() = true,
+        ));
+        assert!(!tore_down.into_inner());
+    }
 
     #[test]
     fn finish_without_a_snapshot_is_already_cancelled() {

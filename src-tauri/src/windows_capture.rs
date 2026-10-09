@@ -22,7 +22,7 @@ use windows::{
             DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SDR_WHITE_LEVEL,
             DISPLAYCONFIG_SOURCE_DEVICE_NAME, QDC_ONLY_ACTIVE_PATHS,
         },
-        Foundation::{ERROR_INSUFFICIENT_BUFFER, HWND, POINT},
+        Foundation::{ERROR_INSUFFICIENT_BUFFER, HWND},
         Graphics::{
             Direct3D::D3D_DRIVER_TYPE_HARDWARE,
             Direct3D11::{
@@ -31,10 +31,7 @@ use windows::{
                 D3D11_MAP_READ, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
             },
             Dxgi::{Common::DXGI_FORMAT_R16G16B16A16_FLOAT, IDXGIDevice},
-            Gdi::{
-                GetMonitorInfoW, MonitorFromPoint, HMONITOR, MONITORINFOEXW,
-                MONITOR_DEFAULTTONEAREST,
-            },
+            Gdi::{GetMonitorInfoW, HMONITOR, MONITORINFOEXW},
         },
         System::WinRT::{
             Direct3D11::{CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess},
@@ -48,10 +45,13 @@ fn error(e: impl std::fmt::Display) -> String {
     format!("Windows HDR capture: {e}")
 }
 
+// xcap's Windows monitor id is the HMONITOR it enumerated (its public API
+// exposes handles as u32). Use that handle rather than looking the display up
+// again from a point on it: a point is in the coordinates of this process's
+// DPI awareness, which the command line does not have yet when it captures, so
+// on a layout with mixed scaling it can land on another display.
 fn monitor_handle(monitor: &Monitor) -> Result<HMONITOR, String> {
-    let x = monitor.x().map_err(error)? + (monitor.width().map_err(error)? / 2) as i32;
-    let y = monitor.y().map_err(error)? + (monitor.height().map_err(error)? / 2) as i32;
-    Ok(unsafe { MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST) })
+    Ok(HMONITOR(monitor.id().map_err(error)? as usize as *mut _))
 }
 
 // None means SDR; Some(scale) means float capture is required. Query failures

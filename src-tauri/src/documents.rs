@@ -42,7 +42,7 @@
 
 use std::{
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
         Mutex,
@@ -52,6 +52,7 @@ use std::{
 
 use tauri::{AppHandle, Manager};
 
+use crate::atomic_write::write_atomic;
 use crate::capture_trust_roots::verify_capture_source;
 use crate::document_store::{self, is_valid_doc_id, DocumentMeta, DocumentRecord};
 use crate::errors::error_message;
@@ -110,14 +111,22 @@ pub(crate) fn quarantine_unindexed_document_folders(app: &AppHandle) {
     let Ok(root) = documents_root(app) else {
         return;
     };
-    let _guard = MANIFEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    match document_store::quarantine_unindexed_documents(&root) {
+    match quarantine_unindexed_under_lock(&root) {
         Ok(Some(recovery)) => notify_manifest_recovery(app, &recovery),
         Ok(None) => (),
         Err(err) => log::warn!("could not inspect unindexed document folders: {err}"),
     }
+}
+
+// The part of the startup quarantine that needs no AppHandle, so a test can
+// run what startup runs: the sweep, under the manifest lock.
+fn quarantine_unindexed_under_lock(
+    root: &Path,
+) -> Result<Option<document_store::ManifestRecovery>, String> {
+    let _guard = MANIFEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    document_store::quarantine_unindexed_documents(root)
 }
 
 /// Canonicalized documents root, used by the capture-trust check to accept this
@@ -261,7 +270,7 @@ pub(crate) fn create_document(
     fs::copy(&canonical_source, &base).map_err(error_message)?;
     // current.png starts identical to the base — no annotations yet.
     fs::copy(&base, dir.join("current.png")).map_err(error_message)?;
-    document_store::write_atomic(&dir.join("annotations.json"), b"[]")?;
+    write_atomic(&dir.join("annotations.json"), b"[]")?;
 
     let now = now_millis();
     let meta = DocumentMeta {
@@ -366,8 +375,8 @@ pub(crate) fn save_document(
     // `list_documents`). The result is a briefly stale thumbnail, corrected by
     // the next save — not a torn document. A real transaction here would buy
     // nothing.
-    document_store::write_atomic(&dir.join("annotations.json"), annotations.as_bytes())?;
-    document_store::write_atomic(&dir.join("current.png"), &current_png)?;
+    write_atomic(&dir.join("annotations.json"), annotations.as_bytes())?;
+    write_atomic(&dir.join("current.png"), &current_png)?;
 
     let guard = MANIFEST_LOCK
         .lock()
@@ -401,4 +410,65 @@ pub(crate) fn delete_document(app: AppHandle, id: String) -> Result<(), String> 
     let mut manifest = read_manifest(&app);
     manifest.retain(|meta| meta.id != id);
     write_manifest(&app, &manifest)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{quarantine_unindexed_under_lock, DocumentMeta};
+    use crate::document_store;
+    use std::path::PathBuf;
+
+    fn temp_root(label: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "screenpick-documents-test-{}-{}-{}",
+            label,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    // The sweep itself is tested in `document_store`. This pins that the
+    // function startup calls actually runs it.
+    #[test]
+    fn startup_quarantine_moves_an_unindexed_folder_and_keeps_an_indexed_one() {
+        let root = temp_root("startup-quarantine");
+        let indexed = DocumentMeta {
+            id: "doc-1-1".to_string(),
+            mode: "region".to_string(),
+            title: "Region - Display".to_string(),
+            width: 800,
+            height: 600,
+            created_at: 10,
+            updated_at: 20,
+            dirty: false,
+            base_file: None,
+        };
+        document_store::write_manifest_to(&root.join("index.json"), &[indexed]).unwrap();
+        for id in ["doc-1-1", "doc-2-2"] {
+            std::fs::create_dir_all(root.join(id)).unwrap();
+            std::fs::write(root.join(id).join("base.png"), id.as_bytes()).unwrap();
+        }
+
+        let recovery = quarantine_unindexed_under_lock(&root).unwrap();
+
+        assert!(recovery.is_none(), "a readable index is not a recovery");
+        // The unindexed folder is preserved under recovered/, bytes intact.
+        assert!(!root.join("doc-2-2").exists());
+        assert_eq!(
+            std::fs::read(root.join("recovered").join("doc-2-2").join("base.png")).unwrap(),
+            b"doc-2-2"
+        );
+        // The control: the indexed folder is left where it is.
+        assert_eq!(
+            std::fs::read(root.join("doc-1-1").join("base.png")).unwrap(),
+            b"doc-1-1"
+        );
+        std::fs::remove_dir_all(root).ok();
+    }
 }

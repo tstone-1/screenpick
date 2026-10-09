@@ -19,14 +19,13 @@ export type PendingUpdate = {
   version: string;
   // Release notes from latest.json. Absent for releases published without them.
   notes: string | null;
-  // Downloads AND installs — the plugin exposes no way to separate the two, so
-  // the name says both. `onInstalling` fires when the bytes are in and the
-  // install begins, which is the only honest moment to show an "installing"
-  // state: once this promise resolves the install is already done.
-  downloadAndInstall: (callbacks: {
-    onProgress: (downloaded: number, total: number | null) => void;
-    onInstalling: () => void;
-  }) => Promise<void>;
+  // Fetches the package and keeps it in the backend until `install`.
+  download: (onProgress: (downloaded: number, total: number | null) => void) => Promise<void>;
+  // Installs what `download` fetched. Kept separate from the download because
+  // on Windows this call ends the process (the plugin exits once the installer
+  // has started, without the exit handshake), so anything that has to be saved
+  // must be saved between the two.
+  install: () => Promise<void>;
 };
 
 // Resolves to null when the running build is already current. Rejects when the
@@ -39,15 +38,13 @@ export async function checkForUpdates(): Promise<PendingUpdate | null> {
   return {
     version: update.version,
     notes: update.body ?? null,
-    downloadAndInstall: async ({ onProgress, onInstalling }) => {
+    download: async (onProgress) => {
       let downloaded = 0;
       let total: number | null = null;
       // The plugin streams three event kinds; only Started carries the content
       // length, and Progress reports per-chunk deltas rather than a running
-      // total, so the accumulation has to happen here. `Finished` means the
-      // download finished — the install runs after it, before the outer promise
-      // resolves — so that is where the installing state belongs.
-      await update.downloadAndInstall((event) => {
+      // total, so the accumulation has to happen here.
+      await update.download((event) => {
         switch (event.event) {
           case "Started":
             total = event.data.contentLength ?? null;
@@ -59,11 +56,11 @@ export async function checkForUpdates(): Promise<PendingUpdate | null> {
             break;
           case "Finished":
             onProgress(total ?? downloaded, total);
-            onInstalling();
             break;
         }
       });
-    }
+    },
+    install: () => update.install()
   };
 }
 

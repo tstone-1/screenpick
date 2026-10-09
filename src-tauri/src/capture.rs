@@ -15,6 +15,7 @@ use crate::capture_modes::{capture_modes, CaptureMode};
 use crate::capture_trust_roots::verify_capture_source;
 use crate::errors::error_message;
 use crate::export_validation::{validate_png_export, verify_export_destination};
+use crate::main_window::restore_main_window;
 
 #[cfg(target_os = "macos")]
 use objc2_core_graphics::{CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess};
@@ -571,33 +572,6 @@ pub(crate) fn open_screen_recording_settings() -> Result<(), String> {
     }
 }
 
-// The releases page the update banner points at. The frontend holds the same
-// string as RELEASES_URL in src/lib/updateState.svelte.ts. The command takes no
-// parameter on purpose: the webview must never choose which URL gets opened.
-const RELEASES_URL: &str = "https://github.com/tstone-1/screenpick/releases/latest";
-
-// The webview cannot open external URLs itself: no opener plugin is registered,
-// and without a new-window handler a target="_blank" link does nothing on macOS
-// and opens a bare in-app popup on Windows. The URL is a separate argv entry and
-// never passes through a shell.
-#[tauri::command]
-#[specta::specta]
-pub(crate) fn open_releases_page() -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    let program = "open";
-    // explorer exits with 1 even when it opened the URL, so only a spawn
-    // failure counts as an error here.
-    #[cfg(target_os = "windows")]
-    let program = "explorer";
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let program = "xdg-open";
-    std::process::Command::new(program)
-        .arg(RELEASES_URL)
-        .spawn()
-        .map(|_| ())
-        .map_err(|err| format!("Could not open the releases page: {err}"))
-}
-
 fn should_skip_window_metadata(app_name: &str, title: &str) -> bool {
     if !cfg!(target_os = "macos") {
         return false;
@@ -869,35 +843,16 @@ pub(crate) fn primary_monitor() -> Result<Monitor, String> {
     }
 }
 
-pub(crate) fn restore_main_window(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
-    }
-}
-
 fn capture_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let settings = app
         .try_state::<crate::settings::SettingsState>()
         .map(|s| s.get());
 
     if let Some(Some(dir)) = settings.as_ref().map(|s| s.save_directory.as_ref()) {
-        crate::settings::validate_save_directory(app, Some(dir))?;
-        let path = PathBuf::from(dir);
-        if path.is_dir() {
-            return Ok(path);
-        }
-        let create_err = fs::create_dir_all(&path).err();
-        if path.is_dir() {
-            return Ok(path);
-        }
-        return match create_err {
-            Some(err) => Err(format!(
-                "Configured save directory is not available: {dir} ({err})"
-            )),
-            None => Err(format!("Configured save directory is not available: {dir}")),
-        };
+        let home = app.path().home_dir().map_err(error_message)?;
+        return configured_capture_dir(dir, &home, |dir| {
+            crate::settings::validate_save_directory(app, Some(dir)).map(|_| ())
+        });
     }
 
     let dir = app
@@ -907,6 +862,66 @@ fn capture_dir(app: &AppHandle) -> Result<PathBuf, String> {
         .join("captures");
     fs::create_dir_all(&dir).map_err(error_message)?;
     Ok(dir)
+}
+
+/// The configured save folder, ready to write into. A folder that has gone
+/// missing since it was chosen (deleted, renamed back later, a fresh profile)
+/// is created again rather than failing every capture: validation resolves the
+/// path and so can only pass for a folder that exists, which is why the
+/// creation comes first.
+///
+/// Nothing is created outside the user profile. `validate` still has the last
+/// word on the folder afterwards, whether it was just created or was there.
+fn configured_capture_dir(
+    dir: &str,
+    home: &Path,
+    validate: impl FnOnce(&str) -> Result<(), String>,
+) -> Result<PathBuf, String> {
+    let path = PathBuf::from(dir);
+    if !path.is_dir() {
+        let create_err = if missing_dir_is_inside(&path, home) {
+            fs::create_dir_all(&path).err()
+        } else {
+            None
+        };
+        if !path.is_dir() {
+            return Err(match create_err {
+                Some(err) => format!("Configured save directory is not available: {dir} ({err})"),
+                None => format!("Configured save directory is not available: {dir}"),
+            });
+        }
+    }
+    validate(dir)?;
+    Ok(path)
+}
+
+/// Whether creating the missing `path` would put it strictly inside `home`.
+/// The part of `path` that exists is resolved, so a symlink on the way cannot
+/// lead outside; the part that does not exist yet must be plain names.
+fn missing_dir_is_inside(path: &Path, home: &Path) -> bool {
+    use std::path::Component;
+
+    if !path.is_absolute() {
+        return false;
+    }
+    let Ok(home) = home.canonicalize() else {
+        return false;
+    };
+    let Some(existing) = path.ancestors().find(|ancestor| ancestor.exists()) else {
+        return false;
+    };
+    let Ok(missing) = path.strip_prefix(existing) else {
+        return false;
+    };
+    if !missing
+        .components()
+        .all(|component| matches!(component, Component::Normal(_)))
+    {
+        return false;
+    }
+    existing
+        .canonicalize()
+        .is_ok_and(|existing| existing.starts_with(&home))
 }
 
 fn capture_path(app: &AppHandle, mode: &str) -> Result<PathBuf, String> {
@@ -1106,5 +1121,107 @@ mod tests {
     fn clipboard_dimension_guard_rejects_huge_decoded_images() {
         assert!(ensure_clipboard_dimensions_fit(60_000, 60_000).is_err());
         assert!(ensure_clipboard_dimensions_fit(100, 100).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod configured_capture_dir_tests {
+    use super::configured_capture_dir;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
+
+    // A stand-in user profile. Label, pid and a counter, so parallel tests
+    // never share one.
+    fn temp_home(label: &str) -> PathBuf {
+        let home = std::env::temp_dir().join(format!(
+            "screenpick-capture-dir-test-{label}-{}-{}",
+            std::process::id(),
+            NEXT_DIR.fetch_add(1, Ordering::SeqCst)
+        ));
+        fs::create_dir_all(&home).unwrap();
+        home
+    }
+
+    #[test]
+    fn a_missing_folder_inside_the_profile_is_created_before_validation() {
+        let home = temp_home("recreate");
+        let dir = home.join("Pictures").join("Shots");
+        let dir_text = dir.to_str().unwrap();
+
+        // Validation resolves the path, so it can only pass for a folder that
+        // exists by the time it runs.
+        let result = configured_capture_dir(dir_text, &home, |dir| {
+            PathBuf::from(dir)
+                .canonicalize()
+                .map(|_| ())
+                .map_err(|_| "validated a folder that does not exist".to_string())
+        });
+
+        assert_eq!(result, Ok(dir.clone()));
+        assert!(dir.is_dir());
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_missing_folder_outside_the_profile_is_not_created() {
+        let home = temp_home("outside-home");
+        let elsewhere = temp_home("outside-target");
+        let dir = elsewhere.join("Shots");
+
+        let result = configured_capture_dir(dir.to_str().unwrap(), &home, |_| Ok(()));
+
+        assert!(result.unwrap_err().contains("is not available"));
+        assert!(!dir.exists());
+        let _ = fs::remove_dir_all(&home);
+        let _ = fs::remove_dir_all(&elsewhere);
+    }
+
+    #[test]
+    fn a_missing_folder_reached_through_parent_segments_is_not_created() {
+        let home = temp_home("dotdot-home");
+        let elsewhere = temp_home("dotdot-target");
+        let name = elsewhere.file_name().unwrap().to_str().unwrap().to_string();
+        // Spelled as a path under the profile that climbs back out of it.
+        let dir = home
+            .join("missing")
+            .join("..")
+            .join("..")
+            .join(&name)
+            .join("Shots");
+
+        let result = configured_capture_dir(dir.to_str().unwrap(), &home, |_| Ok(()));
+
+        assert!(result.is_err());
+        assert!(!elsewhere.join("Shots").exists());
+        let _ = fs::remove_dir_all(&home);
+        let _ = fs::remove_dir_all(&elsewhere);
+    }
+
+    #[test]
+    fn validation_still_decides_about_a_folder_that_exists() {
+        let home = temp_home("validate");
+        let dir = home.join("Shots");
+        fs::create_dir_all(&dir).unwrap();
+
+        let result =
+            configured_capture_dir(dir.to_str().unwrap(), &home, |_| Err("refused".to_string()));
+
+        assert_eq!(result, Err("refused".to_string()));
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn validation_still_decides_about_a_folder_that_was_just_created() {
+        let home = temp_home("validate-created");
+        let dir = home.join("Shots");
+
+        let result =
+            configured_capture_dir(dir.to_str().unwrap(), &home, |_| Err("refused".to_string()));
+
+        assert_eq!(result, Err("refused".to_string()));
+        let _ = fs::remove_dir_all(&home);
     }
 }

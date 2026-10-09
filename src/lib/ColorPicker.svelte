@@ -66,8 +66,9 @@
         type="color"
         value={currentColor}
         aria-label={`${label} custom color`}
-        onpointerdown={() => ongesturestart?.()}
         oninput={(event) => {
+          // The gesture starts at the first chosen colour. Opening the native
+          // picker and closing it again is not a change.
           ongesturestart?.();
           applyColor(event.currentTarget.value, onchange ? false : true);
         }}

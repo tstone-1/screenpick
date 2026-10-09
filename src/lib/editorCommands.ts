@@ -61,9 +61,11 @@ export function copyPngBytesToClipboard(bytes: Uint8Array): CommandResult<null> 
 
 // Start a native OS drag of on-disk files (the drag plugin), so a Recent
 // thumbnail can be dropped into other apps as real image files — something a
-// plain webview HTML5 drag can't deliver. `icon` is the drag-cursor preview
-// image path. Must be called from within a user gesture (the `dragstart`
-// handler). Resolves when the drag ends; the result is reported via `onEvent`.
+// plain webview HTML5 drag can't deliver. `icon` is the drag-cursor preview:
+// a `data:image/png;base64,` string, drawn at the image's own pixel size, so
+// it must already be small (see dragPreview.ts). The plugin also takes a file
+// path there, which is how a full-size capture ended up under the pointer.
+// Must be called from within a user gesture (the `dragstart` handler). Resolves when the drag ends; the result is reported via `onEvent`.
 //
 // Trust note: unlike `save_png_bytes`/`copy_image_to_clipboard`/`reveal_in_dir`,
 // the plugin's `start_drag` command is NOT backend-gated — it drags whatever

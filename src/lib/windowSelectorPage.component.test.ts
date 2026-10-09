@@ -161,6 +161,48 @@ describe("window selector overlay", () => {
     await vi.waitFor(() => expect(commandsMock.finishWindowPointSelection).toHaveBeenCalledTimes(2));
   });
 
+  // The other way a confirm fails: the command answers, with an error. The
+  // overlay can still be on screen then, so it must take a second click.
+  it("stays usable after a confirm the backend refuses", async () => {
+    const { main } = mountOverlay();
+    commandsMock.finishWindowPointSelection.mockResolvedValueOnce({ status: "error", error: "session ended" });
+
+    main.dispatchEvent(pointerEvent("pointerdown", { clientX: 320, clientY: 240 }));
+    await vi.waitFor(() => expect(commandsMock.finishWindowPointSelection).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(main.classList.contains("pending")).toBe(false));
+
+    main.dispatchEvent(pointerEvent("pointerdown", { clientX: 320, clientY: 240 }));
+    await vi.waitFor(() => expect(commandsMock.finishWindowPointSelection).toHaveBeenCalledTimes(2));
+  });
+
+  it.each([
+    ["the backend refuses", () => Promise.resolve({ status: "error", error: "session ended" })],
+    ["the call throws", () => Promise.reject(new Error("ipc down"))]
+  ])("accepts Escape again after a cancel that failed because %s", async (_name, outcome) => {
+    mountOverlay();
+    commandsMock.cancelWindowSelection.mockImplementationOnce(outcome);
+
+    pressEscape();
+    await vi.waitFor(() => expect(commandsMock.cancelWindowSelection).toHaveBeenCalledTimes(1));
+
+    await vi.waitFor(() => {
+      pressEscape();
+      expect(commandsMock.cancelWindowSelection).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("ignores a click while a cancel is in flight, so one overlay never both cancels and confirms", async () => {
+    const { main } = mountOverlay();
+    commandsMock.cancelWindowSelection.mockReturnValueOnce(new Promise(() => {}));
+
+    pressEscape();
+    main.dispatchEvent(pointerEvent("pointerdown", { clientX: 320, clientY: 240 }));
+    await vi.waitFor(() => expect(commandsMock.cancelWindowSelection).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+
+    expect(commandsMock.finishWindowPointSelection).not.toHaveBeenCalled();
+  });
+
   it("draws the highlight at the bounds the backend reported for the pointer", async () => {
     commandsMock.windowRectAtPoint.mockResolvedValue(rect(12, 34, 560, 420));
     const { main, container } = mountOverlay();

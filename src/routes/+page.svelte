@@ -33,6 +33,8 @@
   import { commands } from "#lib/bindings.ts";
   import { capture, settingsStore } from "#lib/captureOrchestration.svelte.ts";
   import { statusLine } from "#lib/statusLine.svelte.ts";
+  import { logError } from "#lib/diagnosticsLog.ts";
+  import { dragPreviewDataUrl } from "#lib/dragPreview.ts";
   import { editor, recentThumbnailUrl, type RecentCapture, type Tool } from "#lib/editor.svelte.ts";
   import { confirmDiscard } from "#lib/editorCommands.ts";
   import { unlockCaptureSound } from "#lib/captureSound.ts";
@@ -162,7 +164,9 @@
     const targets =
       selected.length > 1 && isRecentSelected(recent) ? selected : [recent];
     event.preventDefault();
-    editor.dragCaptures(targets);
+    // The preview is the dragged card's own thumbnail, also for a group.
+    const card = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+    editor.dragCaptures(targets, dragPreviewDataUrl(card?.querySelector("img")));
   }
 
   // Middle-click a Recent card to close it — the universal tab gesture (browsers,
@@ -264,9 +268,18 @@
   // (clean captures close without prompting — they're throwaway by default).
   async function handleCloseRecent(recent: RecentCapture) {
     if (editor.isDocumentDirty(recent)) {
-      const confirmed = await confirmDiscard(
-        `"${recent.title}" has annotations. Discard them and remove this screenshot?`
-      );
+      let confirmed: boolean;
+      try {
+        confirmed = await confirmDiscard(
+          `"${recent.title}" has annotations. Discard them and remove this screenshot?`
+        );
+      } catch (error) {
+        // No answer is not consent: keep the document. Both callers fire this
+        // without awaiting it, so the failure has to be handled here.
+        logError("Could not ask before closing a capture", error);
+        statusLine.set("Could not ask for confirmation, so the screenshot was kept.");
+        return;
+      }
       if (!confirmed) return;
     }
     editor.closeDocument(recent);
@@ -464,6 +477,9 @@
     // Quit is held until the debounced document save has landed — without this
     // an annotation drawn within 500ms of quitting dies with the process.
     const teardownExit = listenForExit(() => editor.flushPendingSave());
+    // Same flush before an update is installed: on Windows the installer ends
+    // the process without the exit handshake.
+    update.flushBeforeInstall(() => editor.flushPendingSave());
 
     return () => {
       window.removeEventListener("keydown", handleKeydown);
@@ -667,7 +683,9 @@
             oncontextmenu={(event) => void openRecentMenu(event, recent)}
           >
             <span class="thumb">
-              <img src={recentThumbnailUrl(recent)} alt="" />
+              <!-- crossorigin: the drag preview reads this image back from a
+                   canvas (dragPreview.ts), which a plain asset image taints. -->
+              <img src={recentThumbnailUrl(recent)} alt="" crossorigin="anonymous" />
             </span>
             <span>
               <strong>{recent.title}</strong>

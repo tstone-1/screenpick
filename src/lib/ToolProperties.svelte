@@ -89,8 +89,9 @@
       {max}
       {step}
       {value}
-      onpointerdown={() => editor.beginSelectionEdit()}
       oninput={(event) => {
+        // The undo step is recorded at the first change, not at pointerdown:
+        // pressing the slider without moving it changes nothing to undo.
         editor.beginSelectionEdit();
         update(event.currentTarget.valueAsNumber);
       }}

@@ -29,6 +29,8 @@ Usage:
 
 --display defaults to the primary display. --rect is relative to the top-left
 corner of that display, in the units `screenpick displays` prints.
+--output can be written -o <file.png>. The long options also take their value
+as --name=value. An option may be given once.
 
 Exit codes: 0 success, 1 the capture failed, 2 the command line is wrong.
 ";
@@ -115,7 +117,8 @@ fn parse_capture<I: Iterator<Item = String>>(mut args: I) -> Invocation {
     let mut rect: Option<[u32; 4]> = None;
     let mut display: Option<usize> = None;
     while let Some(arg) = args.next() {
-        // Accept `--name value` and `--name=value`.
+        // Accept `--name value` and `--name=value`. The short `-o` takes its
+        // value as the next argument only, so `-o=a.png` is an unknown option.
         let (name, inline) = match arg.split_once('=') {
             Some((name, value)) if name.starts_with("--") => {
                 (name.to_string(), Some(value.to_string()))
@@ -128,6 +131,17 @@ fn parse_capture<I: Iterator<Item = String>>(mut args: I) -> Invocation {
         let Some(value) = inline.or_else(|| args.next()) else {
             return usage_error(format!("`{name}` needs a value"));
         };
+        // A repeated option is refused instead of letting the last one win:
+        // the caller would get a file or a display it did not ask for.
+        let repeated = match name.as_str() {
+            "--output" | "-o" => output.is_some(),
+            "--rect" => rect.is_some(),
+            _ => display.is_some(),
+        };
+        if repeated {
+            let long_name = if name == "-o" { "--output" } else { &name };
+            return usage_error(format!("`{long_name}` is given more than once"));
+        }
         match name.as_str() {
             "--output" | "-o" => output = Some(PathBuf::from(value)),
             "--rect" => match parse_rect(&value) {
@@ -395,6 +409,66 @@ mod tests {
             &["capture", "screen", "--copy"],
         ] {
             assert!(is_usage_error(&run(args)), "accepted: {args:?}");
+        }
+    }
+
+    #[test]
+    fn an_option_given_twice_is_an_error() {
+        // Taking the last one silently would write to a file the caller may
+        // not have meant, or capture another display.
+        for args in [
+            &[
+                "capture", "screen", "--output", "a.png", "--output", "b.png",
+            ][..],
+            &["capture", "screen", "--output", "a.png", "-o", "b.png"],
+            &[
+                "capture",
+                "screen",
+                "--display",
+                "1",
+                "--display=2",
+                "-o",
+                "a.png",
+            ],
+            &[
+                "capture",
+                "region",
+                "--rect",
+                "0,0,10,10",
+                "--rect",
+                "5,5,10,10",
+                "-o",
+                "a.png",
+            ],
+        ] {
+            assert!(is_usage_error(&run(args)), "accepted: {args:?}");
+        }
+    }
+
+    #[test]
+    fn the_short_output_option_takes_its_value_as_the_next_argument_only() {
+        // `--name=value` is the long options' form; `-o=a.png` is not an
+        // option, and says so the way any unknown option does.
+        assert_eq!(
+            run(&["capture", "screen", "-o=a.png"]),
+            Invocation::UsageError("unknown option `-o=a.png`".to_string())
+        );
+        assert_eq!(
+            run(&["capture", "screen", "--copy"]),
+            Invocation::UsageError("unknown option `--copy`".to_string())
+        );
+    }
+
+    #[test]
+    fn the_help_text_names_every_option_and_both_spellings() {
+        for needle in [
+            "--output",
+            "-o <file.png>",
+            "--rect",
+            "--display",
+            "--name=value",
+        ] {
+            assert!(USAGE.contains(needle), "USAGE does not mention {needle}");
         }
     }
 

@@ -8,8 +8,8 @@ use tauri::{
 
 use tauri_specta::Event;
 
-use crate::capture::restore_main_window;
 use crate::events::UpdateCheckRequested;
+use crate::main_window::restore_main_window;
 
 // Stable id so a re-run of setup can't leave two icons behind.
 const TRAY_ID: &str = "main-tray";

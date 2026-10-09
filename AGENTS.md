@@ -165,14 +165,18 @@ ScreenPick is an open-source cross-platform screenshot, annotation, and screen u
   signing secret is missing or empty, `tauri-action` logs "Signature not found
   for the updater JSON. Skipping upload..." and still succeeds. The release
   ships with installers and no manifest, and the failure only surfaces as users
-  silently never updating. BUILD.md's post-publish checks exist for this.
+  silently never updating. The `manifest` job in `release.yml` reads the file
+  back from the draft and fails without an entry for each platform; BUILD.md's
+  post-publish checks repeat that on the published release.
 - **A signed-but-not-notarized macOS build also looks green.** If notarization
   credentials are missing or malformed the bundler logs `skipping app
   notarization` and succeeds; Gatekeeper then rejects the app on any machine
   that has never seen it. Never treat a successful signed build as verified —
   run `xcrun stapler validate` and `spctl`. Note this is a *different* key from
-  the updater's minisign key, and losing it is recoverable. Setup, env-var
-  precedence, and verification live in
+  the updater's minisign key, and losing it is recoverable. `release.yml`
+  verifies the artifact when the credentials are present, and in this
+  repository fails the macOS leg when they are absent (a fork builds ad-hoc).
+  Setup, env-var precedence, and verification live in
   [BUILD.md](BUILD.md#macos-code-signing-and-notarization).
 - **The signing identity is shared with `dblitz`, so rotating it is a two-repo
   event.** A Developer ID Application certificate certifies the team
@@ -197,7 +201,11 @@ ScreenPick is an open-source cross-platform screenshot, annotation, and screen u
   not: each part answers a failure already paid for. There is **no `.msi`**,
   because the client cannot sign one; `bundle.targets` must not go back to
   `"all"`. Local builds never sign (the sign command is in an overlay only the
-  Windows release leg passes). Rules, rehearsal and the fallback by hand:
+  Windows release leg passes). The built client is kept in the Actions cache
+  under a key made of `SSIGN_REV`, and **a release tag reads the entry that
+  `sign-rehearsal.yml` saved on `main`**: after changing `SSIGN_REV`, run the
+  rehearsal on `main` once, and never add `restore-keys` to that cache. Rules,
+  rehearsal and the fallback by hand:
   [BUILD.md](BUILD.md#windows-code-signing).
 - **The release matrix must stay `max-parallel: 1`.** `tauri-action` builds
   `latest.json` by read-modify-write against the release asset, so parallel legs
@@ -306,7 +314,11 @@ The user-facing description is the README's *Command line* section.
   the active window and `capture screen` the display under the cursor.
 - **A cold start cannot use that event**, because no webview listens yet. The
   mode waits in `StartupCapture` and the frontend collects it with
-  `take_startup_capture` after its listeners exist.
+  `take_startup_capture` after its listeners exist. A second launch that
+  arrives before that first collection is parked in the same slot instead of
+  emitted (an event with no listener succeeds and reaches nobody); the last
+  request wins. `take_startup_capture` is therefore also the moment Rust
+  starts emitting: the frontend must register its listeners before calling it.
 - **A release build prints nothing to a Windows terminal unless it attaches**
   (`attach_parent_console`): it is a GUI-subsystem program. Attach only on the
   paths that print, never on a normal launch. A terminal also does not wait for

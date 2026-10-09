@@ -146,6 +146,50 @@ describe("screen overlay", () => {
     expect(commandsMock.cancelScreenSelection).not.toHaveBeenCalled();
   });
 
+  // Escape and the click arrive in the same tick, before the re-render that
+  // disables the button, so only the handler's own guard can stop the click.
+  it("ignores a click while a cancel is in flight", async () => {
+    const { button } = mountOverlay("?monitorId=1");
+    commandsMock.cancelScreenSelection.mockReturnValueOnce(new Promise(() => {}));
+
+    pressEscape();
+    button.click();
+    await vi.waitFor(() => expect(commandsMock.cancelScreenSelection).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+
+    expect(commandsMock.finishScreenSelection).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["the backend refuses", () => Promise.resolve({ status: "error", error: "session ended" })],
+    ["the call throws", () => Promise.reject(new Error("ipc down"))]
+  ])("takes a second click after a confirm that failed because %s", async (_name, outcome) => {
+    const { button } = mountOverlay("?monitorId=1");
+    commandsMock.finishScreenSelection.mockImplementationOnce(outcome);
+
+    button.click();
+    await vi.waitFor(() => expect(commandsMock.finishScreenSelection).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(button.disabled).toBe(false));
+
+    button.click();
+    await vi.waitFor(() => expect(commandsMock.finishScreenSelection).toHaveBeenCalledTimes(2));
+  });
+
+  it.each([
+    ["the backend refuses", () => Promise.resolve({ status: "error", error: "session ended" })],
+    ["the call throws", () => Promise.reject(new Error("ipc down"))]
+  ])("accepts Escape again after a cancel that failed because %s", async (_name, outcome) => {
+    const { button } = mountOverlay("?monitorId=1");
+    commandsMock.cancelScreenSelection.mockImplementationOnce(outcome);
+
+    pressEscape();
+    await vi.waitFor(() => expect(commandsMock.cancelScreenSelection).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(button.disabled).toBe(false));
+
+    pressEscape();
+    await vi.waitFor(() => expect(commandsMock.cancelScreenSelection).toHaveBeenCalledTimes(2));
+  });
+
   // Number("") === 0 and Number("  ") === 0, so a lenient parse would turn every
   // one of these into a capture of monitor 0 -- the wrong display, silently.
   const rejectedParams: Array<[string, string]> = [

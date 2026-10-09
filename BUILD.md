@@ -460,6 +460,12 @@ sets the key partition list so `codesign` never blocks on a prompt.
 notarization exits 0 (see above), and without a gate an unnotarized release
 ships looking green.
 
+That step covers credentials that are **present and wrong**. It is skipped when
+they are absent, which is what lets a fork build. In `tstone-1/screenpick` an
+absent `APPLE_CERTIFICATE` or `APPLE_API_KEY_P8` is a mistake — the usual one
+is a secret left out when the certificate was renewed — so there the prepare
+step fails the macOS leg with an error instead of warning and building ad-hoc.
+
 ### Gotcha: local signing dies with `errSecInternalComponent`
 
 On a dev Mac, `codesign` can start failing with `errSecInternalComponent` on
@@ -490,9 +496,10 @@ This does not affect CI, which builds in a fresh keychain each run.
 
 ## Windows code signing
 
-**Status: wired into `release.yml` on 2026-10-08, not yet run in this
-repository.** The first run of `sign-rehearsal.yml` and the first release tag
-are the evidence still missing; see *What has been seen and what has not* below.
+**Status: wired into `release.yml` on 2026-10-08 and rehearsed the same day,
+with `sign-rehearsal.yml` and with a full build from a rehearsal tag. No
+published release is signed yet; see *What has been seen and what has not*
+below.
 
 The certificate is Certum *Open Source Code Signing in the Cloud*, subject
 `CN=Open Source Developer Timo Stein`, issued by *Certum Code Signing 2021 CA*,
@@ -515,9 +522,10 @@ sign their own program under this name and cannot update anybody's ScreenPick.
 
 ### How a release is signed
 
-`release.yml` builds [`ssign`](https://github.com/Le-Syl21/ssign), an unofficial
-client (MIT) for the SimplySign service, from a pinned commit, and names it as
-Tauri's `signCommand` through the overlay `src-tauri/tauri.signing.conf.json`,
+`release.yml` takes [`ssign`](https://github.com/Le-Syl21/ssign), an unofficial
+client (MIT) for the SimplySign service, built from a pinned commit (from a
+cache when there is one, see [The cached signing client](#the-cached-signing-client)),
+and names it as Tauri's `signCommand` through the overlay `src-tauri/tauri.signing.conf.json`,
 on the Windows leg only. Tauri then starts the command once for
 `screenpick.exe`, once for each NSIS plugin DLL, once for the uninstaller (from
 inside makensis) and once for the installer. The first start logs in and the
@@ -530,7 +538,7 @@ later ones reuse that session, so one build is one login.
 | `tools/sign-windows.ps1` | Runs `ssign` into a folder of its own, copies the signed bytes back over the file with retries, and logs everything to `%RUNNER_TEMP%\ssign.log` |
 | `tools/verify_signature.ps1` | Reads signatures back with `signtool` and PowerShell; fails unless each is valid, timestamped and by the named signer |
 | `.github/workflows/sign-rehearsal.yml` | Signs a plain executable and the installer of a published release, without building ScreenPick |
-| `src/lib/windowsSigning.test.ts` | Runs with the unit tests on every platform: no `.msi` target, the sign command only in the overlay, the wrapper not looking beside itself, one pinned `ssign` commit, one concurrency group and one environment in both workflows |
+| `src/lib/windowsSigning.test.ts` | Runs with the unit tests on every platform: no `.msi` target, the sign command only in the overlay, the wrapper not looking beside itself, one pinned `ssign` commit, its cache keyed by that commit alone, every job that is handed the login in the one concurrency group and the one environment. The same file pins three things of `release.yml` that fail without a red step: `max-parallel: 1`, the job that reads `latest.json` back, and the macOS leg refusing to build here without the Apple secrets |
 
 The login is two secrets of the GitHub environment `signing`: `CERTUM_EMAIL`
 and `CERTUM_OTP_URI`, the whole `otpauth://` address Certum shows once, at
@@ -555,7 +563,9 @@ and it fails if an `.msi` was built.
 - **One code is one login.** Two jobs that log in within the same 30 seconds
   make the second fail, and repeated failed logins can lock the account.
   Everything that signs here is in the concurrency group `certum-signing`, and
-  nothing in it is cancelled.
+  nothing in it is cancelled. In the release job that is the Windows leg; the
+  macOS leg logs in nowhere and has a group of its own, so a rehearsal can
+  neither hold it up nor cancel it while it waits.
 - **That group holds inside this repository only.** GitHub does not share a
   concurrency group between repositories, and the account is shared. Do not
   start a release or a rehearsal here while one runs in another project that
@@ -569,7 +579,48 @@ and it fails if an `.msi` was built.
   the environment, because a job has one; the build step hands the two values
   to the Windows leg and an empty string to the macOS one.
 - **`ssign` is pinned by commit** (`SSIGN_REV`, v0.1.7), not by tag, in both
-  workflows. Run the rehearsal before a release whenever it changes.
+  workflows. Run the rehearsal on `main` before a release whenever it changes;
+  that run is also what builds the client the release then takes from the cache.
+
+### The cached signing client
+
+Building `ssign` took 2.9 minutes of the Windows leg (measured on the run for
+`v26.10.3-rc1`), so both workflows keep the built client in the Actions cache.
+It is installed into a folder of its own, `%RUNNER_TEMP%\ssign-client`, with
+`cargo install --root`, and that folder is what is cached. The key is
+`ssign-<runner OS>-<runner architecture>-<SSIGN_REV>` and there are no
+`restore-keys`, so a client built from another commit is never restored.
+`cargo install` runs only when the cache has nothing under that key; starting
+the client (`ssign --version`) and copying `sign-windows.cmd` beside it happen
+on every run.
+
+**The cached file is the program that reads the Certum login.** What follows
+from how GitHub scopes a cache:
+
+- **A run on a tag can restore only a cache saved on the default branch** (or
+  on that same tag). So the client a release uses is the one
+  `sign-rehearsal.yml` saved when it ran on `main`. A tag that finds none
+  builds the client as before; nothing fails, the leg is three minutes slower.
+- **After changing `SSIGN_REV`, run the rehearsal on `main` once.** The new
+  commit is a new key, so that run builds the client and saves it. The cache is
+  saved only when every step of the job passed, so what a release restores has
+  signed two files and had both signatures read back.
+- **A cache that nothing read for 7 days is removed.** The next run then builds
+  the client again and saves it again.
+- **Only a workflow run on `main` can replace the client that releases use.**
+  A pull request from a fork cannot write a cache that `main` or a tag reads.
+  Whoever can push a workflow to `main` can, which is the same person who can
+  change `release.yml` itself. An existing entry is never overwritten: it has
+  to be deleted first (`gh cache delete <key>`), and the next rehearsal on
+  `main` then saves a new one.
+- **The key is the only thing that ties the file to the commit.** If there is
+  ever a doubt about what is in the cache, delete the entry and run the
+  rehearsal on `main`: `gh cache list --key ssign-` shows what is there and on
+  which ref.
+
+The cargo cache of the release job (`Swatinem/rust-cache`) holds cargo's own
+folders and `src-tauri/target`. The client is not in either, and has to stay
+out of `~/.cargo/bin`, which that cache saves.
 
 ### Four failures already paid for
 
@@ -617,7 +668,9 @@ gh run list --workflow sign-rehearsal.yml --limit 1
 ```
 
 Run it before the first release that signs, whenever `SSIGN_REV` changed, and
-when a release leg fails in the build step with a login error.
+when a release leg fails in the build step with a login error. Run it with
+`--ref main`: only a run on `main` saves the signing client where a release tag
+can read it ([The cached signing client](#the-cached-signing-client)).
 
 It does not cover the build itself: the overlay, Tauri starting the command,
 and the uninstaller signed inside makensis are first exercised by a tag. The
@@ -653,11 +706,24 @@ signing every file of a build, each signature valid, timestamped and by the
 signer, the uninstaller included; the updater `.sig` verifying against the
 signed installer; the signed installer installing.
 
-Not yet seen here: any run of either workflow. In particular the installation
-folder holding exactly `screenpick.exe` and `uninstall.exe` as its executables
-is read from the Tauri configuration (no `resources`, no `externalBin`) and
-not from an installed copy; the rehearsal prints that folder's executables for
-this reason.
+Seen here on 2026-10-08, at commit `df165d0`, each at the first attempt:
+
+- `sign-rehearsal.yml`, run 37745453182: the 26.10.2 installer and a plain
+  executable read `NotSigned` before and valid, timestamped and by the signer
+  after; the file held open was written at the sixth attempt; the signed
+  installer installed with exit code 0.
+- The tag `v26.10.3-rc1`, run 37745986428, both legs: one login signed eight
+  files, `screenpick.exe`, five NSIS plugin libraries, the uninstaller and the
+  installer. The leg read the installer back, installed it, and found
+  `screenpick.exe` and `uninstall.exe` as the executables of the installation
+  folder, both signed. The draft held six assets and no `.msi`; `latest.json`
+  named `windows-x86_64` and `windows-x86_64-nsis` and no `windows-x86_64-msi`;
+  `minisign` verified the downloaded installer against its `.sig`. The draft
+  and the tag were deleted afterwards.
+
+Not yet seen: a published signed release, the signed installer read on a
+Windows computer outside GitHub, and the client restored from the cache on a
+tag (see *The cached signing client*).
 
 ## Release Procedure
 
@@ -684,8 +750,10 @@ this reason.
       `.cargo/audit.toml` without recording, next to the entry, why it was reviewed and
       accepted and under which condition it is revisited (the ignore list is empty today). A
       release must not ship with an unreviewed red `cargo audit`. The release
-      workflow's test job now runs `cargo audit` as well; keep this local step
-      anyway, so a finding surfaces before the tag rather than after it.
+      workflow's `audit` job runs `cargo audit` on every tag as well, and no
+      installer is built unless it passes; keep this local step anyway, so a
+      finding surfaces before the tag rather than after it. `ci.yml` does not
+      audit.
 - [ ] `npm audit`.
 
 **Code quality — these are the *exact* commands `ci.yml` runs.** Run them verbatim,
@@ -710,7 +778,11 @@ entirely, and its clippy line lacked `--all-targets -- -D warnings`).
       two places, both on macOS: `ci.yml`'s macOS job on every push and pull request
       (step "Rust unit tests (includes Specta drift check)"), and `release.yml`'s
       `test` job on `macos-latest`, which the release build `needs:` — so a tag on
-      drifted bindings fails the gate before any installer is produced. That job is
+      drifted bindings fails the gate before any installer is produced.
+      `release.yml` skips its `test` job only when its `proven` job found a
+      finished, green `ci.yml` push run with all three jobs green on the very
+      commit the tag names; in every other case, a CI run that is still going
+      included, the tests run again on the tag. That macOS job is
       the only thing that actually exercises
       `export_typescript_bindings`/`specta_builder` — see the comment at the
       `cfg(not(all(test, target_os = "windows")))` gate atop `src-tauri/src/lib.rs` for
@@ -814,6 +886,9 @@ git commit -m "Release vYY.M.MICRO: brief description"
 git push origin main
 # Wait for ci.yml to pass on this exact commit, including the macOS bindings check.
 # Inspect the selected run's headSha, conclusion, and jobs with gh run view.
+# A tag pushed after that run is green skips the release workflow's own tests
+# (its "CI already passed this commit?" job says so); a tag pushed earlier
+# runs them again, which is slower and not wrong.
 git tag vYY.M.MICRO
 git push origin vYY.M.MICRO
 ```
@@ -876,6 +951,13 @@ gh release create vYY.M.MICRO --title "ScreenPick vYY.M.MICRO" --notes-from-tag 
 **Updater checks — after publishing the draft, not before.** The endpoint
 resolves `releases/latest`, which ignores drafts and prereleases, so the update
 only goes live when the release does.
+
+The job *Check the updater manifest* in `release.yml` has already read
+`latest.json` from the draft once both legs were done: it fails unless the file
+exists, carries the tag's version, has a signed entry for `darwin-aarch64`,
+`darwin-x86_64` and `windows-x86_64`, points `windows-x86_64` at the
+`-setup.exe` and names no `.msi`. The first three checks below repeat that on
+the published release, which is the address an installed copy asks.
 
 - [ ] The release lists six assets: `latest.json`, the `.dmg`, the
       `-setup.exe` and its `.sig`, and the `.app.tar.gz` and its `.sig`. There

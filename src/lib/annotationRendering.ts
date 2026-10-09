@@ -250,21 +250,39 @@ export function arrowGeometry(arrow: ArrowAnnotation): ArrowGeometry {
   };
 }
 
-// The parameter of the point on the curve that lies `distance` before its end,
-// measured in a straight line. 0 when the start is already nearer than that.
+// The parameter of the last point on the curve that lies `distance` from its
+// end, measured in a straight line. 0 when no part of the curve is farther
+// from the end than that.
+//
+// "Last" matters: a strongly bent arrow can leave the neighbourhood of its tip
+// and come back, so the distance to the tip is not monotone along the curve
+// and `start` being near the tip says nothing about the curve between them.
+// Walk back from the tip to the first sample outside `distance`, then bisect
+// the one step where the curve crosses it.
+const CURVE_SPLIT_SAMPLES = 32;
+
 function curveParameterAtDistanceFromEnd(
   start: Point,
   control: Point,
   end: Point,
   distance: number
 ): number {
-  if (Math.hypot(end.x - start.x, end.y - start.y) <= distance) return 0;
-  let low = 0;
-  let high = 1;
+  const beyond = (t: number) => {
+    const point = quadraticPoint(start, control, end, t);
+    return Math.hypot(end.x - point.x, end.y - point.y) > distance;
+  };
+  let low = -1;
+  for (let sample = CURVE_SPLIT_SAMPLES - 1; sample >= 0; sample -= 1) {
+    if (beyond(sample / CURVE_SPLIT_SAMPLES)) {
+      low = sample / CURVE_SPLIT_SAMPLES;
+      break;
+    }
+  }
+  if (low < 0) return 0;
+  let high = low + 1 / CURVE_SPLIT_SAMPLES;
   for (let step = 0; step < 24; step += 1) {
     const middle = (low + high) / 2;
-    const point = quadraticPoint(start, control, end, middle);
-    if (Math.hypot(end.x - point.x, end.y - point.y) > distance) low = middle;
+    if (beyond(middle)) low = middle;
     else high = middle;
   }
   return low;

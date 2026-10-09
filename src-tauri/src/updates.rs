@@ -19,9 +19,10 @@
 // user with an app that captures black frames. See ROADMAP P0 #1 and
 // BUILD.md#macos-code-signing-and-notarization.
 //
-// Pure module (no `tauri::` imports) so it stays in the ungated family and its
-// tests run on Windows too — same split as `capture_modes` and the command that
-// returns it. The `update_transition` command lives in `settings`.
+// Ungated module, so its tests run on Windows too — same split as
+// `capture_modes`. The one item that needs Tauri, the `open_releases_page`
+// command, carries the Windows-test gate itself (see the note above the gated
+// `mod` list in `lib.rs`). The `update_transition` command lives in `settings`.
 //
 // NOTE: comments in this module use `//`, never `///`. Doc comments on
 // specta-exposed types and fields are emitted as JSDoc into
@@ -57,6 +58,35 @@ impl UpdateTransition {
             updated,
         }
     }
+}
+
+// The releases page the update banner points at. The frontend holds the same
+// string as RELEASES_URL in src/lib/updateState.svelte.ts. The command takes no
+// parameter on purpose: the webview must never choose which URL gets opened.
+#[cfg(not(all(test, target_os = "windows")))]
+const RELEASES_URL: &str = "https://github.com/tstone-1/screenpick/releases/latest";
+
+// The webview cannot open external URLs itself: no opener plugin is registered,
+// and without a new-window handler a target="_blank" link does nothing on macOS
+// and opens a bare in-app popup on Windows. The URL is a separate argv entry and
+// never passes through a shell.
+#[cfg(not(all(test, target_os = "windows")))]
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn open_releases_page() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let program = "open";
+    // explorer exits with 1 even when it opened the URL, so only a spawn
+    // failure counts as an error here.
+    #[cfg(target_os = "windows")]
+    let program = "explorer";
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let program = "xdg-open";
+    std::process::Command::new(program)
+        .arg(RELEASES_URL)
+        .spawn()
+        .map(|_| ())
+        .map_err(|err| format!("Could not open the releases page: {err}"))
 }
 
 #[cfg(test)]

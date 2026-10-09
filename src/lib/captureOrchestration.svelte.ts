@@ -36,10 +36,12 @@ const CAPTURE_WATCHDOG_MS = 60_000;
 
 // The capture modes this build knows how to drive. `CaptureMode.id` crosses the
 // specta boundary as a plain `string`, so the typed-IPC contract cannot check
-// that the frontend handles every mode Rust lists — this union and the table
-// below are the frontend's own check. Adding a mode to `capture_modes.rs`
-// without adding it here now fails at the table (a missing `Record` key is a
-// compile error) instead of shipping a button that silently does nothing.
+// that the frontend handles every mode Rust lists. This union and the table
+// below keep the frontend consistent with itself: a mode named in the union
+// without a table entry is a compile error (a missing `Record` key). A mode
+// added to `capture_modes.rs` and to neither is caught at run time only:
+// `requestCapture` logs it and says so in the status line, instead of
+// shipping a button that silently does nothing.
 type KnownCaptureModeId = "region" | "window" | "screen" | "screen-pick";
 
 // A start either hands the interaction to an overlay — the shot arrives later
@@ -159,11 +161,6 @@ export class CaptureOrchestration {
     return isMacPlatform;
   }
 
-  // The capture module's own door onto the shared status line (statusLine.svelte.ts).
-  setActivity(message: string) {
-    statusLine.set(message);
-  }
-
   toggleSettingsPanel() {
     this.settingsPanelOpen = !this.settingsPanelOpen;
   }
@@ -199,10 +196,10 @@ export class CaptureOrchestration {
     try {
       const result = await commands.openScreenRecordingSettings();
       if (result.status === "error") {
-        this.setActivity(result.error || "Could not open System Settings.");
+        statusLine.set(result.error || "Could not open System Settings.");
       }
     } catch (error) {
-      this.setActivity(error instanceof Error ? error.message : "Could not open System Settings.");
+      statusLine.set(error instanceof Error ? error.message : "Could not open System Settings.");
     }
   }
 
@@ -233,7 +230,7 @@ export class CaptureOrchestration {
     try {
       await commands.quitApp();
     } catch (error) {
-      this.setActivity(error instanceof Error ? error.message : "Failed to quit.");
+      statusLine.set(error instanceof Error ? error.message : "Failed to quit.");
     }
   }
 
@@ -264,7 +261,7 @@ export class CaptureOrchestration {
     this.#pendingMode = modeId;
     this.activeCapture = modeId;
     this.#setCapturePending(true);
-    this.setActivity(`${mode?.label ?? "Capture"} capture requested from ${source}.`);
+    statusLine.set(`${mode?.label ?? "Capture"} capture requested from ${source}.`);
 
     if (!isKnownCaptureModeId(modeId)) {
       // Rust owns the mode list and `captureDispatch` owns the wiring; a mode in
@@ -272,14 +269,14 @@ export class CaptureOrchestration {
       // the user as a control that did nothing at all — no command, no error, no
       // log line. Say so where a bug report can find it.
       logError(`No capture dispatch for mode "${modeId}"; the mode list and the table disagree.`);
-      this.setActivity(`Capture mode "${modeId}" is not available in this build.`);
+      statusLine.set(`Capture mode "${modeId}" is not available in this build.`);
       this.#setCapturePending(false);
       return;
     }
     const dispatch = captureDispatch[modeId];
 
     try {
-      this.setActivity(dispatch.activity(source));
+      statusLine.set(dispatch.activity(source));
       const started = await dispatch.start(source);
       if (started.kind === "completed") {
         if (started.result.status === "error") {
@@ -302,7 +299,7 @@ export class CaptureOrchestration {
   // grant is the most common cause and the banner has to come back even after
   // the user dismissed it.
   #failCapture(message: string | null) {
-    this.setActivity(message || "Capture failed.");
+    statusLine.set(message || "Capture failed.");
     this.#setCapturePending(false);
     void this.#reassertScreenRecordingAfterFailure();
   }
@@ -315,7 +312,7 @@ export class CaptureOrchestration {
     const capture = settings.autoOpenEditor
       ? editor.ingestCompleted(payload)
       : editor.ingestWithoutOpening(payload);
-    this.setActivity(`${capture.title} captured at ${capture.width} x ${capture.height}.`);
+    statusLine.set(`${capture.title} captured at ${capture.width} x ${capture.height}.`);
     // Audible confirmation for hotkey captures, where ScreenPick may be in the
     // background and there's no on-screen feedback. Button captures already open
     // the editor in front of the user, so they don't chime.
@@ -326,11 +323,19 @@ export class CaptureOrchestration {
     // #setCapturePending(false) clears #pendingSource for us.
     this.#setCapturePending(false);
     if (settings.copyToClipboard) {
-      void commands.copyImageToClipboard(capture.path).then((result) => {
-        if (result.status === "error") {
-          this.setActivity(`${capture.title} saved but copy to clipboard failed.`);
-        }
-      });
+      const copyFailed = () =>
+        statusLine.set(`${capture.title} saved but copy to clipboard failed.`);
+      void commands
+        .copyImageToClipboard(capture.path)
+        .then((result) => {
+          if (result.status === "error") copyFailed();
+        })
+        // A rejected IPC call is the same outcome for the user as an error
+        // result, and must not surface as an unhandled rejection.
+        .catch((error: unknown) => {
+          logError(`Copy to clipboard after capture failed: ${String(error)}`);
+          copyFailed();
+        });
     }
   }
 
@@ -408,13 +413,13 @@ export class CaptureOrchestration {
         const autostart = await commands.autostartEnabled();
         if (this.#cancelled) return;
         if (autostart.status === "error") {
-          this.setActivity(autostart.error || "Could not read login startup state.");
+          statusLine.set(autostart.error || "Could not read login startup state.");
         } else {
           this.settingsStore.autostartEnabled = autostart.data;
         }
       } catch (error) {
         if (!this.#cancelled) {
-          this.setActivity(
+          statusLine.set(
             error instanceof Error ? error.message : "Could not read login startup state."
           );
         }
@@ -430,7 +435,7 @@ export class CaptureOrchestration {
         this.#ingestCompletedCapture(event.payload);
       });
       const uCaptureCancelled = await events.captureCancelled.listen((event) => {
-        this.setActivity(event.payload);
+        statusLine.set(event.payload);
         this.#setCapturePending(false);
       });
 
@@ -453,7 +458,7 @@ export class CaptureOrchestration {
     } catch (error) {
       if (!this.#cancelled) {
         this.settingsStore.shortcutStatus = "Shortcut listener failed";
-        this.setActivity(
+        statusLine.set(
           error instanceof Error ? error.message : "Unable to listen for shortcuts."
         );
       }

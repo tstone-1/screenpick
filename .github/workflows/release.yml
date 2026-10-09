@@ -8,9 +8,10 @@ name: Release
 # the "Build the Windows signing client" step has the detail, and BUILD.md the
 # rules ("Windows code signing").
 #
-# Apple signing is conditional on the Apple secrets being present, so a
-# checkout without them still builds (ad-hoc signed, unnotarized). Windows
-# signing is not conditional: a Windows leg that cannot sign fails.
+# Apple signing is conditional on the Apple secrets being present, so a fork
+# without them still builds (ad-hoc signed, unnotarized). In this repository
+# the macOS leg fails without them. Windows signing is not conditional: a
+# Windows leg that cannot sign fails.
 #
 # Trigger by pushing a CalVer tag, e.g.:
 #   git tag v26.5.1 && git push origin v26.5.1
@@ -25,6 +26,51 @@ permissions:
   contents: read
 
 jobs:
+  # Did CI already pass on the commit this tag names? `ci.yml` runs every
+  # command of the `test` job below on every push to main, on the same two
+  # runner images, so running them again here tested the same commit twice.
+  # Measured on the run for v26.10.3-rc1: CI had finished on `df165d0` before
+  # the tag was pushed, and the two test legs then took 8 and 13 minutes
+  # before the first installer build could start.
+  #
+  # `passed` is 'true' only for a verified yes: a `push` run of `ci.yml` on
+  # exactly this SHA, concluded `success`, with exactly three jobs and all
+  # three `success`. Three is the number of jobs in `ci.yml`, and the count is
+  # what keeps a run with a skipped or missing leg from counting.
+  # Anything else -- no run, a failed one, a pull-request run, a run that is
+  # still going, an API error -- leaves it unset, and `test` below runs in
+  # full. A failure of THIS job runs the tests too, because `test` asks
+  # `!cancelled()` and not for this job's success. The error path is the old
+  # behaviour, never a skip. `src/lib/windowsSigning.test.ts` holds the number
+  # of jobs and the commands of the two workflows against each other.
+  proven:
+    name: CI already passed this commit?
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      passed: ${{ steps.ci.outputs.passed }}
+    steps:
+      - name: Look for a green CI run on this SHA
+        id: ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -uo pipefail
+          runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&status=success&per_page=10" \
+            --jq '.workflow_runs[].id') || { echo "::warning::could not list CI runs; running the tests"; exit 0; }
+          for id in $runs; do
+            jobs=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs?per_page=50" \
+              --jq '[.jobs[].conclusion] | "\(length) \(all(. == "success"))"') || continue
+            if [ "$jobs" = "3 true" ]; then
+              echo "CI run $id passed all three jobs on $SHA; the tests below are skipped."
+              echo "passed=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "No green three-job CI run on $SHA; running the tests."
+
   # Gate: a tag on a broken commit must not produce release artifacts. Runs
   # ci.yml's correctness gates verbatim — typecheck, Vitest, cargo test — on
   # the two platforms the release job actually builds on. `cargo fmt` and
@@ -32,8 +78,14 @@ jobs:
   # tag is the wrong place to fail on formatting. The typecheck is not
   # optional, though — `vite build` does not typecheck, so without it a commit
   # with a type error that still emits valid JS would publish installers.
+  #
+  # Skipped when `proven` found the same commands green in CI on this commit.
+  # Every `run:` line here has to be in both the macOS and the Windows job of
+  # `ci.yml`, or the skip would let through what only this job checks.
   test:
     name: Test (${{ matrix.platform }})
+    needs: proven
+    if: ${{ !cancelled() && needs.proven.outputs.passed != 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -71,17 +123,46 @@ jobs:
       - name: Rust unit tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked
 
-      # The same advisory check BUILD.md's release checklist runs, from
-      # src-tauri/ so it picks up .cargo/audit.toml.
+  # The same advisory check BUILD.md's release checklist runs, from src-tauri/
+  # so it picks up .cargo/audit.toml. A job of its own, and never skipped: CI
+  # does not run it, and its answer depends on the day and not only on the
+  # commit, because the advisory database is fetched when it runs. It reads
+  # Cargo.lock and nothing else, so one runner is enough.
+  #
+  # cargo-audit is a released binary at a fixed version, checked against the
+  # digest the pinned action carries. It used to be compiled from source in
+  # both test legs, which took 4.2 and 6.1 minutes of the run for
+  # v26.10.3-rc1. `fallback: none` keeps the action from building it after all
+  # when the download fails; the job fails instead.
+  audit:
+    name: Rust dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        with:
+          tool: cargo-audit@0.22.2
+          fallback: none
+
       - name: Rust dependency audit
         working-directory: src-tauri
-        run: |
-          cargo install cargo-audit --locked
-          cargo audit -f Cargo.lock
+        run: cargo audit -f Cargo.lock
 
   release:
     name: ${{ matrix.label }}
-    needs: test
+    needs: [proven, test, audit]
+    # A job whose `needs` holds a skipped job is skipped itself unless it says
+    # otherwise, so this says when to build: the audit passed, and the tests
+    # either passed here or were skipped because CI had passed them on this
+    # commit. Tests that ran and failed, or were cancelled, build nothing.
+    if: >-
+      ${{ !cancelled() && needs.audit.result == 'success'
+      && (needs.test.result == 'success'
+      || (needs.test.result == 'skipped' && needs.proven.outputs.passed == 'true')) }}
     # Needed for tauri-action to create the GitHub Release and upload artifacts.
     permissions:
       contents: write
@@ -120,9 +201,18 @@ jobs:
     # cancelled. `sign-rehearsal.yml` is the other member. The group holds for
     # this repository only: see BUILD.md for the other projects that sign with
     # the same account.
+    #
+    # The Windows leg only. The macOS leg logs in nowhere, and in the group it
+    # would wait behind a rehearsal and could be cancelled by a second one:
+    # GitHub keeps one waiting job per group and drops the older one. It gets a
+    # group of its own that nothing else can be in.
     concurrency:
-      group: certum-signing
+      group: ${{ matrix.signs-windows && 'certum-signing' || format('release-{0}-{1}', github.run_id, matrix.platform) }}
       cancel-in-progress: false
+    env:
+      # ssign v0.1.7. A commit and not a tag: a tag can be moved. Here and not
+      # in a step, because the key of the cache below is made from it.
+      SSIGN_REV: 5fd4daf22155b19b645aef3dd467f3c4c9e440b3
     steps:
       - uses: actions/checkout@v5
         with:
@@ -177,6 +267,14 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "$APPLE_CERTIFICATE" ] || [ -z "$APPLE_API_KEY_P8" ]; then
+            # Here a missing secret is a mistake, usually one left out when the
+            # certificate was renewed. The two checks at the end of this job
+            # are skipped without the secrets, so going on would publish a
+            # green, unnotarized build that Gatekeeper rejects.
+            if [ "$GITHUB_REPOSITORY" = "tstone-1/screenpick" ]; then
+              echo "::error::APPLE_CERTIFICATE or APPLE_API_KEY_P8 is not set, so this release could not be notarized."
+              exit 1
+            fi
             echo "::warning::Apple signing secrets absent - building ad-hoc signed and UNNOTARIZED."
             exit 0
           fi
@@ -211,19 +309,43 @@ jobs:
       # outside the checkout, so nothing in this repository decides how
       # somebody else's program is built. `sign-rehearsal.yml` proves the same
       # build and login without building ScreenPick.
-      - name: Build the Windows signing client
+      #
+      # The built client is kept in a cache, because building it took 2.9
+      # minutes of every release. The key is the runner and the commit, and
+      # there are no `restore-keys`: a client built from another commit is
+      # never restored. A run on a tag can read only a cache saved on the
+      # default branch, so the one a release finds is the one
+      # `sign-rehearsal.yml` saved on `main`; a tag that finds none builds the
+      # client as before. The folder is one of its own under the runner's
+      # temporary folder, which the cargo cache above does not look at.
+      # BUILD.md, "The cached signing client", has the rules.
+      - name: Restore the Windows signing client
+        id: ssign
         if: runner.os == 'Windows'
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}\ssign-client
+          key: ssign-${{ runner.os }}-${{ runner.arch }}-${{ env.SSIGN_REV }}
+
+      - name: Build the Windows signing client
+        if: runner.os == 'Windows' && steps.ssign.outputs.cache-hit != 'true'
         shell: pwsh
         working-directory: ${{ runner.temp }}
-        env:
-          # ssign v0.1.7
-          SSIGN_REV: 5fd4daf22155b19b645aef3dd467f3c4c9e440b3
         run: |
-          cargo install --locked --git https://github.com/Le-Syl21/ssign --rev $env:SSIGN_REV ssign
+          cargo install --locked --git https://github.com/Le-Syl21/ssign --rev $env:SSIGN_REV --root "$env:RUNNER_TEMP\ssign-client" ssign
           if ($LASTEXITCODE -ne 0) { exit 1 }
-          ssign --version
-          # Tauri is given the wrapper and finds it where it finds ssign.
-          Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'tools\sign-windows.cmd') (Split-Path (Get-Command ssign).Source)
+
+      # Always, restored or built: the client has to start, and Tauri is given
+      # the wrapper and finds it where it finds ssign.
+      - name: Put the Windows signing client on the path
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $bin = Join-Path $env:RUNNER_TEMP 'ssign-client\bin'
+          & (Join-Path $bin 'ssign.exe') --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Copy-Item (Join-Path $env:GITHUB_WORKSPACE 'tools\sign-windows.cmd') $bin -Force
+          Add-Content -Path $env:GITHUB_PATH -Value $bin -Encoding utf8
 
       - name: Build and publish release
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
@@ -365,11 +487,15 @@ jobs:
             --repo "$GITHUB_REPOSITORY"
 
       # A skipped notarization does NOT fail the build: when the credentials
-      # are missing or malformed the bundler logs "skipping app notarization"
-      # and exits 0, producing a signed-but-unnotarized app that Gatekeeper
-      # rejects on any machine that has never seen it. Same looks-green shape
-      # as a release with no latest.json. Gate on the artifact itself so that
-      # cannot ship silently.
+      # are malformed the bundler logs "skipping app notarization" and exits 0,
+      # producing a signed-but-unnotarized app that Gatekeeper rejects on any
+      # machine that has never seen it. Same looks-green shape as a release
+      # with no latest.json. Gate on the artifact itself so that cannot ship
+      # silently.
+      #
+      # This step covers credentials that are present and wrong. It is skipped
+      # when they are absent, as on a fork; in this repository the prepare
+      # step has already failed the job in that case.
       - name: Verify the macOS build is signed, notarized and stapled
         if: matrix.platform == 'macos-latest' && env.APPLE_SIGNING_IDENTITY != ''
         run: |
@@ -384,3 +510,52 @@ jobs:
           spctl -a -vvv -t exec "$APP" 2>&1 | grep -q "source=Notarized Developer ID" \
             || { echo "::error::Gatekeeper does not see this as notarized"; exit 1; }
           echo "macOS build verified: Developer ID signed, notarized, stapled."
+
+  # A release whose `latest.json` is missing, or names one platform only,
+  # updates nobody on the platform left out, and every step above is green:
+  # tauri-action logs "Signature not found for the updater JSON. Skipping
+  # upload..." when the updater key is empty, and a manifest written by two
+  # legs at once loses an entry (see `max-parallel` above). So read the
+  # manifest back once both legs are done, while the release is still a draft.
+  manifest:
+    name: Check the updater manifest
+    needs: release
+    # `test` is skipped when CI has proven the commit, and a job behind a
+    # skipped one is skipped as well unless it says otherwise.
+    if: ${{ !cancelled() && needs.release.result == 'success' }}
+    runs-on: ubuntu-latest
+    # A draft release is not visible to a read-only token.
+    permissions:
+      contents: write
+    steps:
+      - name: Check that latest.json names every platform
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+          # One universal macOS build serves both architectures; Windows is
+          # x64. The keys an installed copy asks for.
+          WANTED: darwin-aarch64 darwin-x86_64 windows-x86_64
+        run: |
+          set -euo pipefail
+          gh release download "$TAG_NAME" --repo "$GITHUB_REPOSITORY" \
+            --pattern latest.json --dir "$RUNNER_TEMP/manifest" \
+            || { echo "::error::the release has no latest.json, so no installed copy would update. Is TAURI_SIGNING_PRIVATE_KEY set?"; exit 1; }
+          FILE="$RUNNER_TEMP/manifest/latest.json"
+          jq '.version, (.platforms | keys)' "$FILE"
+
+          if [ "$(jq -r '.version' "$FILE")" != "${TAG_NAME#v}" ]; then
+            echo "::error::latest.json is for another version than $TAG_NAME"
+            exit 1
+          fi
+          for key in $WANTED; do
+            jq -e --arg key "$key" \
+              '.platforms[$key] | ((.url // "") != "") and ((.signature // "") != "")' \
+              "$FILE" > /dev/null \
+              || { echo "::error::latest.json has no signed entry for $key, so that platform would not update"; exit 1; }
+          done
+          # An MSI update over an NSIS install makes a second installation.
+          jq -e '.platforms["windows-x86_64"].url | endswith("-setup.exe")' "$FILE" > /dev/null \
+            || { echo "::error::windows-x86_64 in latest.json is not the setup.exe"; exit 1; }
+          jq -e '.platforms | has("windows-x86_64-msi") | not' "$FILE" > /dev/null \
+            || { echo "::error::latest.json names an .msi, and none is built"; exit 1; }
+          echo "latest.json names every platform of $TAG_NAME."

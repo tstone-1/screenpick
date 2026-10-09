@@ -394,6 +394,28 @@ describe("requestCapture", () => {
     expect(captureSoundMock.playCaptureSound).toHaveBeenCalledOnce();
   });
 
+  // The copy after a capture is fire-and-forget. Both ways it can fail have to
+  // end in the status line: an error result, and an IPC call that rejects.
+  it.each([
+    ["returns an error", () => Promise.resolve({ status: "error" as const, error: "busy" })],
+    ["rejects", () => Promise.reject(new Error("ipc down"))]
+  ])("reports a failed copy to the clipboard when the command %s", async (_name, outcome) => {
+    commandsMock.captureActiveWindow.mockResolvedValue({
+      status: "ok",
+      data: { mode: "window", title: "Notes", path: "/w.png", width: 10, height: 10 }
+    });
+    commandsMock.copyImageToClipboard.mockImplementationOnce(outcome);
+    const o = new CaptureOrchestration();
+    o.captureModes = modes;
+    o.settingsStore.settings = { ...o.settingsStore.settings, copyToClipboard: true };
+
+    await o.requestCapture("window", "shortcut");
+
+    await vi.waitFor(() => {
+      expect(statusLine.message).toBe("Notes saved but copy to clipboard failed.");
+    });
+  });
+
   it("no-ops while a capture is already pending", async () => {
     const o = new CaptureOrchestration();
     o.captureModes = modes;
@@ -478,19 +500,30 @@ describe("fallback shortcuts", () => {
     expect(commandsMock.startRegionSelection).toHaveBeenCalledOnce();
   });
 
-  it("requires Ctrl and Meta to match exactly", () => {
+  // Each event differs from the accelerator in one modifier only, so Ctrl and
+  // Meta are checked apart: the other key of the pair held as well, and the
+  // required key missing. The per-modifier table is in shortcutRecording.test.ts.
+  it.each([
+    ["the other of Ctrl and Meta held as well", { ctrlKey: true, metaKey: true }],
+    ["neither Ctrl nor Meta held", { ctrlKey: false, metaKey: false }]
+  ])("does not fire the fallback with %s", (_name, modifiers) => {
     const o = new CaptureOrchestration();
     o.captureModes = modes;
     o.settingsStore.registrations = [status("CommandOrControl+Shift+S", "screen", "failed")];
-    const event = keyEvent({
-      code: "KeyS",
-      ctrlKey: o.isMac,
-      metaKey: !o.isMac,
-      shiftKey: true
-    });
+    const event = keyEvent({ code: "KeyS", ...modifiers, shiftKey: true });
 
     expect(o.handleFallbackShortcut(event)).toBe(false);
+    expect(commandsMock.captureScreenUnderCursor).not.toHaveBeenCalled();
     expect(commandsMock.startScreenSelection).not.toHaveBeenCalled();
+  });
+
+  it("fires the fallback when the modifiers agree", () => {
+    const o = new CaptureOrchestration();
+    o.captureModes = modes;
+    o.settingsStore.registrations = [status("CommandOrControl+Shift+S", "screen", "failed")];
+    const event = keyEvent({ code: "KeyS", ...commandOrControl(o), shiftKey: true });
+
+    expect(o.handleFallbackShortcut(event)).toBe(true);
   });
 });
 

@@ -293,10 +293,12 @@ export async function copyCaptureImage(
 // later, but this drag already handed out `path`. Both windows are narrow;
 // neither is closed.
 //
-// The first file doubles as the drag-cursor preview. No-op when nothing
-// resolves to a usable path.
+// `preview` is the picture under the pointer, a small PNG data URL from
+// dragPreview.ts. It is never one of the dragged files: the plugin draws its
+// icon at full pixel size. No-op when nothing resolves to a usable path.
 export function dragCaptures(
   captures: RecentCapture[],
+  preview: string,
   flushPendingSave: () => Promise<void>
 ): void {
   const paths = captures
@@ -312,7 +314,7 @@ export function dragCaptures(
   // startFileDrag rejects if the native drag can't start. Log but don't
   // surface it: a failed drag is a no-op gesture (nothing drops), and there's
   // no activity-bar context for a drag the way there is for a click action.
-  void startFileDragIpc(paths, paths[0]).catch((error) => {
+  void startFileDragIpc(paths, preview).catch((error) => {
     logWarn("drag-out failed to start", error);
   });
 }

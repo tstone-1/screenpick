@@ -1,9 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { emit } from "@tauri-apps/api/event";
 
   import { commands } from "#lib/bindings.ts";
-  import { screenTargetChangedEvent } from "#lib/screenSelectionEvents.ts";
+  import { emitScreenTargetChanged } from "#lib/screenSelectionEvents.ts";
 
   // Parse explicitly: Number("") and Number(null) are both 0 (a valid finite
   // number), which would mask a missing/garbled param as monitor 0. Require an
@@ -19,13 +18,13 @@
   function setHovered(nextHovered: boolean) {
     hovered = nextHovered;
     if (Number.isFinite(monitorId) && !selectionPending) {
-      void emit(screenTargetChangedEvent, { monitorId, hovered: nextHovered });
+      void emitScreenTargetChanged({ monitorId, hovered: nextHovered });
     }
   }
 
   async function selectScreen() {
     if (selectionPending || selectionCancelling || !Number.isFinite(monitorId)) return;
-    void emit(screenTargetChangedEvent, { monitorId, hovered: false });
+    void emitScreenTargetChanged({ monitorId, hovered: false });
     selectionPending = true;
     try {
       const result = await commands.finishScreenSelection(monitorId);

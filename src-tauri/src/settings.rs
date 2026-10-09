@@ -10,11 +10,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{AppHandle, Manager};
 
-// document_store is the AppHandle-free, unit-testable home for the atomic-write
-// primitive (see the code review that unified it with this module's former
-// write_settings_atomically); importing it here is fine even though this
-// module is not itself part of the pure-module family.
-use crate::document_store;
+use crate::atomic_write::write_atomic;
 use crate::path_utils::strip_verbatim_prefix;
 use crate::updates::UpdateTransition;
 
@@ -208,7 +204,7 @@ impl SettingsState {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let json = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
-        document_store::write_atomic(&self.config_path, json.as_bytes())
+        write_atomic(&self.config_path, json.as_bytes())
     }
 }
 
@@ -254,14 +250,17 @@ fn load_settings_from(path: &Path) -> (CaptureSettings, Option<SettingsRecovery>
         Ok(contents) => contents,
         Err(err) => {
             log::warn!(
-                "could not read capture settings at {}; using defaults: {err}",
+                "could not read capture settings at {}; backing up and using defaults: {err}",
                 path.display()
             );
+            // Startup saves the run version right after this, which would
+            // replace the file. Move it aside first, like the other branches.
+            let backup_path = backup_invalid_settings(path, "unreadable");
             return (
                 CaptureSettings::default(),
                 Some(SettingsRecovery {
                     reason: "could not be read".to_string(),
-                    backup_path: None,
+                    backup_path,
                 }),
             );
         }
@@ -368,6 +367,24 @@ fn validate_save_directory_path(
     Ok(Some(strip_verbatim_prefix(&canonical.to_string_lossy())))
 }
 
+/// The save directory an update may store. The frontend sends the whole
+/// settings struct on every save, so the stored directory comes back with each
+/// unrelated change. Validation needs the folder to exist, so validating an
+/// unchanged directory would refuse every toggle and shortcut edit once that
+/// folder is deleted, renamed or on an unmounted volume. Only a directory that
+/// differs from the stored one is a choice to check; the stored one was checked
+/// when it was chosen.
+fn save_directory_for_update(
+    stored: Option<&str>,
+    incoming: Option<&str>,
+    home: &Path,
+) -> Result<Option<String>, String> {
+    if incoming.is_some() && incoming == stored {
+        return Ok(stored.map(str::to_string));
+    }
+    validate_save_directory_path(incoming, home)
+}
+
 /// Overlay the fields Rust owns onto a `CaptureSettings` that arrived from the
 /// frontend. `update_settings` takes the whole struct, so every save round-trips
 /// fields the UI neither shows nor tracks — and its own default object has
@@ -439,7 +456,12 @@ pub(crate) fn update_settings(
     settings: CaptureSettings,
 ) -> Result<CaptureSettings, String> {
     let mut settings = sanitize_settings(settings);
-    settings.save_directory = validate_save_directory(&app, settings.save_directory.as_deref())?;
+    let home = app.path().home_dir().map_err(|e| e.to_string())?;
+    settings.save_directory = save_directory_for_update(
+        state.get().save_directory.as_deref(),
+        settings.save_directory.as_deref(),
+        &home,
+    )?;
     let updated = state.update(settings)?;
     extend_asset_scope_for_save_directory(&app, updated.save_directory.as_deref());
     crate::shortcuts::re_register_shortcuts(&app, &updated)?;
@@ -502,8 +524,8 @@ mod tests {
     }
     use super::{
         load_settings_from, preserve_backend_owned_fields, sanitize_settings,
-        validate_save_directory_path, CaptureSettings, CAPTURE_SETTINGS_VERSION,
-        MAX_SETTINGS_BYTES,
+        save_directory_for_update, validate_save_directory_path, CaptureSettings, SettingsState,
+        CAPTURE_SETTINGS_VERSION, MAX_SETTINGS_BYTES,
     };
     use crate::path_utils::strip_verbatim_prefix;
     use serde::Deserialize;
@@ -540,6 +562,22 @@ mod tests {
                 .unwrap_or(0)
         ));
         path
+    }
+
+    // A state that saves to its own temp file, holding `settings` in memory.
+    fn state_with(label: &str, settings: CaptureSettings) -> SettingsState {
+        SettingsState {
+            settings: std::sync::Mutex::new(settings),
+            config_path: temp_path(label),
+            trusted_capture_files: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    // A directory tree of its own per test: `<temp>/<label>-<pid>-<nanos>/home`.
+    fn temp_home(label: &str) -> PathBuf {
+        let home = temp_path(label).with_extension("").join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        home
     }
 
     #[test]
@@ -710,23 +748,58 @@ mod tests {
     }
 
     #[test]
-    fn reset_shortcut_shape_preserves_other_fields() {
+    fn reset_shortcuts_clears_the_overrides_and_keeps_every_other_setting() {
         let mut overrides = HashMap::new();
         overrides.insert("region".to_string(), vec!["CmdOrCtrl+Shift+X".to_string()]);
-        let mut settings = CaptureSettings {
-            save_directory: Some("/tmp/captures".to_string()),
-            copy_to_clipboard: true,
-            auto_open_editor: false,
-            shortcut_overrides: overrides,
-            ..CaptureSettings::default()
-        };
+        let state = state_with(
+            "reset-shortcuts",
+            CaptureSettings {
+                save_directory: Some("/tmp/captures".to_string()),
+                copy_to_clipboard: true,
+                auto_open_editor: false,
+                last_run_version: Some("0.0.1".to_string()),
+                shortcut_overrides: overrides,
+                ..CaptureSettings::default()
+            },
+        );
 
-        settings.shortcut_overrides.clear();
+        let returned = state.reset_shortcuts().unwrap();
 
-        assert_eq!(settings.save_directory, Some("/tmp/captures".to_string()));
-        assert!(settings.copy_to_clipboard);
-        assert!(!settings.auto_open_editor);
-        assert!(settings.shortcut_overrides.is_empty());
+        // In memory, in the returned value and on disk alike.
+        let (on_disk, recovery) = load_settings_from(&state.config_path);
+        assert!(recovery.is_none());
+        for settings in [returned, state.get(), on_disk] {
+            assert!(settings.shortcut_overrides.is_empty());
+            assert_eq!(settings.save_directory, Some("/tmp/captures".to_string()));
+            assert!(settings.copy_to_clipboard);
+            assert!(!settings.auto_open_editor);
+            assert_eq!(settings.last_run_version, Some("0.0.1".to_string()));
+        }
+        std::fs::remove_file(&state.config_path).ok();
+    }
+
+    #[test]
+    fn unreadable_settings_file_is_moved_aside_before_defaults_are_used() {
+        let path = temp_path("unreadable");
+        // Not valid UTF-8, so the file exists and is small but cannot be read
+        // as text: the shape of a torn write.
+        let bytes = [0xff_u8, 0xfe, 0x00];
+        std::fs::write(&path, bytes).unwrap();
+
+        let (settings, recovery) = load_settings_from(&path);
+
+        assert_eq!(settings.save_directory, None);
+        let recovery = recovery.expect("an unreadable file should report a recovery");
+        assert_eq!(recovery.reason, "could not be read");
+        let backup = PathBuf::from(
+            recovery
+                .backup_path
+                .expect("the unreadable file should be preserved"),
+        );
+        assert_eq!(std::fs::read(&backup).unwrap(), bytes);
+        // Moved, not copied: the next save must not find it in the way.
+        assert!(!path.exists());
+        std::fs::remove_file(backup).ok();
     }
 
     #[test]
@@ -820,6 +893,108 @@ mod tests {
 
         assert_eq!(merged.last_run_version, Some("26.7.7".to_string()));
         assert_eq!(merged.version, CAPTURE_SETTINGS_VERSION);
+    }
+
+    #[test]
+    fn update_through_the_state_keeps_the_stored_run_version() {
+        let state = state_with(
+            "update-run-version",
+            CaptureSettings {
+                last_run_version: Some("0.0.1".to_string()),
+                ..CaptureSettings::default()
+            },
+        );
+
+        let updated = state
+            .update(CaptureSettings {
+                copy_to_clipboard: true,
+                last_run_version: None,
+                ..CaptureSettings::default()
+            })
+            .unwrap();
+
+        assert!(updated.copy_to_clipboard);
+        assert_eq!(updated.last_run_version, Some("0.0.1".to_string()));
+        assert_eq!(
+            load_settings_from(&state.config_path).0.last_run_version,
+            Some("0.0.1".to_string())
+        );
+        std::fs::remove_file(&state.config_path).ok();
+    }
+
+    #[test]
+    fn an_update_keeps_a_stored_save_directory_that_no_longer_exists() {
+        let home = temp_home("update-missing-dir");
+        let gone = home.join("captures");
+        std::fs::create_dir_all(&gone).unwrap();
+        let stored = validate_save_directory_path(gone.to_str(), &home)
+            .unwrap()
+            .unwrap();
+        std::fs::remove_dir(&gone).unwrap();
+        // The control: this directory can no longer be chosen afresh.
+        assert!(validate_save_directory_path(Some(&stored), &home).is_err());
+
+        let kept = save_directory_for_update(Some(&stored), Some(&stored), &home).unwrap();
+
+        assert_eq!(kept, Some(stored));
+        std::fs::remove_dir_all(home.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn an_update_that_changes_the_save_directory_is_validated() {
+        let home = temp_home("update-changed-dir");
+        let stored = home.join("captures");
+        let next = home.join("other");
+        std::fs::create_dir_all(&stored).unwrap();
+        std::fs::create_dir_all(&next).unwrap();
+        let stored = validate_save_directory_path(stored.to_str(), &home)
+            .unwrap()
+            .unwrap();
+        let missing = home.join("not-there");
+
+        // A changed directory that does not exist is refused, as before.
+        assert!(save_directory_for_update(Some(&stored), missing.to_str(), &home).is_err());
+        // So is the first directory ever set, when nothing was stored.
+        assert!(save_directory_for_update(None, missing.to_str(), &home).is_err());
+        // A changed directory that is valid is taken in its canonical form.
+        assert_eq!(
+            save_directory_for_update(Some(&stored), next.to_str(), &home).unwrap(),
+            validate_save_directory_path(next.to_str(), &home).unwrap()
+        );
+        // Clearing the directory is a change too, and always allowed.
+        assert_eq!(
+            save_directory_for_update(Some(&stored), None, &home).unwrap(),
+            None
+        );
+        std::fs::remove_dir_all(home.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn validate_save_directory_rejects_the_home_directory_itself() {
+        let home = temp_home("home-itself");
+
+        let err = validate_save_directory_path(home.to_str(), &home).unwrap_err();
+
+        assert!(err.contains("not the profile root"), "{err}");
+        std::fs::remove_dir_all(home.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn validate_save_directory_rejects_an_existing_directory_outside_home() {
+        let home = temp_home("outside-home");
+        // A sibling of home whose name starts with home's name: outside it, and
+        // the case a string comparison of the two paths would let through.
+        let outside = home.parent().unwrap().join("home-other");
+        std::fs::create_dir_all(&outside).unwrap();
+
+        let err = validate_save_directory_path(outside.to_str(), &home).unwrap_err();
+
+        assert!(err.contains("inside your user profile"), "{err}");
+        // The control: the same call accepts a directory that is inside.
+        let inside = home.join("captures");
+        std::fs::create_dir_all(&inside).unwrap();
+        assert!(validate_save_directory_path(inside.to_str(), &home).is_ok());
+        std::fs::remove_dir_all(home.parent().unwrap()).ok();
     }
 
     #[test]

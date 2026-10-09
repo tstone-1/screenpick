@@ -215,6 +215,31 @@ describe("arrowGeometry", () => {
     expect(geometry.control).toBeNull();
   });
 
+  // The ends are 8 apart, closer than the 16-long head, but the curve swings
+  // 60 pixels out between them. The straight-line rule ("shorter than its
+  // head, so no shaft") does not apply: there is a long curve to draw, and
+  // bounds and hit-testing follow it.
+  describe("bent, with its ends closer together than the head is long", () => {
+    const hairpin: ArrowAnnotation = { ...baseArrow(8, 4), bend: { x: 4, y: 60 } };
+    const geometry = arrowGeometry(hairpin);
+
+    it("still draws the shaft", () => {
+      expect(geometry.hasLine).toBe(true);
+      expect(geometry.shaft.startsWith("M 0 0 Q ")).toBe(true);
+    });
+
+    it("puts the base of the head on the curve, one head length before the tip", () => {
+      expect(Math.hypot(8 - geometry.base.x, 0 - geometry.base.y)).toBeCloseTo(16, 3);
+      // On the last stretch of the curve, which comes up to the tip from below.
+      expect(geometry.base.y).toBeGreaterThan(10);
+    });
+
+    it("control: a bend that stays within a head length of the tip has no shaft", () => {
+      const stub: ArrowAnnotation = { ...baseArrow(8, 4), bend: { x: 4, y: 3 } };
+      expect(arrowGeometry(stub).hasLine).toBe(false);
+    });
+  });
+
   describe("bent", () => {
     // Bent 30 pixels down at its middle; the head is 16 long at width 4.
     const bent: ArrowAnnotation = { ...baseArrow(100, 4), bend: { x: 50, y: 30 } };

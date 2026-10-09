@@ -376,7 +376,7 @@ export class EditorState {
   // (create, autosave, or crop/cut re-base) failed — sanitized message; full
   // detail always goes to the diagnostics log (console + on-disk log file)
   // alongside it. Rendered as a status-bar badge (+page.svelte) next to
-  // captureActivity, which plays the same role for capture-side failures.
+  // the status line, which plays the same role for capture-side failures.
   // Cleared on the next successful persist. Lives on DocumentStore (every
   // write that can set it happens there); this getter preserves
   // `editor.persistError` for existing consumers.
@@ -829,7 +829,7 @@ export class EditorState {
     if (!previous) return;
     this.historyPast = this.historyPast.slice(0, -1);
     this.historyFuture = [this.#snapshot(), ...this.historyFuture].slice(0, HISTORY_LIMIT);
-    this.#restore(previous);
+    this.#restore(previous, "live");
     this.#scheduleDocumentSave();
   }
 
@@ -838,7 +838,7 @@ export class EditorState {
     if (!next) return;
     this.historyFuture = this.historyFuture.slice(1);
     this.historyPast = [...this.historyPast, this.#snapshot()].slice(-HISTORY_LIMIT);
-    this.#restore(next);
+    this.#restore(next, "live");
     this.#scheduleDocumentSave();
   }
 
@@ -878,7 +878,8 @@ export class EditorState {
   // copy-path). Annotations come from the live layer if it's the open document,
   // else its session workspace or restored layer. Returns an error, or null.
   async exportRecentCapture(capture: RecentCapture): Promise<string | null> {
-    return saveFlattenedPng(capture, this.#annotationsForCapture(capture));
+    const source = this.#exportSourceFor(capture);
+    return saveFlattenedPng(source, this.#annotationsForCapture(source));
   }
 
   // Batch "Save images as...": save several recent captures into a single
@@ -887,7 +888,20 @@ export class EditorState {
   // de-dup/error-summary behavior; this just supplies the live annotation
   // lookup.
   async exportRecentCaptures(captures: RecentCapture[]): Promise<string | null> {
-    return exportRecentCapturesOp(captures, (capture) => this.#annotationsForCapture(capture));
+    return exportRecentCapturesOp(
+      captures.map((capture) => this.#exportSourceFor(capture)),
+      (capture) => this.#annotationsForCapture(capture)
+    );
+  }
+
+  // The capture to render for a strip entry. The annotation layer of the open
+  // document is the live one, in the coordinates of the image the editor
+  // shows, so that image is what it must be drawn on. An entry object can be
+  // older than the last crop, cut, undo or redo (a context menu opened before
+  // it), and its image would then not match the layer.
+  #exportSourceFor(capture: RecentCapture): RecentCapture {
+    const open = this.document?.capture;
+    return open && workspaceKeyFor(open) === workspaceKeyFor(capture) ? open : capture;
   }
 
   // Best-known annotation layer for a capture: the live layer when it's the open
@@ -938,8 +952,8 @@ export class EditorState {
   // the same tick (the drop reads the bytes later, so a write racing the drag
   // usually wins). +page.svelte flushes on pointerdown as well, which is where
   // the annotate-then-drag race is actually won.
-  dragCaptures(captures: RecentCapture[]): void {
-    dragCapturesOp(captures, () => this.flushPendingSave());
+  dragCaptures(captures: RecentCapture[], preview: string): void {
+    dragCapturesOp(captures, preview, () => this.flushPendingSave());
   }
 
   // Copy the flattened capture (crop + annotations, exactly as shown) to the
@@ -1004,12 +1018,17 @@ export class EditorState {
     this.regionPending = true;
     try {
       const dataUrl = await renderSelectionPng(capture, annotations, rect);
-      // Embedded pixels count toward the document store's 8 MiB JSON limit.
-      if (dataUrl.length > 7 * 1024 * 1024) return "Selection is too large. Select a smaller area.";
       const bytes = Uint8Array.from(atob(dataUrl.split(",")[1]), (c) => c.charCodeAt(0));
       const result = await copyPngBytesToClipboard(bytes);
       if (result.status === "error") return result.error || "Could not copy selection.";
       this.regionClipboard = { rect, dataUrl };
+      // Embedded pixels count toward the document store's 8 MiB JSON limit.
+      // That limits pasting into the screenshot (pasteRegion refuses there),
+      // not copying out, so the check comes after the clipboard write. A cut
+      // would remove pixels that could then not be pasted back.
+      if (cut && dataUrl.length > 7 * 1024 * 1024) {
+        return "Selection copied; it is too large to cut. Select a smaller area.";
+      }
       if (cut) {
         if (
           generation !== this.#regionGeneration ||
@@ -1867,6 +1886,9 @@ export class EditorState {
   }
 
   endSelectionEdit() {
+    // `change` and `blur` also fire when no edit was begun (a control pressed
+    // and released without a new value): nothing to save then.
+    if (!this.#selectionEditDirty) return;
     this.#selectionEditDirty = false;
     // Live slider/drag edits commit with history off; the begin recorded one
     // history entry, but persist the final value once the gesture settles.
@@ -2188,12 +2210,37 @@ export class EditorState {
     };
   }
 
-  #restore(snapshot: EditorSnapshot) {
+  #restore(snapshot: EditorSnapshot, view: "snapshot" | "live" = "snapshot") {
     this.#documentGeneration += 1;
+    const live = this.document;
     this.document = snapshot.document && {
       ...snapshot.document, capture: this.#withDocumentIdentity(snapshot.document.capture)
     };
+    // Zoom and pan are where the user is looking, not document content, so an
+    // undo or redo that stays on the same image leaves them alone. Across a
+    // crop or cut the image size changes and the snapshot's view is the one
+    // that fits it.
+    if (
+      view === "live" &&
+      live &&
+      this.document &&
+      live.capture.path === this.document.capture.path
+    ) {
+      this.document = {
+        ...this.document,
+        zoom: live.zoom,
+        fitZoom: live.fitZoom,
+        mode: live.mode,
+        panX: live.panX,
+        panY: live.panY
+      };
+    }
     this.currentCapture = snapshot.currentCapture && this.#withDocumentIdentity(snapshot.currentCapture);
+    // The strip entry shows the open document's image. A crop or cut put the
+    // new image there (#pushRecent); going back across one has to put the old
+    // image back, or the strip exports and labels an image the editor no
+    // longer shows.
+    if (this.document) this.#documentStore.syncRecentImage(this.document.capture);
     this.cropRect = snapshot.cropRect;
     // Undo/redo stays on the same capture, so the cached sample canvas remains
     // valid and is deliberately not cleared here.

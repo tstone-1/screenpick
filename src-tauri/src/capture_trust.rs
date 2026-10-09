@@ -190,6 +190,38 @@ mod tests {
         fs::remove_dir_all(&root).ok();
     }
 
+    // Containment is by path component, not by string prefix: a sibling folder
+    // whose name merely starts with the root's name is outside it.
+    #[test]
+    fn ensure_rejects_a_sibling_whose_name_starts_with_the_documents_root() {
+        let dir = temp_dir_for("documents-sibling");
+        let root = make_dir_only(&dir.join("documents"));
+        let source = make_file(&dir.join("documents-evil"), "x.png");
+        let documents_root = canonical(&root);
+
+        assert_eq!(
+            ensure_capture_source_trusted(&canonical(&source), &[], None, Some(&documents_root)),
+            Err(REJECTION.to_string())
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn ensure_rejects_a_sibling_whose_name_starts_with_the_cache_root() {
+        let dir = temp_dir_for("cache-sibling");
+        let root = make_dir_only(&dir.join("captures"));
+        let source = make_file(&dir.join("captures-evil"), "x.png");
+        let cache_root = canonical(&root);
+
+        assert_eq!(
+            ensure_capture_source_trusted(&canonical(&source), &[], Some(&cache_root), None),
+            Err(REJECTION.to_string())
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn ensure_accepts_file_inside_cache_root() {
         let root = temp_dir_for("cache-root");
@@ -306,5 +338,101 @@ mod tests {
     fn make_dir_only(dir: &Path) -> PathBuf {
         fs::create_dir_all(dir).unwrap();
         dir.to_path_buf()
+    }
+
+    // The policy above is only worth something if every command that takes a
+    // source path from the webview goes through it. Those commands need an
+    // `AppHandle`, so no test here can call them; what can be checked is their
+    // source text. For each `#[tauri::command]` in the two modules that has a
+    // `...path: String` parameter, the parameter must be handed to
+    // `verify_capture_source` and used nowhere else in the body, so the command
+    // can only read the canonical path the gate returned.
+    //
+    // `dest_path` is a destination, gated by `export_validation` instead.
+    struct Command {
+        name: String,
+        path_params: Vec<String>,
+        body: String,
+    }
+
+    fn commands_taking_a_source_path(source: &str) -> Vec<Command> {
+        source
+            .split("#[tauri::command]")
+            .skip(1)
+            .filter_map(|after_attribute| {
+                let from_fn = &after_attribute[after_attribute.find("fn ")? + 3..];
+                let name = from_fn[..from_fn.find('(')?].to_string();
+                // rustfmt puts the body's opening brace at the end of the
+                // signature and the function's closing brace alone in column 0.
+                let signature_end = from_fn.find("{\n")?;
+                let signature = &from_fn[..signature_end];
+                let rest = &from_fn[signature_end + 2..];
+                let body = rest[..rest.find("\n}\n")?].to_string();
+                let path_params: Vec<String> = signature
+                    .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == ':' || c == ' '))
+                    .filter_map(|param| param.trim().strip_suffix(": String"))
+                    .filter(|param| param.ends_with("path") && *param != "dest_path")
+                    .map(str::to_string)
+                    .collect();
+                (!path_params.is_empty()).then_some(Command {
+                    name,
+                    path_params,
+                    body,
+                })
+            })
+            .collect()
+    }
+
+    fn count_identifier(text: &str, identifier: &str) -> usize {
+        let is_word = |c: char| c.is_alphanumeric() || c == '_';
+        text.match_indices(identifier)
+            .filter(|(start, _)| {
+                let before = text[..*start].chars().next_back();
+                let after = text[start + identifier.len()..].chars().next();
+                !before.is_some_and(is_word) && !after.is_some_and(is_word)
+            })
+            .count()
+    }
+
+    #[test]
+    fn every_command_taking_a_source_path_goes_through_the_gate() {
+        let commands: Vec<Command> = [include_str!("capture.rs"), include_str!("documents.rs")]
+            .into_iter()
+            .flat_map(commands_taking_a_source_path)
+            .collect();
+
+        // Control: the scan found the commands. A scan that silently finds
+        // none would pass everything below.
+        let names: Vec<&str> = commands.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "copy_image_to_clipboard",
+                "reveal_in_dir",
+                "crop_capture",
+                "cutout_capture",
+                "create_document",
+                "replace_document_base",
+            ],
+            "a command taking a source path was added, removed or renamed"
+        );
+
+        for command in &commands {
+            for param in &command.path_params {
+                let gate = format!("verify_capture_source(&app, &{param})?");
+                assert_eq!(
+                    command.body.matches(&gate).count(),
+                    1,
+                    "{} must pass `{param}` to verify_capture_source",
+                    command.name
+                );
+                assert_eq!(
+                    count_identifier(&command.body, param),
+                    1,
+                    "{} uses `{param}` outside the gate; read the canonical path instead",
+                    command.name
+                );
+            }
+        }
     }
 }

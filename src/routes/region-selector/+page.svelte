@@ -11,7 +11,12 @@
   let start = $state<Point | null>(null);
   let current = $state<Point | null>(null);
   let dragging = $state(false);
+  // Two flags, as in the other three overlays: a confirm in flight and a
+  // cancel in flight each block the other, and each is released again only if
+  // its own command fails.
   let selectionPending = $state(false);
+  let selectionCancelling = $state(false);
+  let locked = $derived(selectionPending || selectionCancelling);
 
   let selection = $derived.by(() => {
     if (!start || !current) return null;
@@ -30,7 +35,7 @@
   }
 
   function beginSelection(event: PointerEvent) {
-    if (selectionPending) return;
+    if (locked) return;
     const point = pointFromEvent(event);
     start = point;
     current = point;
@@ -39,12 +44,12 @@
   }
 
   function updateSelection(event: PointerEvent) {
-    if (!dragging || selectionPending) return;
+    if (!dragging || locked) return;
     current = pointFromEvent(event);
   }
 
   async function endSelection(event: PointerEvent) {
-    if (!dragging || selectionPending) return;
+    if (!dragging || locked) return;
     dragging = false;
     (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
 
@@ -54,10 +59,10 @@
     }
 
     selectionPending = true;
-    // Rust owns region-session cleanup on the Ok and Err paths (both end the
-    // session and either emit capture-completed or capture-cancelled). Only
-    // reset `selectionPending` if the IPC layer itself throws — the page would
-    // otherwise be wedged with no path back to the main window.
+    // On success Rust ends the session and closes this overlay, so the flag
+    // stays up. It is released when the command reports an error and when the
+    // IPC call itself throws: in both cases the overlay may still be on
+    // screen, and it would otherwise be wedged with no way to select or cancel.
     try {
       const result = await commands.finishRegionSelection({
         ...selection,
@@ -70,13 +75,13 @@
   }
 
   async function cancelSelection() {
-    if (selectionPending) return;
-    selectionPending = true;
+    if (locked) return;
+    selectionCancelling = true;
     try {
       const result = await commands.cancelRegionSelection();
-      if (result.status === "error") selectionPending = false;
+      if (result.status === "error") selectionCancelling = false;
     } catch {
-      selectionPending = false;
+      selectionCancelling = false;
     }
   }
 
@@ -98,7 +103,7 @@
 </svelte:head>
 
 <main
-  class:pending={selectionPending}
+  class:pending={locked}
   onpointerdown={beginSelection}
   onpointermove={updateSelection}
   onpointerup={endSelection}

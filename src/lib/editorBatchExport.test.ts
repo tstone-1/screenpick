@@ -162,6 +162,8 @@ describe("batch export", () => {
 });
 
 describe("drag-out", () => {
+  const PREVIEW = "data:image/png;base64,preview";
+
   beforeEach(() => {
     startFileDragMock.mockReset();
     startFileDragMock.mockResolvedValue(undefined);
@@ -171,16 +173,17 @@ describe("drag-out", () => {
     const state = new EditorState();
 
     const withCurrent: RecentCapture = { ...capture("/base.png"), currentPath: "/flat.png" };
-    state.dragCaptures([withCurrent, capture("/plain.png")]);
+    state.dragCaptures([withCurrent, capture("/plain.png")], PREVIEW);
 
-    // Uses the flattened currentPath when present, base path otherwise; the
-    // first file doubles as the drag-cursor icon.
-    expect(startFileDragMock).toHaveBeenCalledWith(["/flat.png", "/plain.png"], "/flat.png");
+    // Uses the flattened currentPath when present, base path otherwise. The
+    // icon is the preview handed in, never one of the files: the plugin draws
+    // its icon at full pixel size.
+    expect(startFileDragMock).toHaveBeenCalledWith(["/flat.png", "/plain.png"], PREVIEW);
   });
 
   it("does not start a drag when given no captures", () => {
     const state = new EditorState();
-    state.dragCaptures([]);
+    state.dragCaptures([], PREVIEW);
     expect(startFileDragMock).not.toHaveBeenCalled();
   });
 
@@ -198,9 +201,9 @@ describe("drag-out", () => {
       .spyOn(state, "flushPendingSave")
       .mockReturnValue(new Promise<void>(() => {}));
 
-    state.dragCaptures([{ ...capture("/base.png"), currentPath: "/flat.png" }]);
+    state.dragCaptures([{ ...capture("/base.png"), currentPath: "/flat.png" }], PREVIEW);
 
     expect(flush).toHaveBeenCalledOnce();
-    expect(startFileDragMock).toHaveBeenCalledWith(["/flat.png"], "/flat.png");
+    expect(startFileDragMock).toHaveBeenCalledWith(["/flat.png"], PREVIEW);
   });
 });

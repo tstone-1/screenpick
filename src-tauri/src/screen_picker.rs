@@ -5,13 +5,14 @@ use tauri::{
 
 use crate::capture::{
     bring_to_front_on_hotkey_capture, capture_monitor_by_id, list_capturable_monitors,
-    restore_main_window, CapturableMonitor, CaptureResult,
+    CapturableMonitor, CaptureResult,
 };
 use crate::errors::error_message;
+use crate::main_window::restore_main_window;
 use crate::monitor_pairing::{pair_monitor_targets, CapMonitorInfo, TauriMonInfo};
 use crate::picker_session::{
-    emit_capture_cancelled, emit_capture_outcome, finish_capture, hide_before_capture,
-    place_overlay, run_capture_off_ui_thread, PickerSession,
+    emit_capture_cancelled, emit_capture_outcome, end_then_teardown, finish_capture,
+    finish_sequence, hide_before_capture, place_overlay, run_capture_off_ui_thread, PickerSession,
 };
 
 const SCREEN_PICKER: &str = "screen-picker";
@@ -199,22 +200,37 @@ async fn capture_monitor_now(
             .as_ref()
             .and_then(|window| window.is_visible().ok())
             .unwrap_or(false);
-        // Deliberately a longer settle than the picker's PICKER_HIDE_DELAY_MS:
-        // this path hides the OPAQUE main editor window (not a translucent
-        // overlay), and it lands in the full-screen shot if it's still
-        // compositing — so give it a touch more time to disappear.
-        if let Some(window) = &main_window {
-            hide_before_capture(window, "main window", 180);
-        } else {
-            std::thread::sleep(std::time::Duration::from_millis(180));
-        }
-
-        let result = capture_monitor_by_id(&app, monitor_id);
-        // The non-restoring teardown, then restore separately: this path is the
-        // one that has a say in whether the main window comes back, so it must
-        // not delegate that to PickerSession::end. Guarded by still_active so a
-        // superseded capture can't yank focus for a session it no longer owns.
-        let still_active = finish_screen_session(&app, Some(id));
+        // The same order as a picker's finish: the session is ended before the
+        // capture, so a capture that was superseded during the settle writes no
+        // file. The teardown is the non-restoring one, and the restore is
+        // decided separately below: this path is the one that has a say in
+        // whether the main window comes back, so it must not delegate that to
+        // PickerSession::end. Guarded by still_active so a superseded capture
+        // can't yank focus for a session it no longer owns.
+        let (still_active, result) = finish_sequence(
+            Some(id),
+            "Screen capture was already cancelled.",
+            || {
+                // Deliberately a longer settle than the picker's
+                // PICKER_HIDE_DELAY_MS: this path hides the OPAQUE main editor
+                // window (not a translucent overlay), and it lands in the
+                // full-screen shot if it's still compositing — so give it a
+                // touch more time to disappear.
+                if let Some(window) = &main_window {
+                    hide_before_capture(window, "main window", 180);
+                } else {
+                    std::thread::sleep(std::time::Duration::from_millis(180));
+                }
+            },
+            |expected_id| finish_screen_session(&app, expected_id),
+            || capture_monitor_by_id(&app, monitor_id),
+        )
+        .unwrap_or_else(|| {
+            (
+                false,
+                Err("Screen capture was already cancelled.".to_string()),
+            )
+        });
         if still_active
             && should_restore_main(restore, was_visible, bring_to_front_on_hotkey_capture(&app))
         {
@@ -436,18 +452,30 @@ pub(crate) fn cancel_screen_selection(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// Both end the session BEFORE closing the per-display overlays, and close them
+// only when this call ended it: each overlay's Destroyed handler calls
+// `end_screen_session` itself. See `end_then_teardown` for what the other
+// order costs.
 fn end_screen_session(app: &AppHandle, expected_id: Option<u64>) -> bool {
-    close_screen_overlays(app);
-    app.state::<ScreenPickerSession>()
-        .session()
-        .end(app, SCREEN_PICKER, expected_id)
+    end_then_teardown(
+        || {
+            app.state::<ScreenPickerSession>()
+                .session()
+                .end(app, SCREEN_PICKER, expected_id)
+        },
+        || close_screen_overlays(app),
+    )
 }
 
 fn finish_screen_session(app: &AppHandle, expected_id: Option<u64>) -> bool {
-    close_screen_overlays(app);
-    app.state::<ScreenPickerSession>()
-        .session()
-        .end_without_restore(app, SCREEN_PICKER, expected_id)
+    end_then_teardown(
+        || {
+            app.state::<ScreenPickerSession>()
+                .session()
+                .end_without_restore(app, SCREEN_PICKER, expected_id)
+        },
+        || close_screen_overlays(app),
+    )
 }
 
 fn hide_screen_overlays(app: &AppHandle) {

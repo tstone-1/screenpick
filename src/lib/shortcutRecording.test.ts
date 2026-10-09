@@ -65,6 +65,35 @@ describe("acceleratorMatches", () => {
   });
 });
 
+// One row per modifier comparison in acceleratorMatches. Each accelerator is
+// tried with the modifier pressed although it is not part of it, and missing
+// although it is; every other modifier matches, so the row fails only through
+// its own comparison.
+describe("acceleratorMatches, one modifier at a time", () => {
+  const all = { ctrlKey: true, metaKey: true, altKey: true, shiftKey: true };
+  const rows = [
+    { flag: "shiftKey", withIt: "Control+Super+Alt+Shift+W", withoutIt: "Control+Super+Alt+W" },
+    { flag: "altKey", withIt: "Control+Super+Alt+Shift+W", withoutIt: "Control+Super+Shift+W" },
+    { flag: "ctrlKey", withIt: "Control+Super+Alt+Shift+W", withoutIt: "Super+Alt+Shift+W" },
+    { flag: "metaKey", withIt: "Control+Super+Alt+Shift+W", withoutIt: "Control+Alt+Shift+W" }
+  ] as const;
+
+  it.each(rows)("$flag pressed but not in the accelerator does not match", ({ withoutIt }) => {
+    expect(acceleratorMatches(ev("KeyW", all), withoutIt, false)).toBe(false);
+  });
+
+  it.each(rows)("$flag in the accelerator but not pressed does not match", ({ flag, withIt }) => {
+    expect(acceleratorMatches(ev("KeyW", { ...all, [flag]: false }), withIt, false)).toBe(false);
+  });
+
+  // The control: with nothing extra and nothing missing, each accelerator of
+  // the table does match, so the rows above fail for the modifier alone.
+  it.each(rows)("$flag rows match when the modifiers agree", ({ flag, withIt, withoutIt }) => {
+    expect(acceleratorMatches(ev("KeyW", all), withIt, false)).toBe(true);
+    expect(acceleratorMatches(ev("KeyW", { ...all, [flag]: false }), withoutIt, false)).toBe(true);
+  });
+});
+
 describe("acceleratorFromKeyboardEvent", () => {
   it("emits the spelled-out default style on Windows/Linux", () => {
     expect(acceleratorFromKeyboardEvent(ev("KeyW", { ctrlKey: true, shiftKey: true }), false)).toBe(

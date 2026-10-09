@@ -186,9 +186,12 @@ screenpick displays              # the numbers --display takes
 ```
 
 `--rect` is `x,y,width,height` from the top-left corner of the display, in the
-units `screenpick displays` prints. An existing output file is replaced. The
-exit code is 0 on success, 1 when the capture failed and 2 when the command
-line is wrong; `screenpick --help` lists everything.
+units `screenpick displays` prints. `--output` can be written `-o`, and the
+long options also take their value as `--output=shot.png`; each option may be
+given once. An existing output file is replaced, and only once the capture is
+complete: a capture that fails leaves the old file as it was. The exit code is
+0 on success, 1 when the capture failed and 2 when the command line is wrong;
+`screenpick --help` lists everything.
 
 Where the program is:
 

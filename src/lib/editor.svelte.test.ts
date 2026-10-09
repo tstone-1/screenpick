@@ -1255,6 +1255,14 @@ describe("slugifyCaptureTitle", () => {
 describe("persistError", () => {
   const revealInDirMock = commandsMock.revealInDir;
 
+  // Each test states the outcomes it needs. Without this the block ran on
+  // whatever implementations the tests above it had left on these mocks.
+  beforeEach(() => {
+    revealInDirMock.mockReset();
+    replaceDocumentBaseMock.mockReset();
+    saveDocumentMock.mockReset();
+  });
+
   function persistedDocument(): RecentCapture {
     return {
       ...capture("/w3/base.png", 100, 100),

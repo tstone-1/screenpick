@@ -728,9 +728,12 @@ describe("deserializeAnnotations", () => {
     expect(
       deserializeAnnotations('[{"kind":"blur","id":1,"rect":{"x":0,"y":0,"width":1e999,"height":10},"radius":4}]')
     ).toEqual([]);
-    expect(
-      deserializeAnnotations('[{"kind":"pen","id":1e999,"points":[{"x":1,"y":2}],"color":"#fff","width":2}]')
-    ).toEqual([]);
+    // Two points, so the stroke is valid in everything but its id and the id
+    // check is what drops it. The same stroke with a finite id is the control.
+    const pen = (id: string) =>
+      `[{"kind":"pen","id":${id},"points":[{"x":1,"y":2},{"x":3,"y":4}],"color":"#fff","width":2}]`;
+    expect(deserializeAnnotations(pen("7"))).toHaveLength(1);
+    expect(deserializeAnnotations(pen("1e999"))).toEqual([]);
   });
 
   it("keeps the valid entries of a mixed layer", () => {
