@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [CalVer](https://calver.org/) `YY.M.MICRO` versioning
 (see [BUILD.md](BUILD.md#version-management)).
 
+## [26.10.4] - Unreleased
+
+### Changed
+
+- The *Copy* button confirms a successful copy: for about a second and a half
+  it shows a check mark and *Copied* in the accent colour. A failed copy is
+  reported in the status line and the button does not confirm it.
+
 ## [26.10.3] - 2026-10-09
 
 ### Changed

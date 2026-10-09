@@ -3,6 +3,7 @@
   import {
     ArrowUpRight,
     Blend,
+    Check,
     ClipboardCopy,
     Copy,
     Crop,
@@ -298,9 +299,30 @@
     if (error) statusLine.set(error);
   }
 
+  // The copy itself takes a few milliseconds, so "Copying..." is gone before
+  // it can be read and the button looked as if nothing had happened. After a
+  // successful copy the button therefore says so for a moment. Long enough to
+  // notice with the eyes elsewhere, short enough that a second copy right
+  // after does not meet a stale confirmation.
+  const COPIED_FEEDBACK_MS = 1600;
+  let copyConfirmed = $state(false);
+  let copyConfirmedTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function clearCopyConfirmed() {
+    if (copyConfirmedTimer) clearTimeout(copyConfirmedTimer);
+    copyConfirmedTimer = null;
+    copyConfirmed = false;
+  }
+
   async function handleCopy() {
+    clearCopyConfirmed();
     const error = await editor.copyToClipboard();
     statusLine.set(error ?? "Copied to clipboard.");
+    // A failure is reported in the status line only: the button must never
+    // confirm a copy that did not happen.
+    if (error) return;
+    copyConfirmed = true;
+    copyConfirmedTimer = setTimeout(clearCopyConfirmed, COPIED_FEEDBACK_MS);
   }
 
   function handleFitZoom() {
@@ -482,6 +504,7 @@
     update.flushBeforeInstall(() => editor.flushPendingSave());
 
     return () => {
+      clearCopyConfirmed();
       window.removeEventListener("keydown", handleKeydown);
       window.removeEventListener("contextmenu", suppressNativeContextMenu);
       window.removeEventListener("pointerdown", maybeUnlock);
@@ -765,14 +788,19 @@
         </button>
         <button
           type="button"
+          class:confirmed={copyConfirmed}
           disabled={!editor.document || editor.copyPending}
           onclick={handleCopy}
           title="Copy to clipboard"
         >
-          <ClipboardCopy size={17} />
+          {#if copyConfirmed}
+            <Check size={17} />
+          {:else}
+            <ClipboardCopy size={17} />
+          {/if}
           <span class="swap-label">
             <span class="swap-sizer" aria-hidden="true">Copying...</span>
-            <span>{editor.copyPending ? "Copying..." : "Copy"}</span>
+            <span>{editor.copyPending ? "Copying..." : copyConfirmed ? "Copied" : "Copy"}</span>
           </span>
         </button>
         <button
@@ -1529,6 +1557,15 @@
 
   .swap-sizer {
     visibility: hidden;
+  }
+
+  /* A copy that just succeeded: the app's accent on a light tint, held for
+     COPIED_FEEDBACK_MS. Colour, icon and word all change, so the state does
+     not depend on colour alone. */
+  .window-actions .confirmed {
+    color: #14665a;
+    background: #e3f2ef;
+    border-color: #1c7c6d;
   }
 
   .window-actions .primary {
