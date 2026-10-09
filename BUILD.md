@@ -497,9 +497,9 @@ This does not affect CI, which builds in a fresh keychain each run.
 ## Windows code signing
 
 **Status: wired into `release.yml` on 2026-10-08 and rehearsed the same day,
-with `sign-rehearsal.yml` and with a full build from a rehearsal tag. No
-published release is signed yet; see *What has been seen and what has not*
-below.
+with `sign-rehearsal.yml` and with a full build from a rehearsal tag. 26.10.3,
+published on 2026-10-09, is the first signed release; see *What has been seen
+and what has not* below.
 
 The certificate is Certum *Open Source Code Signing in the Cloud*, subject
 `CN=Open Source Developer Timo Stein`, issued by *Certum Code Signing 2021 CA*,
@@ -721,9 +721,22 @@ Seen here on 2026-10-08, at commit `df165d0`, each at the first attempt:
   `minisign` verified the downloaded installer against its `.sig`. The draft
   and the tag were deleted afterwards.
 
-Not yet seen: a published signed release, the signed installer read on a
-Windows computer outside GitHub, and the client restored from the cache on a
-tag (see *The cached signing client*).
+Seen on 2026-10-09, at commit `f28abaa`:
+
+- `sign-rehearsal.yml` on `main`, run 37913560554: built the client and saved
+  it under `ssign-Windows-X64-<SSIGN_REV>`.
+- The tag `v26.10.3`, run 37914091494: the Windows leg restored the client
+  from that cache and skipped the build; the installer, `screenpick.exe` and
+  `uninstall.exe` read valid, timestamped and by the signer; the macOS leg,
+  in a concurrency group of its own, was signed, notarized and stapled; the
+  job *Check the updater manifest* passed. The release was published with six
+  assets, and `latest.json` at `releases/latest` names `windows-x86_64` and
+  `windows-x86_64-nsis` and no `windows-x86_64-msi`.
+- `releases/latest/download/latest.json` kept answering with 26.10.2 for about
+  a minute after publishing: the redirect is cached. Wait and ask again before
+  reading a stale version as a failed release.
+
+Not yet seen: the signed installer read on a Windows computer outside GitHub.
 
 ## Release Procedure
 
