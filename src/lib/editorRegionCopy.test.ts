@@ -71,4 +71,20 @@ describe("copying a large selection", () => {
     expect(state.annotations).toEqual([]);
     expect(state.historyPast).toEqual([]);
   });
+
+  // The selection alone is under the limit, but the document already holds a
+  // pasted image, so pasting the cut pixels back would be refused.
+  it("refuses a cut whose paste-back would not fit next to an existing image", async () => {
+    const selection = "data:image/png;base64," + "AAAA".repeat(1.25 * 1024 * 1024);
+    const existing = "data:image/png;base64," + "A".repeat(4 * 1024 * 1024);
+    expect(selection.length).toBeLessThan(7 * 1024 * 1024);
+    vi.mocked(renderSelectionPng).mockResolvedValue(selection);
+    const state = setup();
+    state.annotations = [{ kind: "image", id: 1, rect: { x: 100, y: 100, width: 20, height: 20 }, dataUrl: existing }];
+
+    expect(await state.copyRegion(true)).toContain("too large to cut");
+
+    expect(state.annotations).toHaveLength(1);
+    expect(state.historyPast).toEqual([]);
+  });
 });

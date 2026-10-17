@@ -88,6 +88,9 @@ describe("dragPreviewDataUrl", () => {
 
     expect(dragPreviewDataUrl(null)).toBe(EMPTY_DRAG_PREVIEW);
     expect(dragPreviewDataUrl(loadedImage(0, 0))).toBe(EMPTY_DRAG_PREVIEW);
+    // Each dimension alone must trip the guard.
+    expect(dragPreviewDataUrl(loadedImage(0, 100))).toBe(EMPTY_DRAG_PREVIEW);
+    expect(dragPreviewDataUrl(loadedImage(100, 0))).toBe(EMPTY_DRAG_PREVIEW);
     expect(drawImage).not.toHaveBeenCalled();
   });
 

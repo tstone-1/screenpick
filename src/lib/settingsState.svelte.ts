@@ -4,7 +4,7 @@
 // queue), the shortcut-registration status pipeline, and the OS autostart
 // toggle.
 //
-// Split out of captureOrchestration.svelte.ts (W2 in the 2026-08 code review),
+// Split out of captureOrchestration.svelte.ts,
 // mirroring how `EditorState` composes `DocumentStore`: `CaptureOrchestration`
 // holds one `SettingsState` and exposes it as `capture.settingsStore`, and the
 // module re-exports that instance as the `settingsStore` singleton for

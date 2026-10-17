@@ -1,7 +1,7 @@
 # ScreenPick — Build Instructions
 
 ScreenPick is a Tauri 2 (Rust) + Svelte 5 / SvelteKit 3 (TypeScript) desktop app targeting
-**macOS** (Apple Silicon + Intel) and **Windows** (x64).
+**macOS** (Apple Silicon + Intel) and **Windows** (x64 and ARM64).
 
 > **Distribution model:** **macOS release builds are signed with a Developer ID
 > identity and notarized by Apple** (since 26.7.6) — users open them normally.
@@ -34,6 +34,14 @@ ScreenPick is a Tauri 2 (Rust) + Svelte 5 / SvelteKit 3 (TypeScript) desktop app
   `rustup target add aarch64-apple-darwin x86_64-apple-darwin`.
 - **Windows**: Visual Studio Build Tools with the "Desktop development with C++"
   workload. WebView2 runtime (ships with Windows 11 and recent Windows 10).
+  For an ARM64 build (`npx tauri build --target aarch64-pc-windows-msvc`,
+  from an x64 or an ARM64 machine) also add the Rust target
+  (`rustup target add aarch64-pc-windows-msvc`), the Visual Studio component
+  "MSVC C++ ARM64 build tools", and LLVM, with `clang` on `PATH`: `ring`, from
+  the updater's TLS stack, compiles its assembly with clang for this target and
+  fails with `failed to find tool "clang"` without it. The release
+  leg relies on the `windows-2025` runner image having all three; the first
+  release with the ARM64 leg confirms it.
 
 ## Development
 
@@ -100,6 +108,9 @@ Artifacts land in `src-tauri/target/release/bundle/`:
   Windows installer: no `.msi` is built, see
   [Windows code signing](#windows-code-signing).
 - Portable executable: `src-tauri/target/release/screenpick.exe`.
+- An ARM64 build (`--target aarch64-pc-windows-msvc`) lands under
+  `src-tauri/target/aarch64-pc-windows-msvc/release/` instead, and its
+  installer is `ScreenPick_<version>_arm64-setup.exe`.
 
 ## Updater
 
@@ -529,7 +540,8 @@ and names it as Tauri's `signCommand` through the overlay `src-tauri/tauri.signi
 on the Windows leg only. Tauri then starts the command once for
 `screenpick.exe`, once for each NSIS plugin DLL, once for the uninstaller (from
 inside makensis) and once for the installer. The first start logs in and the
-later ones reuse that session, so one build is one login.
+later ones reuse that session, so one build is one login. A release has two
+Windows builds, x64 and ARM64, so it logs in twice, one whole build apart.
 
 | Piece | What it is for |
 |---|---|
@@ -556,7 +568,11 @@ After the build the Windows leg reads the installer's signature back, installs
 it silently, and reads the signature of every `.exe` and `.dll` in
 `%LOCALAPPDATA%\ScreenPick`, which has to contain `screenpick.exe` and
 `uninstall.exe`. It fails unless each is valid, timestamped and by that signer,
-and it fails if an `.msi` was built.
+and it fails if an `.msi` was built. It also reads the machine type from the
+installed `screenpick.exe` (`0x8664` x64, `0xAA64` ARM64) and fails unless it
+is the one the leg names. The ARM64 leg is cross-compiled on the x64 runner,
+and Tauri's NSIS installer does not refuse another architecture, so that leg
+installs and reads its files on the runner as well.
 
 ### Rules the login brings
 
@@ -570,6 +586,10 @@ and it fails if an `.msi` was built.
   concurrency group between repositories, and the account is shared. Do not
   start a release or a rehearsal here while one runs in another project that
   signs with this certificate.
+- **Do not dispatch a rehearsal while a release runs.** GitHub keeps one
+  pending job per concurrency group, so a second dispatch can cancel a Windows
+  leg that is still waiting. A cancelled leg skips the manifest job instead of
+  failing it, so the release looks quiet while it is missing a platform.
 - **Do not log in to Certum's desktop program while a signing job runs**, for
   the same reason.
 - **`ssign` keeps its session in a file for twenty minutes** (`%TEMP%\ssign`, or
@@ -761,7 +781,8 @@ Not yet seen: the signed installer read on a Windows computer outside GitHub.
       1.0.104, `memmap2` via pinned xcap — none actionable). If `cargo audit` reports a
       new, non-allow-listed vulnerability, that is a real release blocker: do not add it to
       `.cargo/audit.toml` without recording, next to the entry, why it was reviewed and
-      accepted and under which condition it is revisited (the ignore list is empty today). A
+      accepted and under which condition it is revisited (today it holds the three `zip`
+      advisories of 2026-10, unreachable behind the updater's signature check). A
       release must not ship with an unreviewed red `cargo audit`. The release
       workflow's `audit` job runs `cargo audit` on every tag as well, and no
       installer is built unless it passes; keep this local step anyway, so a
@@ -937,8 +958,8 @@ git push origin vYY.M.MICRO
 
 **Channel: GitHub Releases, built by CI on a pushed tag.** Pushing a CalVer tag
 (`vYY.M.MICRO`) triggers [`.github/workflows/release.yml`](.github/workflows/release.yml),
-which builds the **macOS universal DMG** and the **Windows x64 installer**, signs
-both, and publishes them to a **draft** GitHub Release for you to review and publish. This repo is public,
+which builds the **macOS universal DMG** and the **Windows x64 and ARM64
+installers**, signs all three, and publishes them to a **draft** GitHub Release for you to review and publish. This repo is public,
 so GitHub Actions minutes are free and unlimited — the tag-push path is the primary
 release channel.
 
@@ -959,35 +980,48 @@ gh release create vYY.M.MICRO --title "ScreenPick vYY.M.MICRO" --notes-from-tag 
       as [Signing by hand](#signing-by-hand) says, or say in the release notes
       that it is not signed.
 - [ ] `gh release view vYY.M.MICRO` confirms it points to the tag and lists the
-      `.dmg` + `-setup.exe` assets.
+      `.dmg` + `-setup.exe` assets. A local Windows build is x64 unless you
+      also build and attach the ARM64 installer (see
+      [Prerequisites](#prerequisites)); without it, `latest.json` has no
+      `windows-aarch64` entry and ARM64 installs do not update.
+
+A draft left behind by a failed leg is deleted, never published. The matrix is
+`fail-fast: false`, so the other legs' assets stay in that draft, and the
+manifest job is skipped rather than red; a draft without it has no
+`latest.json` and updates nobody.
 
 **Updater checks — after publishing the draft, not before.** The endpoint
 resolves `releases/latest`, which ignores drafts and prereleases, so the update
 only goes live when the release does.
 
 The job *Check the updater manifest* in `release.yml` has already read
-`latest.json` from the draft once both legs were done: it fails unless the file
+`latest.json` from the draft once every leg was done: it fails unless the file
 exists, carries the tag's version, has a signed entry for `darwin-aarch64`,
-`darwin-x86_64` and `windows-x86_64`, points `windows-x86_64` at the
-`-setup.exe` and names no `.msi`. The first three checks below repeat that on
-the published release, which is the address an installed copy asks.
+`darwin-x86_64`, `windows-x86_64` and `windows-aarch64`, points
+`windows-x86_64` at the `_x64-setup.exe` and `windows-aarch64` at the
+`_arm64-setup.exe`, and names no `.msi`. The first three checks below repeat
+that on the published release, which is the address an installed copy asks.
 
-- [ ] The release lists six assets: `latest.json`, the `.dmg`, the
-      `-setup.exe` and its `.sig`, and the `.app.tar.gz` and its `.sig`. There
+- [ ] The release lists eight assets: `latest.json`, the `.dmg`, the
+      `_x64-setup.exe` and its `.sig`, the `_arm64-setup.exe` and its `.sig`,
+      and the `.app.tar.gz` and its `.sig`. There
       is no `.msi`. **No `latest.json` means no update reaches anyone** — the
       most likely cause is a missing/empty signing secret, since `tauri-action`
       logs "Signature not found for the updater JSON. Skipping upload..." and
       still finishes green.
 - [ ] `curl -sL https://github.com/tstone-1/screenpick/releases/latest/download/latest.json | jq '.version, (.platforms | keys)'`
-      reports the new version and **both** `darwin-*` and `windows-x86_64` keys.
+      reports the new version and **both** `darwin-*` and **both**
+      `windows-x86_64` and `windows-aarch64` keys.
       A manifest with only one platform means the release matrix raced (see the
       `max-parallel: 1` comment in `release.yml`) — re-run the missing leg.
 - [ ] The `windows-x86_64` and `windows-x86_64-nsis` URLs both point at the
-      `-setup.exe`, and there is no `windows-x86_64-msi` key. An MSI update on
+      `_x64-setup.exe`, the `windows-aarch64` and `windows-aarch64-nsis` URLs at
+      the `_arm64-setup.exe`, and there is no `-msi` key. An MSI update on
       top of an NSIS install creates a second parallel installation instead of
       upgrading.
 - [ ] **The Windows leg's step *Verify the Windows build is signed* printed
-      `[OK]` for the installer, `screenpick.exe` and `uninstall.exe`**, and the
+      `[OK]` for the installer, `screenpick.exe` and `uninstall.exe`** on both
+      Windows legs, each printed its own machine type, and the
       downloaded installer reads as signed on a Windows computer:
       `(Get-AuthenticodeSignature .\ScreenPick_*_x64-setup.exe) | Format-List Status, SignerCertificate, TimeStamperCertificate`
       — `Valid`, subject `CN=Open Source Developer Timo Stein`, and a timestamp

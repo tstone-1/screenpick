@@ -27,7 +27,7 @@ Silicon; users bypass Gatekeeper / SmartScreen on first launch (steps in
 `README.md`). Channel is **GitHub Releases**, built by
 `.github/workflows/release.yml` on tag push. Remaining work below.
 
-- Validate `npm run tauri build` end-to-end on macOS (Apple Silicon and Intel) and Windows (x64).
+- Validate `npm run tauri build` end-to-end on macOS (Apple Silicon and Intel) and Windows (x64; ARM64 from 26.10.4).
 - App metadata, icons, version strings, bundle identifiers.
 - ~~Decide and document the distribution channel~~ — done: GitHub Releases, unsigned.
 - ~~Wire CI to build on tag pushes and upload artefacts~~ — done: `release.yml`.
@@ -67,8 +67,8 @@ SmartScreen can keep warning until the certificate has built reputation. There
 is no `.msi` any more, because the signing client cannot sign one. Procedure and
 rules: [BUILD.md](BUILD.md#windows-code-signing).
 
-- [ ] First release with a signed installer, `screenpick.exe` and uninstaller,
-      read back by the Windows leg.
+- [x] First release with a signed installer, `screenpick.exe` and uninstaller,
+      read back by the Windows leg: 26.10.3 (2026-10-09).
 
 **~~Concrete recurring cost of staying ad-hoc-signed — the macOS Screen Recording
 grant dies on every version bump.~~ Resolved by signing, from 26.7.6.** Kept here
@@ -171,7 +171,7 @@ Capturing a full webpage or chat history is the biggest feature gap between Scre
 - This is multi-week work. Build behind a feature flag and ship to opt-in users first.
 
 ### 10. Structured logging fields + IPC error codes (file sink shipped)
-The core of the 2026-05-30 review's [N4] is **done**: `eprintln!` was replaced
+The core of this item, from the 2026-05-30 review, is **done**: `eprintln!` was replaced
 with the `log` facade behind `tauri-plugin-log`, writing to a rotating file in
 the platform log dir (plus stderr), and a settings-load failure now surfaces a
 system notification instead of silently resetting to defaults. What remains is
@@ -250,8 +250,7 @@ Sentry or a self-hosted PostHog. Opt-in. Without this, every released version is
 
 Cross-cutting cleanups that do not justify their own roadmap entries but should be picked up when adjacent code is touched:
 
-- **Delete `screenSelectionEvents.ts`** (6-line module, one type + one string constant). Inline into `screen-picker/+page.svelte` and the `bindings.ts` consumer. (Review [N1].)
-- **Extract `usePickerSession({ onConfirm, onCancel })`** to dedupe the `selectionPending` + Escape + try/finally-around-IPC scaffolding across the four picker routes. The fourth copy proves the pattern is stable, and capture-with-delay should not become a fifth copy. (Review LLM code-smell scan.)
-- **Watch specta's `f64` TypeScript mapping for `WindowBounds`**. Rust already stores plain `f64`, but the generated bindings expose `number | null`, so `windowPickerCommands.ts`'s `StrictWindowBounds` narrowing is load-bearing until specta can emit non-null numeric fields here. (Review LLM code-smell scan.)
+- **Extract `usePickerSession({ onConfirm, onCancel })`** to dedupe the `selectionPending` + Escape + try/finally-around-IPC scaffolding across the four picker routes. The fourth copy proves the pattern is stable, and capture-with-delay should not become a fifth copy.
+- **Watch specta's `f64` TypeScript mapping for `WindowBounds`**. Rust already stores plain `f64`, but the generated bindings expose `number | null`, so `windowPickerCommands.ts`'s `StrictWindowBounds` narrowing is load-bearing until specta can emit non-null numeric fields here.
 - **Schema versioning beyond `version: u32`.** Settings now have a version field, but no migration framework. The first time we rename or change a field, add a `migrate(old, version) -> CaptureSettings` function rather than just bumping the number.
 - **Text annotation re-editing.** A placed text annotation's *content* cannot be edited after commit — only its style (color, font size). It needs its own draft/commit flow that re-enters the text input bound to the existing annotation. (Tracked from the `ToolProperties.svelte` text branch.)

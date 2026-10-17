@@ -100,7 +100,7 @@
   // action here rather than an `onmousedown` attribute, which Svelte's a11y
   // lint flags on a non-interactive element (pointer-event attributes are
   // exempt, plain mouse ones aren't) — same reason +page.svelte's Recent list
-  // uses it as an action too (N2 in the 2026-07 code review).
+  // uses it as an action too.
 
   function handleCanvasWheel(event: WheelEvent) {
     if (!event.ctrlKey || !editor.document) return;

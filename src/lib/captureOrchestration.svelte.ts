@@ -2,7 +2,7 @@
 // start/cancel wiring, the wedge-recovery watchdog, ingest of a finished shot,
 // the in-app fallback hotkeys, and the macOS Screen Recording (TCC) banner.
 //
-// W2 in the 2026-08 code review: the settings lifecycle, the shortcut editor
+// The settings lifecycle, the shortcut editor
 // and the OS autostart toggle used to live here too. They are now
 // settingsState.svelte.ts, composed as `settingsStore` below the way
 // `EditorState` composes `DocumentStore` — see that file's seam comment for

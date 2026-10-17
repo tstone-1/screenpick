@@ -11,6 +11,7 @@ import {
 // on every error state: a user whose install location isn't writable (running
 // from the DMG, or an /Applications owned by another account) can never be
 // rescued by retrying the same download.
+const FLUSH_BEFORE_INSTALL_TIMEOUT_MS = 5000;
 export const RELEASES_URL = "https://github.com/tstone-1/screenpick/releases/latest";
 
 // A background check that fails is not worth a banner — the user didn't ask,
@@ -184,7 +185,19 @@ export class UpdateState {
       // Windows the installer ends the process without the exit handshake, and
       // this is then the only save the last edits get.
       try {
-        await this.#flushBeforeInstall?.();
+        // Bounded: a flush that never settles must not block the install.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timeout = new Promise<void>((resolve) => {
+          timer = setTimeout(() => {
+            logWarn("Flushing pending work before installing the update timed out");
+            resolve();
+          }, FLUSH_BEFORE_INSTALL_TIMEOUT_MS);
+        });
+        try {
+          await Promise.race([this.#flushBeforeInstall?.(), timeout]);
+        } finally {
+          clearTimeout(timer);
+        }
       } catch (error) {
         // Same rule as the exit handshake: losing the pending write is bad, an
         // update that can never be installed is worse.

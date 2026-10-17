@@ -2,7 +2,7 @@
 // e.g. editorCommands.ts, for the "keep @tauri-apps/* imports out of state/
 // orchestration modules" convention this follows).
 //
-// W5 in the 2026-07 code review: the Rust side registers tauri-plugin-log
+// Why this exists: the Rust side registers tauri-plugin-log
 // with a file sink, but nothing on the webview side forwarded to it, so
 // `console.error`/`console.warn` detail — the only place frontend failures
 // were visible — never reached the on-disk diagnostic log the README tells

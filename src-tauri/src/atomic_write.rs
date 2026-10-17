@@ -13,9 +13,9 @@ use std::{
 /// so two concurrent writers — or a crash-and-retry — can't collide on the same
 /// tmp name), `sync_all` before rename (so a power loss can't leave a
 /// zero-length/half-written target on NTFS — the exact failure mode that used
-/// to be able to feed the corrupt-manifest recovery path below), then rename
-/// over the target — retrying once on Windows if the destination already
-/// exists (see `rename_replacing`) — and finally, on POSIX, an fsync of the
+/// to be able to feed the corrupt-manifest recovery path in `document_store`),
+/// then rename over the target (`fs::rename` replaces an existing destination
+/// on both Unix and Windows) and finally, on POSIX, an fsync of the
 /// containing directory (see `sync_parent_dir`). The tmp file is removed on any
 /// failure so a write that doesn't complete doesn't litter the directory
 /// forever. This is the single atomic-write primitive for the app: the document
@@ -48,7 +48,7 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
         let _ = fs::remove_file(&tmp);
         return Err(err.to_string());
     }
-    if let Err(err) = rename_replacing(&tmp, path) {
+    if let Err(err) = fs::rename(&tmp, path) {
         let _ = fs::remove_file(&tmp);
         return Err(err.to_string());
     }
@@ -89,29 +89,9 @@ fn sync_parent_dir(parent: &Path) {
 }
 
 /// No-op on Windows: a directory can't be opened as a file to be synced this
-/// way, and NTFS metadata ordering is not the POSIX rename problem above. The
-/// Windows-specific hazard `write_atomic` does have to handle — a rename onto
-/// an existing destination failing — is dealt with by `rename_replacing`.
+/// way, and NTFS metadata ordering is not the POSIX rename problem above.
 #[cfg(windows)]
 fn sync_parent_dir(_parent: &Path) {}
-
-/// Rename `tmp` onto `path`, retrying once on Windows when the destination
-/// already exists. Unix `rename` always replaces an existing destination, but
-/// on Windows it can fail with `AlreadyExists`; removing the destination and
-/// retrying resolves it. The narrow window this opens (destination briefly
-/// absent) is safe here because `tmp` has already been durably written by the
-/// caller, so the retry can only ever land the new content, never a
-/// half-written one.
-fn rename_replacing(tmp: &Path, path: &Path) -> std::io::Result<()> {
-    match fs::rename(tmp, path) {
-        Ok(()) => Ok(()),
-        Err(err) if cfg!(windows) && err.kind() == std::io::ErrorKind::AlreadyExists => {
-            fs::remove_file(path)?;
-            fs::rename(tmp, path)
-        }
-        Err(err) => Err(err),
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -132,11 +112,9 @@ mod tests {
         path
     }
 
-    // Also covers the merged Windows `AlreadyExists`-retry path in
-    // `rename_replacing`: whichever way the OS's `rename` handles overwriting
-    // an existing destination (direct replace, or the remove-and-retry
-    // fallback), the observable contract asserted here — second write wins,
-    // no leftover tmp file — must hold either way.
+    // `fs::rename` replaces an existing destination on Windows
+    // (MOVEFILE_REPLACE_EXISTING) as well as on Unix, so an overwrite needs no
+    // remove-and-retry: the second write wins and no tmp file is left.
     #[test]
     fn write_atomic_roundtrips_and_overwrites() {
         let dir = temp_dir_for("write-atomic-roundtrip");
@@ -156,6 +134,28 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
             .collect();
         assert!(leftovers.is_empty(), "expected no leftover tmp files");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    // The export and the CLI rely on this: the old file is replaced by a
+    // rename, never opened and truncated, so a write that fails halfway cannot
+    // damage it. A second hard link to the old file tells the two apart: a
+    // write through the file would change what the link reads, a rename only
+    // moves the name.
+    #[test]
+    fn an_overwrite_replaces_the_file_and_never_writes_into_it() {
+        let dir = temp_dir_for("write-atomic-replaces");
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("shot.png");
+        let other_link = dir.join("other-link.png");
+        fs::write(&target, b"old").unwrap();
+        fs::hard_link(&target, &other_link).unwrap();
+
+        write_atomic(&target, b"new").unwrap();
+
+        assert_eq!(fs::read(&target).unwrap(), b"new");
+        assert_eq!(fs::read(&other_link).unwrap(), b"old");
 
         fs::remove_dir_all(&dir).ok();
     }

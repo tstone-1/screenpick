@@ -47,14 +47,15 @@ afterEach(() => {
 });
 
 function pointerEvent(
-  type: "pointerdown" | "pointermove" | "pointerup",
-  init: { clientX: number; clientY: number; pointerId?: number }
+  type: "pointerdown" | "pointermove" | "pointerup" | "pointercancel",
+  init: { clientX: number; clientY: number; pointerId?: number; button?: number }
 ): Event {
   const event = new MouseEvent(type, {
     bubbles: true,
     cancelable: true,
     clientX: init.clientX,
-    clientY: init.clientY
+    clientY: init.clientY,
+    button: init.button ?? 0
   });
   Object.defineProperty(event, "pointerId", { value: init.pointerId ?? 1 });
   return event;
@@ -99,6 +100,36 @@ describe("region selector overlay", () => {
       height: 120,
       scaleFactor: window.devicePixelRatio
     });
+    expect(commandsMock.cancelRegionSelection).not.toHaveBeenCalled();
+  });
+
+  it("starts no selection on a non-primary button", async () => {
+    const { main, container } = mountOverlay();
+
+    main.dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10, button: 2 }));
+    main.dispatchEvent(pointerEvent("pointermove", { clientX: 200, clientY: 150 }));
+    main.dispatchEvent(pointerEvent("pointerup", { clientX: 200, clientY: 150 }));
+    await Promise.resolve();
+
+    expect(container.querySelector(".selection")).toBeNull();
+    expect(commandsMock.finishRegionSelection).not.toHaveBeenCalled();
+    expect(commandsMock.cancelRegionSelection).not.toHaveBeenCalled();
+  });
+
+  it("drops the drag on pointercancel without sending a selection", async () => {
+    const { main, container } = mountOverlay();
+
+    main.dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10 }));
+    main.dispatchEvent(pointerEvent("pointermove", { clientX: 200, clientY: 150 }));
+    await vi.waitFor(() => expect(container.querySelector(".selection")).not.toBeNull());
+
+    main.dispatchEvent(pointerEvent("pointercancel", { clientX: 200, clientY: 150 }));
+    await vi.waitFor(() => expect(container.querySelector(".selection")).toBeNull());
+
+    // A stray pointerup after the cancel must not commit the abandoned drag.
+    main.dispatchEvent(pointerEvent("pointerup", { clientX: 200, clientY: 150 }));
+    await Promise.resolve();
+    expect(commandsMock.finishRegionSelection).not.toHaveBeenCalled();
     expect(commandsMock.cancelRegionSelection).not.toHaveBeenCalled();
   });
 

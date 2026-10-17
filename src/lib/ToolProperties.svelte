@@ -627,7 +627,7 @@
 
   .image-meta div,
   .crop-panel > div:first-child,
-  .selection-panel > div {
+  .selection-panel > div:not(.order-actions) {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -805,9 +805,8 @@
   }
 
   .annotation-panel .swatches {
-    display: grid;
-    grid-auto-flow: column;
-    justify-content: start;
+    display: flex;
+    flex-wrap: wrap;
     gap: 8px;
   }
 

@@ -25,7 +25,7 @@ describe("version of record", () => {
     // package, used by npm's package-lock v2+ format). BUILD.md's "bump the
     // version in all four files" step only names the top-level field, so a
     // hand-edited bump (the historical failure mode this test exists for) can
-    // desync exactly the field this checked (N5 in the 2026-07 code review) —
+    // desync exactly the field this checked —
     // `npm version`/`npm install` keep both in sync automatically, but a
     // manual edit doesn't.
     const lockRootPackageVersion = lockJson.packages?.[""]?.version as string | undefined;

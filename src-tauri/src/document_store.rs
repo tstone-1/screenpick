@@ -581,7 +581,7 @@ mod tests {
         values.iter().map(|value| value.to_string()).collect()
     }
 
-    // N2 in the 2026-08 code review: a create_document that failed between
+    // A create_document that failed between
     // writing its folder and appending its manifest entry left the folder
     // behind forever — list_documents prunes stale files of known entries and
     // never looks at an unknown folder.

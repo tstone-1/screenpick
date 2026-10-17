@@ -5,8 +5,8 @@ import type { PenStroke } from "./annotations";
 import { serializeAnnotations } from "./annotations";
 import type { RecentCapture } from "./documentStore.svelte";
 
-// W4 in the 2026-07 code review: zero tests existed for the disk-deleting
-// retention/eviction logic. Mocked at the same IPC-adapter boundary as
+// Tests for the disk-deleting retention/eviction logic. Mocked at the same
+// IPC-adapter boundary as
 // editor.svelte.test.ts (`./bindings` for the pure command pass-throughs,
 // `./editorCommands` for the Uint8Array-shim wrapper), so these exercise the
 // real DocumentStore/enforceRetention/isDocumentDirty logic end to end.
@@ -199,7 +199,7 @@ describe("DocumentStore.loadPersistedDocuments", () => {
   });
 });
 
-// W1 in the 2026-08 code review: persists for one document overlapped freely
+// Persists for one document overlapped freely
 // (debounce timer, exit flush, crop/cut's re-base write, the persist-first rule
 // behind copy-path/reveal), each carrying the layer it was called with — so an
 // older call's save_document could land after a newer one's and leave the stale
@@ -279,7 +279,7 @@ describe("DocumentStore.persistDocument", () => {
   });
 });
 
-// W1 in the 2026-08 code review. Crop/cut persist through two IPC calls:
+// Crop/cut persist through two IPC calls:
 // replace_document_base commits the new base raster to the manifest, then
 // save_document writes the transformed annotation layer. A crash, a full disk
 // or a forced quit between them leaves the cropped base beside the pre-crop
@@ -484,5 +484,38 @@ describe("Recent-strip thumbnail", () => {
     const restored = store.recentFromRecord(savedRecord("doc-1", 4242));
 
     expect(recentThumbnailUrl(restored)).toBe("asset://doc-1-current.png?v=4242");
+  });
+});
+
+describe("DocumentStore.syncRecentImage", () => {
+  it("swaps the image but keeps the strip entry's saved-state fields", () => {
+    const store = new DocumentStore();
+    // The strip entry is the newer one: dirty, with a re-rendered current.png.
+    const entry = capture({
+      path: "after-crop.png",
+      documentId: "doc-1",
+      currentPath: "doc-1-current-new.png",
+      dirty: true,
+      thumbnailRevision: 9
+    });
+    store.recentCaptures = [entry];
+    // An undo snapshot restored the pre-crop capture with the old saved state.
+    const restored = capture({
+      path: "before-crop.png",
+      documentId: "doc-1",
+      currentPath: "doc-1-current-old.png",
+      dirty: false,
+      thumbnailRevision: 1
+    });
+
+    store.syncRecentImage(restored);
+
+    expect(store.recentCaptures).toHaveLength(1);
+    expect(store.recentCaptures[0]).toMatchObject({
+      path: "before-crop.png",
+      currentPath: "doc-1-current-new.png",
+      dirty: true,
+      thumbnailRevision: 9
+    });
   });
 });

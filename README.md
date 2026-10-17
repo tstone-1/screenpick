@@ -33,7 +33,11 @@ Download the latest installer from the
 - **macOS:** `ScreenPick_<version>_universal.dmg` (one file, runs on Apple
   Silicon and Intel)
 - **Windows:** `ScreenPick_<version>_x64-setup.exe` (installs for your user
-  account, no administrator rights; code-signed, see below)
+  account, no administrator rights; code-signed, see below). On an ARM PC
+  (Snapdragon and similar) take `ScreenPick_<version>_arm64-setup.exe`
+  instead. The x64 build also runs there, emulated. An installed copy keeps
+  updating to the architecture it was installed with; to switch, install the
+  other `-setup.exe`.
 
 The `.sig`, `.tar.gz` and `latest.json` files beside them belong to the built-in
 updater; you do not need them. There is no `.msi` any more: if you installed
@@ -104,8 +108,9 @@ update payload itself, on both platforms.
 - **Turn it off:** Settings → *Check for updates at startup*. Manual checks
   still work. The automatic check contacts GitHub, which is the only network
   request ScreenPick makes.
-- **Windows portable `.exe`:** cannot self-update — download a new one, or use
-  the installer.
+- **A self-built `screenpick.exe`** (from `src-tauri/target/release`, outside
+  the installer) cannot self-update: build or download a new one, or use the
+  installer.
 
 <details>
 <summary>Coming from a version <b>before 26.7.6</b>?</summary>

@@ -35,7 +35,7 @@
   }
 
   function beginSelection(event: PointerEvent) {
-    if (locked) return;
+    if (locked || event.button !== 0) return;
     const point = pointFromEvent(event);
     start = point;
     current = point;
@@ -46,6 +46,17 @@
   function updateSelection(event: PointerEvent) {
     if (!dragging || locked) return;
     current = pointFromEvent(event);
+  }
+
+  // The browser took the gesture away (touch scroll, pen leaving range, focus
+  // loss): drop the drag without committing or cancelling the session, so the
+  // overlay stays usable and nothing half-drawn is left on screen.
+  function abortSelection(event: PointerEvent) {
+    if (!dragging) return;
+    dragging = false;
+    start = null;
+    current = null;
+    (event.currentTarget as HTMLElement).releasePointerCapture?.(event.pointerId);
   }
 
   async function endSelection(event: PointerEvent) {
@@ -107,6 +118,7 @@
   onpointerdown={beginSelection}
   onpointermove={updateSelection}
   onpointerup={endSelection}
+  onpointercancel={abortSelection}
 >
   {#if selection && selection.width > 0 && selection.height > 0}
     <div

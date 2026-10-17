@@ -6,8 +6,7 @@
 // falling back to the un-annotated base raster otherwise — via
 // `currentArtifactPath` below.
 //
-// Split out of editor.svelte.ts (W5 in the 2026-07 code review) alongside
-// documentStore.svelte.ts. Deliberately plain functions, not a class: this
+// Split out of editor.svelte.ts alongside documentStore.svelte.ts. Deliberately plain functions, not a class: this
 // module holds no `$state` of its own. Every function that needs live editor
 // state (the open document's identity, its annotation layer, whether a
 // document needs persisting first) takes it as a parameter instead — that's
@@ -190,8 +189,7 @@ export async function exportRecentCaptures(
 // current before it's revealed/copied. Falls back to the base path for an
 // unpersisted capture. `isOpenDocument` / `persistOpenDocument` are supplied
 // by the caller (EditorState), which owns the "is this the open document"
-// check and the actual persist call. Extracted (N2 in the 2026-07 code
-// review) so the three callers below can't drift on this identical prelude.
+// check and the actual persist call. Extracted so the three callers below can't drift on this identical prelude.
 async function currentArtifactPath(
   capture: RecentCapture,
   isOpenDocument: boolean,

@@ -696,6 +696,29 @@ describe("a gesture that outlasts the save debounce", () => {
     expect(lastSavedLayer("switch")).toContain('"x":50');
   });
 
+  async function sliderEditThenSwitch(path: string, id: string, endBeforeSwitch: boolean) {
+    const editor = new EditorState();
+    await create(editor, path, id);
+    placeShape(editor);
+    await editor.flushPendingSave();
+    editor.beginSelectionEdit();
+    editor.updateSelectedAnnotation({ width: 7 }, { commitHistory: false });
+    await vi.advanceTimersByTimeAsync(600);
+    editor.updateSelectedAnnotation({ width: 15 }, { commitHistory: false });
+    if (endBeforeSwitch) editor.endSelectionEdit();
+    editor.openCapture({ ...capture("other.png"), documentId: "other" });
+    await editor.flushPendingSave();
+    return lastSavedLayer(id);
+  }
+
+  it("control: a slider edit ended before another capture opens saves its final value", async () => {
+    expect(await sliderEditThenSwitch("sliderctl.png", "sliderctl", true)).toContain('"width":15');
+  });
+
+  it("a slider edit still held when another capture opens saves its final value", async () => {
+    expect(await sliderEditThenSwitch("slider.png", "slider", false)).toContain('"width":15');
+  });
+
   // A capture hotkey can switch documents while the pointer is still down. No
   // gesture end has run, so the flush before the switch must itself see that
   // the drag moved the annotation after the debounce fired.

@@ -64,7 +64,7 @@
   }
 
   async function selectWindow(event: PointerEvent) {
-    if (locked) return;
+    if (locked || event.button !== 0) return;
     selectionPending = true;
     highlight = null;
     try {

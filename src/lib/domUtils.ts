@@ -1,8 +1,8 @@
 // Small shared DOM predicates used by multiple UI entry points that would
 // otherwise each keep their own copy — and risk drifting, silently, the way
 // EditorStage.svelte's `targetIsEditable` and +page.svelte's
-// `eventTargetIsEditable` did before this module existed (N2 in the 2026-07
-// code review: same intent, two slightly different implementations).
+// `eventTargetIsEditable` did before this module existed (same intent, two
+// slightly different implementations).
 
 // Input types that take typed text. Every other input (range, checkbox, radio,
 // color, button, file, ...) keeps focus after a click or drag but consumes no

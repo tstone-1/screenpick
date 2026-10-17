@@ -6,13 +6,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [CalVer](https://calver.org/) `YY.M.MICRO` versioning
 (see [BUILD.md](BUILD.md#version-management)).
 
-## [26.10.4] - Unreleased
+## [26.10.4] - 2026-10-17
+
+### Added
+
+- A native Windows ARM64 build, `ScreenPick_<version>_arm64-setup.exe`, signed
+  like the x64 one and updated through its own entry in the updater manifest.
+  ARM PCs that installed the x64 build keep running it emulated and keep
+  updating it; install the `_arm64-setup.exe` to switch.
 
 ### Changed
 
 - The *Copy* button confirms a successful copy: for about a second and a half
   it shows a check mark and *Copied* in the accent colour. A failed copy is
   reported in the status line and the button does not confirm it.
+- Installing an update no longer waits indefinitely for pending edits to be
+  saved: after five seconds it goes ahead and logs that the save did not
+  finish.
+- The release workflow pins GitHub's own actions to commit hashes, like the
+  third-party ones, and updates `rustls` to 0.23.46 for four advisories.
+
+### Fixed
+
+- A slider or colour edit still being dragged when a new capture opened was
+  saved with its value from half a second into the edit, not the final one.
+- Exporting over an existing file writes a temporary file and renames it, so a
+  failed export no longer destroys the image it was replacing. The command
+  line's `--output` does the same and now also flushes the file to disk
+  before the rename.
+- A cut that could not be pasted back, because the document already holds
+  large pasted images, is refused up front. It used to remove the pixels and
+  then refuse the paste.
+- The four stacking-order buttons sit in their grid, the display you just
+  picked in the screen picker is no longer dimmed, and the recent-colour
+  swatches wrap instead of running off the panel.
+- The region and window selectors react to the left mouse button only, and a
+  region drag interrupted by the system ends cleanly.
 
 ## [26.10.3] - 2026-10-09
 

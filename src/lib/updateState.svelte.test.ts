@@ -210,6 +210,25 @@ describe("UpdateState.installAndRestart", () => {
     );
   });
 
+  it("installs after a timeout when the flush never settles", async () => {
+    vi.useFakeTimers();
+    const install = vi.fn<PendingUpdate["install"]>().mockResolvedValue(undefined);
+    checkMock.mockResolvedValue(pending("26.8.0", { install }));
+    const state = new UpdateState();
+    state.flushBeforeInstall(() => new Promise<void>(() => {}));
+    await state.check("manual");
+
+    const done = state.installAndRestart();
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(install).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1500);
+    await done;
+
+    expect(install).toHaveBeenCalledTimes(1);
+    expect(relaunchMock).toHaveBeenCalledTimes(1);
+    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("timed out"));
+  });
+
   it("offers a manual download when the download fails", async () => {
     const download = vi.fn().mockRejectedValue(new Error("connection reset"));
     const install = vi.fn();

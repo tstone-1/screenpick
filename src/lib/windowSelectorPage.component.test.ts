@@ -45,13 +45,14 @@ afterEach(() => {
 
 function pointerEvent(
   type: "pointerdown" | "pointermove",
-  init: { clientX: number; clientY: number; pointerId?: number }
+  init: { clientX: number; clientY: number; pointerId?: number; button?: number }
 ): Event {
   const event = new MouseEvent(type, {
     bubbles: true,
     cancelable: true,
     clientX: init.clientX,
-    clientY: init.clientY
+    clientY: init.clientY,
+    button: init.button ?? 0
   });
   Object.defineProperty(event, "pointerId", { value: init.pointerId ?? 1 });
   return event;
@@ -103,6 +104,15 @@ describe("window selector overlay", () => {
 
     expect(commandsMock.finishWindowPointSelection).toHaveBeenCalledWith(320, 240);
     expect(commandsMock.cancelWindowSelection).not.toHaveBeenCalled();
+  });
+
+  it("ignores a non-primary button press", async () => {
+    const { main } = mountOverlay();
+
+    main.dispatchEvent(pointerEvent("pointerdown", { clientX: 320, clientY: 240, button: 2 }));
+    await Promise.resolve();
+
+    expect(commandsMock.finishWindowPointSelection).not.toHaveBeenCalled();
   });
 
   it("blocks a second confirm while the first is still pending", async () => {

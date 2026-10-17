@@ -85,13 +85,27 @@ describe("windows signing configuration", () => {
     expect(new Set(revisions).size).toBe(1);
   });
 
+  it("pins every action in the workflows that get the signing login to a full commit SHA", () => {
+    for (const workflow of workflows) {
+      const uses = read(workflow)
+        .split(/\r?\n/)
+        .filter((line) => /^\s*(- )?uses:/.test(line))
+        .map((line) => line.replace(/^\s*(- )?uses:\s*/, "").trim());
+      expect(uses.length).toBeGreaterThan(0);
+      for (const ref of uses) {
+        if (ref.startsWith("./")) continue;
+        expect(ref, `${workflow}: ${ref}`).toMatch(/^[\w.-]+\/[\w./-]+@[0-9a-f]{40} # \S+/);
+      }
+    }
+  });
+
   it("keeps the built signing client in a cache that only its own commit can fill", () => {
     for (const workflow of workflows) {
       const text = read(workflow);
       // At job level, six spaces in: the `env` context of a cache key does not
       // see a variable that one step sets for itself.
       expect(text).toMatch(/^ {6}SSIGN_REV: [0-9a-f]{40}$/m);
-      expect(text).toContain("uses: actions/cache@v6\n");
+      expect(text).toMatch(/uses: actions\/cache@[0-9a-f]{40} # v6\n/);
       expect(text).toContain("path: ${{ runner.temp }}\\ssign-client\n");
       expect(text).toContain("key: ssign-${{ runner.os }}-${{ runner.arch }}-${{ env.SSIGN_REV }}\n");
       // A fallback key would restore a client built from another commit.
@@ -227,10 +241,39 @@ describe("release workflow gates", () => {
   // written it, and the second upload then drops the first platform. Nothing
   // fails when that happens, so the setting and the check for its effect are
   // both pinned here.
-  it("builds the two platforms one after the other", () => {
+  it("builds the legs one after the other", () => {
     const job = jobs(release).get("release") ?? "";
     expect(job).toMatch(/^ {6}max-parallel: 1$/m);
     expect(job.match(/max-parallel:/g)).toHaveLength(1);
+  });
+
+  // A `--target` that does not take effect builds x64 and is published under
+  // the ARM64 key, with every step green. So each Windows leg names the
+  // machine type its screenpick.exe must have, and the verify step reads it.
+  it("checks that each Windows leg built the architecture it names", () => {
+    const job = jobs(release).get("release") ?? "";
+    const legs = job.split(/\n(?= {10}- platform: )/).filter((leg) => leg.includes("signs-windows: true"));
+    const found = legs.map((leg) => ({
+      args: /^ {12}args: "(.*)"$/m.exec(leg)?.[1],
+      bundle: /^ {12}bundle: (\S+)$/m.exec(leg)?.[1],
+      machine: /^ {12}machine: "(.+)"$/m.exec(leg)?.[1]
+    }));
+    expect(found).toEqual([
+      { args: "", bundle: "src-tauri/target/release/bundle", machine: "0x8664" },
+      {
+        args: "--target aarch64-pc-windows-msvc",
+        bundle: "src-tauri/target/aarch64-pc-windows-msvc/release/bundle",
+        machine: "0xAA64"
+      }
+    ]);
+
+    const verify = step(job, "Verify the Windows build is signed");
+    expect(verify).toMatch(/^ {10}BUNDLE: \$\{\{ matrix\.bundle \}\}$/m);
+    expect(verify).toMatch(/^ {10}MACHINE: \$\{\{ matrix\.machine \}\}$/m);
+    expect(verify).toContain('Get-ChildItem "$env:BUNDLE/nsis"');
+    expect(verify).toContain("if ($machine -ne $env:MACHINE)");
+    // No leftover path of the x64 leg that the ARM64 leg would not have.
+    expect(verify).not.toContain("src-tauri/target/release");
   });
 
   it("fails the release when the updater manifest lacks a platform", () => {
@@ -240,7 +283,11 @@ describe("release workflow gates", () => {
     // skipped one is skipped too unless it says otherwise.
     expect(job).toMatch(/^ {4}if: \$\{\{ !cancelled\(\) && needs\.release\.result == 'success' \}\}$/m);
     const check = step(job, "Check that latest.json names every platform");
-    expect(check).toMatch(/^ {10}WANTED: darwin-aarch64 darwin-x86_64 windows-x86_64$/m);
+    expect(check).toMatch(/^ {10}WANTED: darwin-aarch64 darwin-x86_64 windows-x86_64 windows-aarch64$/m);
+    // Each Windows key must point at its own architecture's installer: an
+    // installed copy follows its key, so a swap would change its architecture.
+    expect(check).toMatch(/^ {10}WINDOWS: windows-x86_64=_x64-setup\.exe windows-aarch64=_arm64-setup\.exe$/m);
+    expect(check).toContain("for pair in $WINDOWS; do");
     expect(check).toMatch(/^ {10}TAG_NAME: \$\{\{ github\.ref_name \}\}$/m);
     expect(check).toContain('gh release download "$TAG_NAME"');
     expect(check).toContain("for key in $WANTED; do");

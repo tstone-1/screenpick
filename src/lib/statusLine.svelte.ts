@@ -1,6 +1,6 @@
 // The app's one status line — the message in the bottom status bar.
 //
-// Split out of captureOrchestration.svelte.ts (W3 in the 2026-08 code review).
+// Split out of captureOrchestration.svelte.ts.
 // Both halves of the app report here: the capture pipeline (mode started, shot
 // ingested, capture failed) and the editor surfaces (crop/cut applied, color
 // copied, export failed). Neither owns the other, so the message belongs to

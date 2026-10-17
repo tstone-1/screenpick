@@ -90,7 +90,10 @@ pub(crate) fn save_png_bytes(
     // native save dialog and resolves inside their own profile dirs, so abusing
     // it needs write access the attacker would already have. Revisit with
     // create_new / O_NOFOLLOW semantics if exports ever take a non-dialog path.
-    fs::write(&dest_path, bytes).map_err(|err| {
+    // The write goes through a temp file and a rename, so a failed write leaves
+    // an existing image at the destination as it was; the rename replaces the
+    // final path component itself, so the swap window above is unchanged.
+    crate::atomic_write::write_atomic(Path::new(&dest_path), &bytes).map_err(|err| {
         log::error!("failed to write export to {dest_path}: {err}");
         "Failed to write export file.".to_string()
     })
@@ -261,8 +264,7 @@ fn reveal_path_in_file_manager(path: &Path) -> Result<(), String> {
 
 // Thin &Path adapter over the shared `path_utils::strip_verbatim_prefix`
 // (settings.rs takes &str directly; Explorer's /select switch needs a &Path
-// here) — one implementation, tested once in `path_utils::tests` (N2 in the
-// code review: this used to be a second, undertested copy).
+// here) — one implementation, tested once in `path_utils::tests`.
 #[cfg(target_os = "windows")]
 fn strip_verbatim_prefix_path(path: &Path) -> String {
     crate::path_utils::strip_verbatim_prefix(&path.to_string_lossy())

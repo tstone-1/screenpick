@@ -218,8 +218,8 @@ export const CUT_SEAM_PERIOD_DEFAULT = 16;
 export const CUT_SEAM_WIDTH_DEFAULT = 2;
 export const CUT_SEAM_COLOR_DEFAULT = "#ffffff";
 // CUT_SEAM_CASING_COLOR / CUT_SEAM_CASING_EXTRA_WIDTH moved to annotations.ts
-// (N3 in the 2026-07 code review — they were the one thing making
-// annotationRendering.ts import back from this module). Import them from
+// (they were the one thing making annotationRendering.ts import back from
+// this module). Import them from
 // "./annotations" directly.
 
 export type Tool =
@@ -255,7 +255,7 @@ export interface ToolHandlers {
   onPointerCancel?(): void;
 }
 
-// --- Module split (W5 in the 2026-07 code review) ---
+// --- Module split ---
 //
 // `EditorState` used to own eight distinct responsibilities in one ~2450-line
 // class. Two of them are now separate modules that `EditorState` composes:
@@ -667,9 +667,14 @@ export class EditorState {
     // A drag or erase still in progress has changed the annotations since its
     // one history entry, possibly after the debounce already fired, so it
     // counts as pending work even with no timer armed (a capture hotkey can
-    // switch documents mid-gesture).
+    // switch documents mid-gesture). So does a slider or colour edit still
+    // held: it records history once at its start, later live updates arm
+    // nothing, and the reset that follows the switch clears the flag, so the
+    // change/blur that would have saved the final value never does.
     const gestureMoved =
-      this.selectionDrag?.historyRecorded === true || this.eraserDrag?.historyRecorded === true;
+      this.selectionDrag?.historyRecorded === true ||
+      this.eraserDrag?.historyRecorded === true ||
+      this.#selectionEditDirty;
     const needsSave =
       this.#saveTimer || gestureMoved || (pendingCreate && annotations.length > 0);
     if (this.#saveTimer) clearTimeout(this.#saveTimer);
@@ -1025,8 +1030,10 @@ export class EditorState {
       // Embedded pixels count toward the document store's 8 MiB JSON limit.
       // That limits pasting into the screenshot (pasteRegion refuses there),
       // not copying out, so the check comes after the clipboard write. A cut
-      // would remove pixels that could then not be pasted back.
-      if (cut && dataUrl.length > 7 * 1024 * 1024) {
+      // would remove pixels that could then not be pasted back, so it asks the
+      // same whole-document question pasteRegion does (#imageFits), not just
+      // whether the selection alone is small.
+      if (cut && !this.#imageFits({ kind: "image", id: this.#nextAnnotationId, rect, dataUrl })) {
         return "Selection copied; it is too large to cut. Select a smaller area.";
       }
       if (cut) {
@@ -2071,6 +2078,14 @@ export class EditorState {
     });
   }
 
+  // The crop/cut IPC already wrote its output file; a result dropped by the
+  // generation check leaves it in the save folder with no other trace, and
+  // files are never deleted here, so say where it is.
+  #discardStaleResult(path: string): null {
+    logWarn(`crop result discarded (document changed meanwhile): ${path}`);
+    return null;
+  }
+
   async applyCrop(): Promise<string | null> {
     if (!this.document || !this.cropRect || this.cropPending || this.cutPending) return null;
     const generation = this.#documentGeneration;
@@ -2093,7 +2108,7 @@ export class EditorState {
       if (result.status === "error") {
         return result.error || "Crop failed.";
       }
-      if (generation !== this.#documentGeneration) return null;
+      if (generation !== this.#documentGeneration) return this.#discardStaleResult(result.data.path);
       const survivors = cropAnnotations(
         this.annotations,
         cropX,
@@ -2107,7 +2122,9 @@ export class EditorState {
       // capture built before the create lands can never be saved again.
       await this.#settlePendingCreate(beforeCrop.document?.capture);
       // Re-checked after the awaits: the open document can be closed mid-crop.
-      if (!this.document || generation !== this.#documentGeneration) return null;
+      if (!this.document || generation !== this.#documentGeneration) {
+        return this.#discardStaleResult(result.data.path);
+      }
       const capture = rebasedCapture(this.document.capture, result.data);
       this.historyPast = [...this.historyPast, beforeCrop].slice(-HISTORY_LIMIT);
       this.historyFuture = [];
@@ -2276,7 +2293,7 @@ export class EditorState {
       if (result.status === "error") {
         return result.error || "Cut failed.";
       }
-      if (generation !== this.#documentGeneration) return null;
+      if (generation !== this.#documentGeneration) return this.#discardStaleResult(result.data.path);
       const survivors = cutoutAnnotations(
         this.annotations,
         axis,
@@ -2301,7 +2318,9 @@ export class EditorState {
       // would build a capture with no documentId at a path the arriving record
       // cannot match, and nothing would ever be written for it again.
       await this.#settlePendingCreate(beforeCut.document?.capture);
-      if (!this.document || generation !== this.#documentGeneration) return null;
+      if (!this.document || generation !== this.#documentGeneration) {
+        return this.#discardStaleResult(result.data.path);
+      }
       const capture = rebasedCapture(this.document.capture, result.data);
       this.historyPast = [...this.historyPast, beforeCut].slice(-HISTORY_LIMIT);
       this.historyFuture = [];

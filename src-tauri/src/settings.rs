@@ -463,7 +463,13 @@ pub(crate) fn update_settings(
         &home,
     )?;
     let updated = state.update(settings)?;
-    extend_asset_scope_for_save_directory(&app, updated.save_directory.as_deref());
+    // The stored directory comes back from `save_directory_for_update` without
+    // a check when it is unchanged, so validate it again before it widens the
+    // asset scope, exactly as startup does.
+    let scope_directory = validate_save_directory_path(updated.save_directory.as_deref(), &home)
+        .ok()
+        .flatten();
+    extend_asset_scope_for_save_directory(&app, scope_directory.as_deref());
     crate::shortcuts::re_register_shortcuts(&app, &updated)?;
     Ok(updated)
 }
@@ -1028,5 +1034,5 @@ mod tests {
     }
 
     // strip_verbatim_prefix itself is tested once, in `path_utils::tests`
-    // (this module used to carry its own copy — see N2 in the code review).
+    // (this module used to carry its own copy).
 }

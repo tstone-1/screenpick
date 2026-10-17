@@ -50,7 +50,7 @@ jobs:
       SSIGN_REV: 5fd4daf22155b19b645aef3dd467f3c4c9e440b3
       SIGNER: Open Source Developer Timo Stein
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
 
@@ -64,7 +64,7 @@ jobs:
       # here. BUILD.md, "The cached signing client", has the rules.
       - name: Restore ssign
         id: ssign
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ runner.temp }}\ssign-client
           key: ssign-${{ runner.os }}-${{ runner.arch }}-${{ env.SSIGN_REV }}

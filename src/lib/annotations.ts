@@ -113,8 +113,7 @@ export type CutSeamAnnotation = {
 // export) so the seam reads against light AND dark screenshot backgrounds.
 // Lives here — not in editor.svelte.ts — so annotationRendering.ts (which
 // needs both for the canvas export) doesn't have to import back from the
-// editor state module: that was the one module cycle in the codebase (N3 in
-// the 2026-07 code review), and it only existed because these two constants
+// editor state module: that was the one module cycle in the codebase, and it only existed because these two constants
 // lived on the wrong side of it. Both prior importers (annotationRendering.ts,
 // EditorStage.svelte) now import from here instead.
 export const CUT_SEAM_CASING_COLOR = "#20242a";

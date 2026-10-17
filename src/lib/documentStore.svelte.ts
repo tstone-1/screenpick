@@ -3,8 +3,7 @@
 // disk-restored ("seeded") annotation layers, retention/eviction of clean
 // documents, and persistence orchestration (the actual document-record I/O).
 //
-// Split out of editor.svelte.ts (W5 in the 2026-07 code review) alongside
-// editorExport.ts. `EditorState` composes a `DocumentStore` instance and
+// Split out of editor.svelte.ts alongside editorExport.ts. `EditorState` composes a `DocumentStore` instance and
 // keeps its own public surface (`editor.recentCaptures`, `editor.document`,
 // `editor.openCapture(...)`, ...) unchanged via thin delegating
 // getters/methods — see the "seam" comment in editor.svelte.ts for how the
@@ -58,8 +57,7 @@ export type RecentCapture = CaptureResult & {
 // View state (zoom/pan/mode) wrapping the capture currently open in the
 // editor — distinct from a persisted `DocumentRecord` (Rust, documents.rs),
 // which is the on-disk annotation-document row this view may or may not be
-// backed by. Named `EditorView`, not `EditorDocument` (N4 in the 2026-07 code
-// review): "document" was overloaded three ways in this codebase (this type,
+// backed by. Named `EditorView`, not `EditorDocument`: "document" was overloaded three ways in this codebase (this type,
 // the Rust `DocumentRecord`, and the DOM global `document`) and the
 // EditorState.document PROPERTY keeps that name (renaming the field is a
 // bigger, separate blast radius) — only the type name changes here.
@@ -432,7 +430,7 @@ export class DocumentStore {
   //
   // Fire-and-forget from the caller's perspective (retention evicts a whole
   // batch synchronously; close-document doesn't block on disk I/O either), but
-  // the result is still checked (N1 in the 2026-07 code review): an ignored
+  // the result is still checked: an ignored
   // failure here silently resurrects a discarded document at next launch,
   // since nothing else would ever retry or even notice the delete didn't
   // happen.
@@ -570,7 +568,7 @@ export class DocumentStore {
         this.seedAnnotations(record.id, annotations);
         return this.recentFromRecord(record);
       });
-      // Merge, don't replace (N3 in the 2026-07 code review): a hotkey capture
+      // Merge, don't replace: a hotkey capture
       // that completes while this load is still in flight (e.g. `listDocuments`
       // is slow, or create_document raced ahead of it) has already pushed an
       // in-memory entry onto `recentCaptures` — the disk snapshot predates it,

@@ -8,4 +8,15 @@
 # before release, not silently absorbed by this file.
 
 [advisories]
-ignore = []
+# zip 4.6.1, through tauri-plugin-updater only (2.13.2 and 2.14.0 both pin it;
+# the fix is zip >= 9). All three are in `ZipArchive::extract`. The updater
+# extracts a zip only on Windows, only for a zip payload, and only after the
+# payload passed the minisign check against `plugins.updater.pubkey`; the
+# release's manifest job refuses any Windows entry that is not a setup.exe.
+# Reaching the extract therefore needs a payload signed with this project's
+# own key. Triaged 2026-10-17. Remove these when the updater moves to zip >= 9.
+ignore = [
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
+]

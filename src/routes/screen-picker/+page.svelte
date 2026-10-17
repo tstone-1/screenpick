@@ -248,14 +248,15 @@
     }
   }
 
-  section > button.pending {
-    opacity: 1;
-    cursor: wait;
-  }
-
   section > button:disabled {
     cursor: wait;
     opacity: 0.68;
+  }
+
+  /* The pending button is always disabled too; this needs the :disabled
+     specificity to beat the dimming rule above. */
+  section > button.pending:disabled {
+    opacity: 1;
   }
 
   .screen-icon {

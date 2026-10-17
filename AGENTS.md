@@ -207,6 +207,16 @@ ScreenPick is an open-source cross-platform screenshot, annotation, and screen u
   rehearsal on `main` once, and never add `restore-keys` to that cache. Rules,
   rehearsal and the fallback by hand:
   [BUILD.md](BUILD.md#windows-code-signing).
+- **Windows ships two builds, x64 and ARM64, and an installed copy never
+  changes between them.** The updater asks for the key of the architecture it
+  was compiled for (`windows-x86_64` or `windows-aarch64`), so an x64 copy on
+  an ARM PC stays x64 under emulation. The ARM64 leg is cross-compiled on the
+  x64 runner (`--target aarch64-pc-windows-msvc`); `ring` needs `clang` for
+  that target. A `--target` that silently did not apply would publish an x64
+  binary under the ARM64 key, which is why the release reads the PE machine
+  type of the installed `screenpick.exe`, and the manifest job checks that
+  each key points at its own architecture's installer. No test runs natively
+  on ARM64, and the ARM64 leg has not yet run: the first rc tag is its test.
 - **The release matrix must stay `max-parallel: 1`.** `tauri-action` builds
   `latest.json` by read-modify-write against the release asset, so parallel legs
   can clobber each other's platform entries and produce a manifest that updates

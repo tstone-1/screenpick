@@ -93,10 +93,10 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Install Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24
           cache: npm
@@ -138,7 +138,7 @@ jobs:
     name: Rust dependency audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
 
@@ -173,8 +173,8 @@ jobs:
       # merge this platform's entries, delete it, re-upload. Two legs running at
       # once can both read the pre-merge state, and the second upload silently
       # drops the first platform's entry — producing a release that only updates
-      # macOS *or* Windows, with nothing failing to indicate it. Serializing the
-      # two builds costs wall-clock and nothing else.
+      # some platforms, with nothing failing to indicate it. Serializing the
+      # builds costs wall-clock and nothing else.
       max-parallel: 1
       matrix:
         include:
@@ -184,25 +184,43 @@ jobs:
             args: "--target universal-apple-darwin"
             rust-targets: "aarch64-apple-darwin,x86_64-apple-darwin"
             signs-windows: false
+          # `bundle` is where the leg's installer lands, and `machine` the PE
+          # machine type its screenpick.exe must have (0x8664 x64, 0xAA64
+          # ARM64): a `--target` that did not take effect would otherwise ship
+          # an x64 build under the ARM64 updater key, and nothing would fail.
           - platform: windows-2025
             label: Windows (x64)
             args: ""
             rust-targets: ""
             signs-windows: true
+            bundle: src-tauri/target/release/bundle
+            machine: "0x8664"
+          # Cross-compiled on the x64 runner: the image has the MSVC ARM64
+          # tools and the clang that `ring` needs for this target. Tauri's
+          # NSIS installer does not refuse another architecture, so the
+          # signature check below still installs it here and reads every file.
+          - platform: windows-2025
+            label: Windows (ARM64)
+            args: "--target aarch64-pc-windows-msvc"
+            rust-targets: "aarch64-pc-windows-msvc"
+            signs-windows: true
+            bundle: src-tauri/target/aarch64-pc-windows-msvc/release/bundle
+            machine: "0xAA64"
 
     runs-on: ${{ matrix.platform }}
     # The Certum login is in this environment and in no other place, and the
-    # environment accepts the main branch and `v*` tags only. Both legs name it
-    # because a job has one environment; only the Windows leg reads its secrets.
+    # environment accepts the main branch and `v*` tags only. Every leg names it
+    # because a job has one environment; only the Windows legs read its secrets.
     environment: signing
     # One SimplySign code is good for one login. A second job logging in
     # inside the same 30 seconds fails, and repeated failed logins can lock the
     # account, so everything that signs shares this group and nothing in it is
     # cancelled. `sign-rehearsal.yml` is the other member. The group holds for
     # this repository only: see BUILD.md for the other projects that sign with
-    # the same account.
+    # the same account. The two Windows legs log in once each, a whole build
+    # apart, because the matrix above already runs them one after the other.
     #
-    # The Windows leg only. The macOS leg logs in nowhere, and in the group it
+    # The Windows legs only. The macOS leg logs in nowhere, and in the group it
     # would wait behind a rehearsal and could be cancelled by a second one:
     # GitHub keeps one waiting job per group and drops the older one. It gets a
     # group of its own that nothing else can be in.
@@ -214,7 +232,7 @@ jobs:
       # in a step, because the key of the cache below is made from it.
       SSIGN_REV: 5fd4daf22155b19b645aef3dd467f3c4c9e440b3
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           # This job holds the signing logins and runs `npm ci` beside them.
           # Nothing after the checkout needs git to authenticate: the steps
@@ -222,7 +240,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24
           cache: npm
@@ -237,6 +255,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri
+          key: ${{ matrix.label }}
 
       - name: Install JS deps
         run: npm ci
@@ -322,7 +341,7 @@ jobs:
       - name: Restore the Windows signing client
         id: ssign
         if: runner.os == 'Windows'
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ runner.temp }}\ssign-client
           key: ssign-${{ runner.os }}-${{ runner.arch }}-${{ env.SSIGN_REV }}
@@ -370,7 +389,7 @@ jobs:
         with:
           # No MSI is built any more (`bundle.targets` in tauri.conf.json), so
           # the NSIS setup.exe is the only Windows payload there is. Kept so
-          # that `windows-x86_64` in latest.json stays the setup.exe if an MSI
+          # that `windows-*` in latest.json stays the setup.exe if an MSI
           # target ever comes back: an MSI update on top of an NSIS install
           # produces a second, parallel installation instead of an upgrade.
           updaterJsonPreferNsis: true
@@ -387,7 +406,8 @@ jobs:
             on first launch: choose *More info* → *Run anyway*.
 
             **Which file to take.** macOS: the `.dmg`. Windows: the
-            `-setup.exe`. There is no `.msi` any more: if you installed
+            `_x64-setup.exe`, or the `_arm64-setup.exe` on an ARM PC
+            (Snapdragon and similar). There is no `.msi` any more: if you installed
             ScreenPick from one, uninstall it once in Windows *Settings* →
             *Apps* and install the `-setup.exe`. The `.sig`, `.tar.gz` and
             `latest.json` files belong to the built-in updater.
@@ -434,15 +454,20 @@ jobs:
       # without a change here. The uninstaller is the reason to install at
       # all. It is not a file in the installer: the installer writes it, and
       # makensis signs it while building and goes on when that fails.
+      #
+      # The installed screenpick.exe is also read for its machine type, so a
+      # leg ships the architecture its label and its updater key name.
       - name: Verify the Windows build is signed
         if: runner.os == 'Windows'
         shell: pwsh
         env:
           SIGNER: Open Source Developer Timo Stein
+          BUNDLE: ${{ matrix.bundle }}
+          MACHINE: ${{ matrix.machine }}
         run: |
-          $setup = @(Get-ChildItem 'src-tauri/target/release/bundle/nsis' -Filter '*-setup.exe')
-          if ($setup.Count -ne 1) { Write-Output "::error::expected one NSIS installer, found $($setup.Count)"; exit 1 }
-          $msi = @(Get-ChildItem 'src-tauri/target/release/bundle' -Recurse -Filter '*.msi' -ErrorAction SilentlyContinue)
+          $setup = @(Get-ChildItem "$env:BUNDLE/nsis" -Filter '*-setup.exe')
+          if ($setup.Count -ne 1) { Write-Output "::error::expected one NSIS installer in $env:BUNDLE/nsis, found $($setup.Count)"; exit 1 }
+          $msi = @(Get-ChildItem $env:BUNDLE -Recurse -Filter '*.msi' -ErrorAction SilentlyContinue)
           if ($msi.Count -ne 0) { Write-Output "::error::an .msi was built, and nothing here can sign one: $($msi.Name -join ', ')"; exit 1 }
           tools/verify_signature.ps1 -Signer $env:SIGNER -Path $setup[0].FullName
           if ($LASTEXITCODE -ne 0) { exit 1 }
@@ -455,6 +480,13 @@ jobs:
           foreach ($name in 'screenpick.exe', 'uninstall.exe') {
             if ($installed.Name -notcontains $name) { Write-Output "::error::the installer left no $name in $folder"; exit 1 }
           }
+          # The COFF header follows the 4-byte "PE\0\0" signature, whose offset
+          # is at 0x3C; its first field is the machine type.
+          $exe = ($installed | Where-Object Name -eq 'screenpick.exe' | Select-Object -First 1).FullName
+          $bytes = [IO.File]::ReadAllBytes($exe)
+          $machine = '0x{0:X4}' -f [BitConverter]::ToUInt16($bytes, [BitConverter]::ToInt32($bytes, 0x3C) + 4)
+          if ($machine -ne $env:MACHINE) { Write-Output "::error::screenpick.exe has machine type $machine, this leg builds $env:MACHINE"; exit 1 }
+          Write-Output "screenpick.exe machine type: $machine"
           tools/verify_signature.ps1 -Signer $env:SIGNER -Path $installed.FullName
 
       # Tauri's bundler notarizes and staples the .app, then builds the DMG and
@@ -516,7 +548,7 @@ jobs:
   # tauri-action logs "Signature not found for the updater JSON. Skipping
   # upload..." when the updater key is empty, and a manifest written by two
   # legs at once loses an entry (see `max-parallel` above). So read the
-  # manifest back once both legs are done, while the release is still a draft.
+  # manifest back once every leg is done, while the release is still a draft.
   manifest:
     name: Check the updater manifest
     needs: release
@@ -532,9 +564,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ github.ref_name }}
-          # One universal macOS build serves both architectures; Windows is
-          # x64. The keys an installed copy asks for.
-          WANTED: darwin-aarch64 darwin-x86_64 windows-x86_64
+          # One universal macOS build serves both architectures; Windows has a
+          # build for each. The keys an installed copy asks for.
+          WANTED: darwin-aarch64 darwin-x86_64 windows-x86_64 windows-aarch64
+          # Each Windows key and the installer it must point at. A copy keeps
+          # the architecture it was installed with, so a key pointing at the
+          # other build would switch it.
+          WINDOWS: windows-x86_64=_x64-setup.exe windows-aarch64=_arm64-setup.exe
         run: |
           set -euo pipefail
           gh release download "$TAG_NAME" --repo "$GITHUB_REPOSITORY" \
@@ -554,8 +590,12 @@ jobs:
               || { echo "::error::latest.json has no signed entry for $key, so that platform would not update"; exit 1; }
           done
           # An MSI update over an NSIS install makes a second installation.
-          jq -e '.platforms["windows-x86_64"].url | endswith("-setup.exe")' "$FILE" > /dev/null \
-            || { echo "::error::windows-x86_64 in latest.json is not the setup.exe"; exit 1; }
-          jq -e '.platforms | has("windows-x86_64-msi") | not' "$FILE" > /dev/null \
-            || { echo "::error::latest.json names an .msi, and none is built"; exit 1; }
+          for pair in $WINDOWS; do
+            key=${pair%%=*}
+            file=${pair#*=}
+            jq -e --arg key "$key" --arg file "$file" '.platforms[$key].url | endswith($file)' "$FILE" > /dev/null \
+              || { echo "::error::$key in latest.json is not the $file"; exit 1; }
+            jq -e --arg key "$key" '.platforms | has($key + "-msi") | not' "$FILE" > /dev/null \
+              || { echo "::error::latest.json names an .msi for $key, and none is built"; exit 1; }
+          done
           echo "latest.json names every platform of $TAG_NAME."

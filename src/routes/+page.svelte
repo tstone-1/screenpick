@@ -338,7 +338,7 @@
   // (cancel/commit must work while editing). Also reused by the context-menu
   // suppressor. Event-to-EventTarget adapter over the shared predicate in
   // domUtils.ts (also used by EditorStage.svelte) — one implementation, so it
-  // can't drift between the two call sites (N2 in the 2026-07 code review).
+  // can't drift between the two call sites.
   function eventTargetIsEditable(event: Event): boolean {
     return targetIsEditable(event.target);
   }
@@ -909,7 +909,7 @@
     letter-spacing: 0;
     /* Desktop-app feel: chrome text isn't selectable, so Cmd/Ctrl+A doesn't
        "select all" the UI labels/menu items. Re-enabled on editable fields and
-       the copyable device ID below. */
+       inputs, textareas and contenteditable elements (see the rule below). */
     -webkit-user-select: none;
     user-select: none;
   }

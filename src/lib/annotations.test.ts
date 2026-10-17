@@ -751,7 +751,7 @@ describe("deserializeAnnotations", () => {
   });
 });
 
-// W1 in the 2026-08 code review: crop/cut re-base (replace_document_base) and
+// Crop/cut re-base (replace_document_base) and
 // the annotation save (save_document) are two IPC calls, and the first commits
 // the new base to the manifest. A failure between them persists the cropped
 // image beside the pre-crop layer; restoring that pair silently offsets every

@@ -1312,7 +1312,7 @@ describe("persistError", () => {
   });
 });
 
-// W1 in the 2026-08 code review: the exit handshake only covered a debounce
+// The exit handshake only covered a debounce
 // timer that had not yet fired. #scheduleDocumentSave nulls the timer the
 // moment it FIRES, so a persist already running left flushPendingSave nothing
 // to find and it resolved into app.exit(0) mid-write.

@@ -13,7 +13,7 @@ type CommandResult<T> = Promise<Result<T, string>>;
 // state/orchestration modules so they stay state machines over a typed IPC
 // surface, not Tauri API sinks.
 //
-// Narrowed rule (N9 in the 2026-07 code review): a pure one-line pass-through
+// Narrowed rule: a pure one-line pass-through
 // of a `commands.*` call earns nothing by living here — callers import
 // `commands` from `./bindings` directly and call it themselves. Only genuinely
 // value-adding wrappers belong in this file: native dialogs/drag (no

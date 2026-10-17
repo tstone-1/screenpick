@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// W9 in the 2026-07 code review: the codebase had zero Svelte component
+// The codebase had zero Svelte component
 // tests (vitest.config.ts was node-env only), so pointer/event wiring on the
 // biggest interactive component had no test harness at all. This is the
 // first component test — see vitest.config.ts for how the jsdom environment
