@@ -25,7 +25,7 @@ ScreenPick is a Tauri 2 (Rust) + Svelte 5 / SvelteKit 3 (TypeScript) desktop app
 
 ## Prerequisites
 
-- **Node.js** 24+ (Active LTS; matches CI, `.nvmrc`, and Vite's supported runtime).
+- **Node.js** 26+ (Active LTS; matches CI, `.nvmrc`, and Vite's supported runtime).
 - **Rust** latest stable via [rustup](https://rustup.rs/).
 - **ripgrep** (`rg`) — used by the release-checklist verification commands.
 - **macOS**: Xcode Command Line Tools (`xcode-select --install`). No signing
@@ -1091,8 +1091,8 @@ Two majors are held back on purpose, and `npm outdated` lists both:
   peers on `typescript ^6` and svelte-check 4 on `^5 || ^6`. **Revisit** when
   both accept 7 (`npm info @sveltejs/kit peerDependencies.typescript`,
   `npm info svelte-check peerDependencies.typescript`).
-- **`@types/node` 24** — follows the Node major in `.nvmrc` and the workflows.
-  **Revisit** when those move to Node 26.
+- **`@types/node` 26** — follows the Node major in `.nvmrc` and the workflows.
+  **Revisit** when those move to the next Node LTS.
 
 See also the `.cargo/audit.toml` triage note referenced in the Pre-release
 Checklist above for the Rust-side equivalent of "why is this pinned/ignored".
