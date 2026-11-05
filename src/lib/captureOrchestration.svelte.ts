@@ -312,7 +312,7 @@ export class CaptureOrchestration {
     const capture = settings.autoOpenEditor
       ? editor.ingestCompleted(payload)
       : editor.ingestWithoutOpening(payload);
-    statusLine.set(`${capture.title} captured at ${capture.width} x ${capture.height}.`);
+    statusLine.set(`${capture.title} captured at ${capture.width} × ${capture.height}.`);
     // Audible confirmation for hotkey captures, where ScreenPick may be in the
     // background and there's no on-screen feedback. Button captures already open
     // the editor in front of the user, so they don't chime.

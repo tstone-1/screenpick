@@ -121,7 +121,7 @@
         </span>
         <span class="screen-text">
           <strong>{displayName(screen)}</strong>
-          <small>{screen.width} x {screen.height} • {(screen.scaleFactor ?? 1).toFixed(2)}x scale</small>
+          <small>{screen.width} × {screen.height} • {(screen.scaleFactor ?? 1).toFixed(2)}x scale</small>
           <small>Origin {screen.x}, {screen.y}</small>
         </span>
         {#if screen.primary}

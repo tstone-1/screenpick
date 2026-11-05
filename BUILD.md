@@ -777,12 +777,13 @@ Not yet seen: the signed installer read on a Windows computer outside GitHub.
       clean, want them?" is the answer being looked for; a bare list is not.
 - [ ] `cargo audit -f Cargo.lock` (install: `cargo install cargo-audit`) — run from
       `src-tauri/` so it picks up `.cargo/audit.toml`. Expect a **clean exit** (only the
-      pre-triaged "allowed warnings" — unmaintained gtk3-family crates, `paste`, `anyhow`
-      1.0.104, `memmap2` via pinned xcap — none actionable). If `cargo audit` reports a
+      "allowed warnings": as of 26.11.0 six, for `glib`, `paste`, `proc-macro-error`
+      and the `zbus`/`zvariant` family, all Linux or build-time crates of Tauri's
+      stack and none actionable). If `cargo audit` reports a
       new, non-allow-listed vulnerability, that is a real release blocker: do not add it to
       `.cargo/audit.toml` without recording, next to the entry, why it was reviewed and
-      accepted and under which condition it is revisited (today it holds the three `zip`
-      advisories of 2026-10, unreachable behind the updater's signature check). A
+      accepted and under which condition it is revisited (its ignore list is empty
+      since 26.11.0, when the updater moved to a fixed `zip`). A
       release must not ship with an unreviewed red `cargo audit`. The release
       workflow's `audit` job runs `cargo audit` on every tag as well, and no
       installer is built unless it passes; keep this local step anyway, so a
@@ -1084,15 +1085,17 @@ pin today: the `overrides.cookie: "0.7.2"` entry was removed with the move to
 SvelteKit 3 (26.10.0), which depends on `cookie ^2` directly and fails to build
 against the forced 0.7.2 (`Named export 'parseCookie' not found`).
 
-Two majors are held back on purpose, and `npm outdated` lists both:
+One major is held back on purpose, and `npm outdated` lists it:
 
 - **`typescript` 6** — TypeScript 7 is installed as `@typescript/native` for the
   tsgo pass. The `typescript` package itself stays on 6 because SvelteKit 3
-  peers on `typescript ^6` and svelte-check 4 on `^5 || ^6`. **Revisit** when
+  peers on `typescript ^6` and svelte-check 4 on `^5 || ^6`; tried on
+  2026-11-05, TS 7 alone breaks `vite build` (see AGENTS.md). **Revisit** when
   both accept 7 (`npm info @sveltejs/kit peerDependencies.typescript`,
   `npm info svelte-check peerDependencies.typescript`).
-- **`@types/node` 26** — follows the Node major in `.nvmrc` and the workflows.
-  **Revisit** when those move to the next Node LTS.
+
+`@types/node` follows the Node major in `.nvmrc` and the workflows (26 since
+26.11.0), so it is not held back; move it together with them.
 
 See also the `.cargo/audit.toml` triage note referenced in the Pre-release
 Checklist above for the Rust-side equivalent of "why is this pinned/ignored".

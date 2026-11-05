@@ -30,20 +30,36 @@ ScreenPick is an open-source cross-platform screenshot, annotation, and screen u
   isolated synthetic component). Keep both until that gap is fixed; recheck
   with a failing control before removing the classic pass. Watch mode uses
   the classic checker.
+  `typescript` itself cannot move to 7 yet (measured 2026-11-05 with SvelteKit
+  3.1.1 and svelte-check 4.7.8): TS 7 has no JavaScript API, so `vite build`
+  and `svelte-kit sync` die with `Cannot read properties of undefined (reading
+  'readFile')`, svelte-check refuses to start without TS 6 installed, and both
+  packages declare a `^6` peer range. The tsgo pass still missed a missing
+  `.svelte` import that the classic pass caught. Recheck when those peer
+  ranges admit 7.
 
 ### Typed IPC contract
 
-- `specta` + `tauri-specta` (pinned `2.0.0-rc.25`) generate `src/lib/bindings.ts`
+- `specta` + `tauri-specta` (pinned `2.0.0-rc.26`, with `specta-typescript`
+  `0.0.13`, the version tauri-specta rc.26 requires) generate `src/lib/bindings.ts`
   from the Rust commands/events, so **Rust is the source of truth** for IPC shapes.
+- **A specta bump changes the generated file even when no Rust type changed.**
+  rc.26 split every type whose serde shape differs by direction into
+  `<Name>_Serialize` / `<Name>_Deserialize` plus a `<Name>` union (fields with
+  `#[serde(default)]` are optional only on the Deserialize side), and added
+  `emitTo` to events. Regenerate the bindings in the same change as the bump.
 - Regenerate with `BINDINGS_UPDATE=1 cargo test export_typescript_bindings`. The
   default `cargo test` asserts `bindings.ts` matches the live contract and fails
   on drift. **Note:** this test is gated to macOS/Linux (`cfg(all(test, not(target_os = "windows")))`),
   so it does not run on Windows — regenerate/verify bindings on a Mac or in CI.
+  From a Windows checkout: copy the changed Rust files into a fresh clone on a
+  Mac, run the test there, and copy `bindings.ts` back with a plain `cat` over
+  ssh (compare SHA-256 on both sides).
 - **Gotcha:** `///` doc comments on a specta-exposed command, type, or field are
-  emitted as JSDoc in `bindings.ts`. Existing exposed items use plain `//`
-  comments, so the committed bindings have no JSDoc. Use `//` on exposed items
-  (or regenerate the bindings) to avoid a drift failure that only surfaces on
-  the macOS/Linux CI check, not on a Windows `cargo test`.
+  emitted as JSDoc in `bindings.ts` (`captureScreenUnderCursor` carries one).
+  Changing such a comment, or adding one, changes the bindings, and the drift
+  failure only surfaces on the macOS/Linux CI check, not on a Windows
+  `cargo test`. Use `//` on exposed items unless the JSDoc is wanted.
 
 ### Key Rust crates
 

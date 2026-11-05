@@ -1,6 +1,6 @@
 [package]
 name = "screenpick"
-version = "26.10.4"
+version = "26.11.0"
 description = "Cross-platform screenshot and annotation tool for macOS and Windows."
 authors = ["tstone-1"]
 license = "MIT"
@@ -60,10 +60,11 @@ arboard = "3"
 xcap = { version = "=0.9.8", features = ["image", "wgc"] }
 # Typed IPC contract: specta + tauri-specta auto-generate src/lib/bindings.ts so Rust
 # is the source of truth for command/event shapes. Pinned to the rc release line that's
-# compatible with Tauri 2.
-specta = "=2.0.0-rc.25"
-specta-typescript = "=0.0.12"
-tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
+# compatible with Tauri 2. tauri-specta pins its specta and specta-typescript
+# versions exactly, so move all three together and regenerate the bindings.
+specta = "=2.0.0-rc.26"
+specta-typescript = "=0.0.13"
+tauri-specta = { version = "=2.0.0-rc.26", features = ["derive", "typescript"] }
 # Direct dep only for tokio::time::sleep inside tauri::async_runtime::spawn tasks
 # (a non-blocking wait must not park a tokio worker thread via std::thread::sleep).
 # Tauri already ships tokio transitively, so this adds no real weight.

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { annotationsInPaintOrder } from "./annotations";
+import { annotationsInPaintOrder, arrowControlPoint } from "./annotations";
 import { measureTextWidth } from "./annotationRendering";
 import type {
   Annotation,
@@ -798,6 +798,38 @@ describe("EditorState", () => {
     expect(state.historyPast).toHaveLength(0);
   });
 
+  it("flips a selected arrow, keeping its curve, in one undo step", () => {
+    const state = new EditorState();
+    selectedArrow(state, { bend: { x: 50, y: 80 } });
+    const before = arrowControlPoint(state.annotations[0] as ArrowAnnotation);
+
+    state.flipSelectedArrow();
+
+    const flipped = state.annotations[0] as ArrowAnnotation;
+    expect(flipped).toMatchObject({
+      start: { x: 90, y: 50 },
+      end: { x: 10, y: 50 },
+      bend: { x: 50, y: 80 }
+    });
+    expect(arrowControlPoint(flipped)).toEqual(before);
+    expect(state.selectedAnnotationId).toBe(1);
+    expect(state.historyPast).toHaveLength(1);
+
+    state.undo();
+    expect(state.annotations[0]).toMatchObject({ start: { x: 10, y: 50 }, end: { x: 90, y: 50 } });
+  });
+
+  it("does nothing on flip when the selection is not an arrow", () => {
+    const state = new EditorState();
+    selectedArrow(state);
+    state.annotations = [shapeAnnotation(1, { rect: { x: 10, y: 10, width: 20, height: 20 } })];
+
+    state.flipSelectedArrow();
+
+    expect(state.annotations[0]).toMatchObject({ rect: { x: 10, y: 10 } });
+    expect(state.historyPast).toHaveLength(0);
+  });
+
   it("gives the handle of the selected arrow the press, over an annotation lying above it", () => {
     const state = new EditorState();
     selectedArrow(state);
@@ -1055,10 +1087,10 @@ describe("EditorState", () => {
     state.cutBand = { x: 0, y: 40, width: 100, height: 20 };
     cutoutCaptureMock.mockResolvedValue({
       status: "ok",
-      data: { ...capture("/cut-source-cutout.png", 100, 80), title: "Cut - 100 x 80" }
+      data: { ...capture("/cut-source-cutout.png", 100, 80), title: "Cut - 100 × 80" }
     });
 
-    await expect(state.applyCut()).resolves.toBe("Cut - 100 x 80 created.");
+    await expect(state.applyCut()).resolves.toBe("Cut - 100 × 80 created.");
 
     expect(cutoutCaptureMock).toHaveBeenCalledWith("/cut-source.png", "horizontal", 40, 20);
     expect(state.currentCapture?.path).toBe("/cut-source-cutout.png");

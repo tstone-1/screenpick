@@ -9,7 +9,7 @@ export const commands = {
 	confirmExit: () => __TAURI_INVOKE<void>("confirm_exit"),
 	takeStartupCapture: () => __TAURI_INVOKE<string | null>("take_startup_capture"),
 	listCaptureModes: () => __TAURI_INVOKE<CaptureMode[]>("list_capture_modes"),
-	shortcutStatus: () => __TAURI_INVOKE<ShortcutStatus[]>("shortcut_status"),
+	shortcutStatus: () => __TAURI_INVOKE<ShortcutStatus_Serialize[]>("shortcut_status"),
 	effectiveShortcutAccelerators: () => __TAURI_INVOKE<{ [key in string]: string[] }>("effective_shortcut_accelerators"),
 	suspendShortcuts: () => typedError<null, string>(__TAURI_INVOKE("suspend_shortcuts")),
 	resumeShortcuts: () => typedError<null, string>(__TAURI_INVOKE("resume_shortcuts")),
@@ -29,10 +29,10 @@ export const commands = {
 	replaceDocumentBase: (id: string, sourcePath: string, title: string, width: number, height: number) => typedError<DocumentRecord, string>(__TAURI_INVOKE("replace_document_base", { id, sourcePath, title, width, height })),
 	saveDocument: (id: string, annotations: string, currentPng: number[], dirty: boolean) => typedError<DocumentRecord, string>(__TAURI_INVOKE("save_document", { id, annotations, currentPng, dirty })),
 	deleteDocument: (id: string) => typedError<null, string>(__TAURI_INVOKE("delete_document", { id })),
-	getSettings: () => __TAURI_INVOKE<CaptureSettings>("get_settings"),
-	updateSettings: (settings: CaptureSettings) => typedError<CaptureSettings, string>(__TAURI_INVOKE("update_settings", { settings })),
-	resetShortcutSettings: () => typedError<CaptureSettings, string>(__TAURI_INVOKE("reset_shortcut_settings")),
-	updateTransition: () => __TAURI_INVOKE<UpdateTransition>("update_transition"),
+	getSettings: () => __TAURI_INVOKE<CaptureSettings_Serialize>("get_settings"),
+	updateSettings: (settings: CaptureSettings_Deserialize) => typedError<CaptureSettings_Serialize, string>(__TAURI_INVOKE("update_settings", { settings })),
+	resetShortcutSettings: () => typedError<CaptureSettings_Serialize, string>(__TAURI_INVOKE("reset_shortcut_settings")),
+	updateTransition: () => __TAURI_INVOKE<UpdateTransition_Serialize>("update_transition"),
 	autostartEnabled: () => typedError<boolean, string>(__TAURI_INVOKE("autostart_enabled")),
 	setAutostart: (enabled: boolean) => typedError<boolean, string>(__TAURI_INVOKE("set_autostart", { enabled })),
 	startRegionSelection: () => typedError<null, string>(__TAURI_INVOKE("start_region_selection")),
@@ -40,12 +40,7 @@ export const commands = {
 	cancelRegionSelection: () => typedError<null, string>(__TAURI_INVOKE("cancel_region_selection")),
 	startWindowSelection: () => typedError<null, string>(__TAURI_INVOKE("start_window_selection")),
 	finishWindowPointSelection: (x: number | null, y: number | null) => typedError<CaptureResult, string>(__TAURI_INVOKE("finish_window_point_selection", { x, y })),
-	windowRectAtPoint: (x: number | null, y: number | null) => typedError<{
-	x: number | null,
-	y: number | null,
-	width: number | null,
-	height: number | null,
-} | null, string>(__TAURI_INVOKE("window_rect_at_point", { x, y })),
+	windowRectAtPoint: (x: number | null, y: number | null) => typedError<WindowBounds | null, string>(__TAURI_INVOKE("window_rect_at_point", { x, y })),
 	cancelWindowSelection: () => typedError<null, string>(__TAURI_INVOKE("cancel_window_selection")),
 	startScreenSelection: () => typedError<null, string>(__TAURI_INVOKE("start_screen_selection")),
 	/**
@@ -66,12 +61,12 @@ export const commands = {
 
 /** Events */
 export const events = {
-	appExiting: makeEvent<AppExiting>("app-exiting"),
-	captureCancelled: makeEvent<CaptureCancelled>("capture-cancelled"),
-	captureCompleted: makeEvent<CaptureCompleted>("capture-completed"),
-	captureShortcut: makeEvent<CaptureShortcut>("capture-shortcut"),
-	shortcutRegistration: makeEvent<ShortcutRegistration>("shortcut-registration"),
-	updateCheckRequested: makeEvent<UpdateCheckRequested>("update-check-requested"),
+	appExiting: makeEvent<AppExiting, AppExiting>("app-exiting"),
+	captureCancelled: makeEvent<CaptureCancelled, CaptureCancelled>("capture-cancelled"),
+	captureCompleted: makeEvent<CaptureCompleted, CaptureCompleted>("capture-completed"),
+	captureShortcut: makeEvent<CaptureShortcut, CaptureShortcut>("capture-shortcut"),
+	shortcutRegistration: makeEvent<ShortcutRegistration_Serialize, ShortcutRegistration_Deserialize>("shortcut-registration"),
+	updateCheckRequested: makeEvent<UpdateCheckRequested, UpdateCheckRequested>("update-check-requested"),
 };
 
 /* Types */
@@ -107,7 +102,9 @@ export type CaptureResult = {
 	height: number,
 };
 
-export type CaptureSettings = {
+export type CaptureSettings = CaptureSettings_Serialize | CaptureSettings_Deserialize;
+
+export type CaptureSettings_Deserialize = {
 	version?: number,
 	saveDirectory?: string | null,
 	copyToClipboard?: boolean,
@@ -118,6 +115,19 @@ export type CaptureSettings = {
 	checkForUpdatesOnStartup?: boolean,
 	lastRunVersion?: string | null,
 	shortcutOverrides?: { [key in string]: string[] },
+};
+
+export type CaptureSettings_Serialize = {
+	version: number,
+	saveDirectory: string | null,
+	copyToClipboard: boolean,
+	playCaptureSound: boolean,
+	autoOpenEditor: boolean,
+	bringToFrontOnHotkeyCapture: boolean,
+	closeToTray: boolean,
+	checkForUpdatesOnStartup: boolean,
+	lastRunVersion: string | null,
+	shortcutOverrides: { [key in string]: string[] },
 };
 
 export type CaptureShortcut = string;
@@ -144,11 +154,24 @@ export type RegionSelection = {
 	scaleFactor: number | null,
 };
 
-export type ShortcutRegistration = ShortcutStatus;
+export type ShortcutRegistration = ShortcutRegistration_Serialize | ShortcutRegistration_Deserialize;
+
+export type ShortcutRegistration_Deserialize = ShortcutStatus_Deserialize;
+
+export type ShortcutRegistration_Serialize = ShortcutStatus_Serialize;
 
 export type ShortcutState = "registered" | "failed";
 
-export type ShortcutStatus = {
+export type ShortcutStatus = ShortcutStatus_Serialize | ShortcutStatus_Deserialize;
+
+export type ShortcutStatus_Deserialize = {
+	accelerator: string,
+	mode: string,
+	state: ShortcutState,
+	error?: string | null,
+};
+
+export type ShortcutStatus_Serialize = {
 	accelerator: string,
 	mode: string,
 	state: ShortcutState,
@@ -157,7 +180,15 @@ export type ShortcutStatus = {
 
 export type UpdateCheckRequested = null;
 
-export type UpdateTransition = {
+export type UpdateTransition = UpdateTransition_Serialize | UpdateTransition_Deserialize;
+
+export type UpdateTransition_Deserialize = {
+	previousVersion?: string | null,
+	currentVersion: string,
+	updated: boolean,
+};
+
+export type UpdateTransition_Serialize = {
 	previousVersion: string | null,
 	currentVersion: string,
 	updated: boolean,
@@ -182,20 +213,24 @@ async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; dat
 
 type EventEmit<T> = [T] extends [null] ? () => Promise<void> : (payload: T) => Promise<void>;
 
-function makeEvent<T>(name: string, serialize?: (payload: T) => unknown, deserialize?: (payload: any) => T) {
-    const mapEvent = (cb: __TAURI_EVENT.EventCallback<T>) => (event: __TAURI_EVENT.Event<any>) => cb({ ...event, payload: deserialize ? deserialize(event.payload) : event.payload });
-    const mapPayload = (payload: T) => serialize ? serialize(payload) : payload;
+type EventEmitTo<T> = [T] extends [null] ? (target: __TAURI_EVENT.EventTarget | string) => Promise<void> : (target: __TAURI_EVENT.EventTarget | string, payload: T) => Promise<void>;
+
+function makeEvent<TListen, TEmit = TListen>(name: string, serialize?: (payload: TEmit) => unknown, deserialize?: (payload: any) => TListen) {
+    const mapEvent = (cb: __TAURI_EVENT.EventCallback<TListen>) => (event: __TAURI_EVENT.Event<any>) => cb({ ...event, payload: deserialize ? deserialize(event.payload) : event.payload });
+    const mapPayload = (payload: TEmit) => serialize ? serialize(payload) : payload;
 
     const base = {
-        listen: (cb: __TAURI_EVENT.EventCallback<T>) => __TAURI_EVENT.listen(name, mapEvent(cb)),
-        once: (cb: __TAURI_EVENT.EventCallback<T>) => __TAURI_EVENT.once(name, mapEvent(cb)),
-        emit: ((payload: T) => __TAURI_EVENT.emit(name, mapPayload(payload)) as unknown) as EventEmit<T>
+        listen: (cb: __TAURI_EVENT.EventCallback<TListen>) => __TAURI_EVENT.listen(name, mapEvent(cb)),
+        once: (cb: __TAURI_EVENT.EventCallback<TListen>) => __TAURI_EVENT.once(name, mapEvent(cb)),
+        emit: ((payload: TEmit) => __TAURI_EVENT.emit(name, mapPayload(payload)) as unknown) as EventEmit<TEmit>,
+        emitTo: ((to: __TAURI_EVENT.EventTarget | string, payload: TEmit) => __TAURI_EVENT.emitTo(to, name, mapPayload(payload)) as unknown) as EventEmitTo<TEmit>
     };
 
     const fn = (target: import("@tauri-apps/api/webview").Webview | import("@tauri-apps/api/window").Window) => ({
-        listen: (cb: __TAURI_EVENT.EventCallback<T>) => target.listen(name, mapEvent(cb)),
-        once: (cb: __TAURI_EVENT.EventCallback<T>) => target.once(name, mapEvent(cb)),
-        emit: ((payload: T) => target.emit(name, mapPayload(payload)) as unknown) as EventEmit<T>
+        listen: (cb: __TAURI_EVENT.EventCallback<TListen>) => target.listen(name, mapEvent(cb)),
+        once: (cb: __TAURI_EVENT.EventCallback<TListen>) => target.once(name, mapEvent(cb)),
+        emit: ((payload: TEmit) => target.emit(name, mapPayload(payload)) as unknown) as EventEmit<TEmit>,
+        emitTo: ((to: __TAURI_EVENT.EventTarget | string, payload: TEmit) => target.emitTo(to, name, mapPayload(payload)) as unknown) as EventEmitTo<TEmit>
     });
 
     return Object.assign(fn, base);

@@ -1885,6 +1885,19 @@ export class EditorState {
     });
   }
 
+  // Swaps tail and head. The bend point is the curve's midpoint, which is the
+  // same from either end, so a bent arrow keeps its exact curve.
+  flipSelectedArrow() {
+    const target = this.selectedAnnotation;
+    if (target?.kind !== "arrow") return;
+    this.#recordHistory();
+    this.annotations = this.annotations.map((annotation) =>
+      annotation.id === target.id && annotation.kind === "arrow"
+        ? { ...annotation, start: annotation.end, end: annotation.start }
+        : annotation
+    );
+  }
+
   beginSelectionEdit() {
     if (this.#selectionEditDirty) return;
     if (!this.selectedAnnotation) return;

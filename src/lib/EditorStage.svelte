@@ -490,7 +490,7 @@
         {/if}
         {#if visibleCrop && editor.activeTool === "crop"}
           <div class="crop-selection" style={cropStyle(visibleCrop, editor.document.zoom)}>
-            <span>{Math.round(visibleCrop.width)} x {Math.round(visibleCrop.height)}</span>
+            <span>{Math.round(visibleCrop.width)} × {Math.round(visibleCrop.height)}</span>
           </div>
         {/if}
         {#if (editor.cutDraft ?? editor.cutBand) && editor.activeTool === "cut"}

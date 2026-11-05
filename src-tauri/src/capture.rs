@@ -320,7 +320,7 @@ pub(crate) fn crop_capture(
 
     Ok(CaptureResult {
         mode: "crop".to_string(),
-        title: format!("Crop - {} x {}", crop_width, crop_height),
+        title: format!("Crop - {} × {}", crop_width, crop_height),
         path: path.to_string_lossy().into_owned(),
         width: crop_width,
         height: crop_height,
@@ -357,7 +357,7 @@ pub(crate) fn cutout_capture(
 
     Ok(CaptureResult {
         mode: "cutout".to_string(),
-        title: format!("Cut - {} x {}", result.width(), result.height()),
+        title: format!("Cut - {} × {}", result.width(), result.height()),
         path: path.to_string_lossy().into_owned(),
         width: result.width(),
         height: result.height(),

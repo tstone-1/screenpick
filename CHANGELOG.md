@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [CalVer](https://calver.org/) `YY.M.MICRO` versioning
 (see [BUILD.md](BUILD.md#version-management)).
 
+## [26.11.0] - 2026-11-05
+
+### Added
+
+- *Flip direction* for a selected arrow swaps its tail and head. A bent arrow
+  keeps its curve, and the flip is one undo step.
+
+### Changed
+
+- Image sizes show a multiplication sign: `1028 × 642` instead of `1028 x 642`.
+  This covers the Recent list, the title bar, the side panel, the crop and
+  selection readouts, the screen picker, and the titles of new crops and cuts.
+  Command-line output keeps the ASCII `x`.
+- Updated frontend and Rust dependencies within their ranges, including Tauri
+  2.12.5, Svelte 5.57.3, Vite 8.3.6 and Vitest 5.1. The typed IPC generator
+  moves to specta / tauri-specta 2.0.0-rc.26, which regenerates the TypeScript
+  bindings with separate serialize and deserialize types.
+
+### Security
+
+- The updater plugin 2.14.1 uses `zip` 9, which fixes RUSTSEC-2026-0367,
+  RUSTSEC-2026-0368 and RUSTSEC-2026-0369. They had been accepted since
+  26.10.4 as unreachable behind the updater's signature check.
+
 ## [26.10.4] - 2026-10-17
 
 ### Added

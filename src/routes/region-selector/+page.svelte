@@ -125,7 +125,7 @@
       class="selection"
       style={`left: ${selection.x}px; top: ${selection.y}px; width: ${selection.width}px; height: ${selection.height}px;`}
     >
-      <span>{Math.round(selection.width * window.devicePixelRatio)} x {Math.round(selection.height * window.devicePixelRatio)}</span>
+      <span>{Math.round(selection.width * window.devicePixelRatio)} × {Math.round(selection.height * window.devicePixelRatio)}</span>
     </div>
   {/if}
 </main>

@@ -712,7 +712,7 @@
             </span>
             <span>
               <strong>{recent.title}</strong>
-              <small>{recent.width} x {recent.height}{recent.dirty ? " • edited" : ""}</small>
+              <small>{recent.width} × {recent.height}{recent.dirty ? " • edited" : ""}</small>
             </span>
           </button>
           {#if recent.dirty}
@@ -744,7 +744,7 @@
         {#if editor.document}
           <span>
             PNG • {Math.round(editor.document.zoom * 100)}% •
-            {editor.document.capture.width} x {editor.document.capture.height}
+            {editor.document.capture.width} × {editor.document.capture.height}
           </span>
         {/if}
       </div>

@@ -1,5 +1,6 @@
 <script lang="ts">
   import {
+    ArrowLeftRight,
     BringToFront,
     Image,
     MoveDown,
@@ -111,7 +112,7 @@
   <div class="image-meta">
     <div>
       <span>Image</span>
-      <strong>{editor.document.capture.width} x {editor.document.capture.height}</strong>
+      <strong>{editor.document.capture.width} × {editor.document.capture.height}</strong>
     </div>
     <div>
       <span>Zoom</span>
@@ -129,7 +130,7 @@
         <span>Crop</span>
         <strong>
           {editor.cropRect
-            ? `${Math.round(editor.cropRect.width)} x ${Math.round(editor.cropRect.height)}`
+            ? `${Math.round(editor.cropRect.width)} × ${Math.round(editor.cropRect.height)}`
             : "Drag on image"}
         </strong>
       </div>
@@ -156,7 +157,7 @@
     <div class="crop-panel">
       <div>
         <span>Rectangular selection</span>
-        <strong>{editor.regionRect ? `${editor.regionRect.width} x ${editor.regionRect.height}` : "Drag on image"}</strong>
+        <strong>{editor.regionRect ? `${editor.regionRect.width} × ${editor.regionRect.height}` : "Drag on image"}</strong>
       </div>
       <p>Copy or cut a section, paste it, then drag it into place. Cut leaves white behind.</p>
       <div class="crop-actions">
@@ -285,6 +286,11 @@
           1,
           (value) => editor.updateSelectedAnnotation({ width: value }, { commitHistory: false })
         )}
+        {#if editor.selectedAnnotation.kind === "arrow"}
+          <button type="button" onclick={() => editor.flipSelectedArrow()}>
+            <ArrowLeftRight size={16} /> Flip direction
+          </button>
+        {/if}
 
       {:else if editor.selectedAnnotation.kind === "highlight"}
         {@render colorRow("Highlight color", editor.selectedAnnotation.color)}
