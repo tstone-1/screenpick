@@ -385,6 +385,55 @@ describe("annotation layer / base raster pairing", () => {
     expect(logErrorMock).not.toHaveBeenCalled();
   });
 
+  // A layer that restores with fewer annotations than it stored must say so in
+  // the log: without the line, lost work reads as a document never annotated.
+  it("logs a layer that cannot be read and restores it empty", async () => {
+    const store = new DocumentStore();
+    listDocumentsMock.mockResolvedValue({
+      status: "ok",
+      data: [recordWithBase("doc-1", "{not json", "/docs/doc-1/base.png")]
+    });
+
+    await store.loadPersistedDocuments(null, null);
+
+    expect(store.takeSeededAnnotations("doc-1")).toEqual([]);
+    expect(logErrorMock).toHaveBeenCalledOnce();
+    expect(logErrorMock.mock.calls[0][0]).toContain("doc-1");
+    // The count, never the content.
+    expect(logErrorMock.mock.calls[0][0]).not.toContain("not json");
+  });
+
+  it("logs how many stored annotations failed validation", async () => {
+    const store = new DocumentStore();
+    const stored = JSON.stringify([penAnnotation(1), { id: 2, kind: "no-such-kind" }]);
+    listDocumentsMock.mockResolvedValue({
+      status: "ok",
+      data: [recordWithBase("doc-1", stored, "/docs/doc-1/base.png")]
+    });
+
+    await store.loadPersistedDocuments(null, null);
+
+    expect(store.takeSeededAnnotations("doc-1")).toEqual([penAnnotation(1)]);
+    expect(logErrorMock).toHaveBeenCalledOnce();
+    expect(logErrorMock.mock.calls[0][0]).toContain("1 of 2");
+  });
+
+  // Control: a layer that really is empty, in either on-disk shape, is not a loss.
+  it("does not log a layer that is empty on disk", async () => {
+    const store = new DocumentStore();
+    listDocumentsMock.mockResolvedValue({
+      status: "ok",
+      data: [
+        recordWithBase("doc-1", "[]", "/docs/doc-1/base.png"),
+        recordWithBase("doc-2", serializeAnnotations([], "base.png"), "/docs/doc-2/base.png")
+      ]
+    });
+
+    await store.loadPersistedDocuments(null, null);
+
+    expect(logErrorMock).not.toHaveBeenCalled();
+  });
+
   it("compares base rasters by file name on either platform's separator", () => {
     expect(baseFileNameOf("C:\\Users\\x\\documents\\doc-1\\base-99-1.png")).toBe("base-99-1.png");
     expect(baseFileNameOf("/Users/x/documents/doc-1/base-99-1.png")).toBe("base-99-1.png");

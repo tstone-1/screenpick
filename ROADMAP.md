@@ -37,9 +37,9 @@ Silicon; users bypass Gatekeeper / SmartScreen on first launch (steps in
 Program enrolment (Individual, $99/yr) paid; the recurring TCC breakage below is
 what justified the cost, not Gatekeeper.
 
-- [x] Developer ID Application certificate created and installed;
-      `Developer ID Application: Timo Stein (NVX72G8SJ8)`, valid to 2031-07-26.
-- [x] `.p12` exported, restore-tested, and backed up (KeePass + iCloud).
+- [x] Developer ID Application certificate created and installed, valid to
+      2031-07-26.
+- [x] `.p12` exported, restore-tested, and backed up.
 - [x] App Store Connect API key for notarization created and authenticated.
 - [x] Signed + notarized **locally first** — notarization Accepted, stapled,
       `spctl` reports `source=Notarized Developer ID`, universal (x86_64 +
@@ -112,7 +112,7 @@ as a retrofit: those two builds can never be reached by the updater and must be
 replaced manually once.
 
 - ~~Adopt `tauri-plugin-updater`.~~ — done, plus `tauri-plugin-process` for the relaunch.
-- ~~Sign update manifests with a Tauri update key.~~ — done. Private key + password in KeePass and in the `TAURI_SIGNING_PRIVATE_KEY`/`_PASSWORD` repo secrets; public key committed in `tauri.conf.json`.
+- ~~Sign update manifests with a Tauri update key.~~ — done. Private key + password kept by the maintainer and in the `TAURI_SIGNING_PRIVATE_KEY`/`_PASSWORD` repo secrets; public key committed in `tauri.conf.json`.
 - ~~Host manifests on GitHub Releases or a static endpoint.~~ — done. `tauri-action` generates `latest.json` per release; the endpoint is `releases/latest/download/latest.json`, which only resolves once the draft is published.
 - ~~UI: passive update banner; optional "Check for updates" in settings.~~ — done, plus a tray item and a startup-check opt-out.
 

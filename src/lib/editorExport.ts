@@ -75,10 +75,12 @@ const WINDOWS_RESERVED_NAMES = new Set([
 // `:\/*?"<>|`) collapse to a single hyphen; leading/trailing hyphens trimmed.
 // Falls back to a generic name when the title has no usable characters, and
 // appends a suffix when the result would otherwise collide with a Windows
-// reserved device name.
+// reserved device name. The multiplication sign (U+00D7) in crop and cut
+// sizes becomes an x, so "100 x 80" stays readable in the filename.
 export function slugifyCaptureTitle(title: string): string {
   const name = title
     .toLowerCase()
+    .replace(/×/g, "x")
     .replace(/[^\p{L}\p{N}]+/gu, "-")
     .replace(/^-|-$/g, "");
   const base = name || "screenpick-capture";

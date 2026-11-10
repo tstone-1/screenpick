@@ -394,13 +394,29 @@ export class SettingsState {
     });
   }
 
-  // Compared in sanitized form so a blank placeholder row — which the backend
-  // never stores — does not read as an unsaved change and force a pointless
+  // The overrides as they should be stored: sanitized, except that a mode
+  // stored as `[]` (deliberately disabled) whose draft holds only blank rows
+  // stays `[]`. Sanitizing alone drops such a mode, and an absent mode means
+  // its default global shortcuts, so a placeholder row would re-enable them.
+  #overridesToStore(
+    drafts: Record<string, string[]>,
+    stored: Record<string, string[]>
+  ): Record<string, string[]> {
+    const result = sanitizeShortcutOverrides(drafts);
+    for (const mode of Object.keys(drafts)) {
+      if (!(mode in result) && stored[mode]?.length === 0) result[mode] = [];
+    }
+    return result;
+  }
+
+  // Compared in stored form so a blank placeholder row - which the backend
+  // never stores - does not read as an unsaved change and force a pointless
   // save-and-re-register on every blur.
   #shortcutOverridesDirty(): boolean {
+    const stored = this.appliedSettings.shortcutOverrides ?? {};
     return !this.#overridesEqual(
-      sanitizeShortcutOverrides(this.settings.shortcutOverrides ?? {}),
-      this.appliedSettings.shortcutOverrides ?? {}
+      this.#overridesToStore(this.settings.shortcutOverrides ?? {}, stored),
+      stored
     );
   }
 
@@ -410,7 +426,7 @@ export class SettingsState {
   #reconcileDrafts(saved: Record<string, string[]>): Record<string, string[]> {
     const next: Record<string, string[]> = { ...saved };
     for (const [mode, draft] of Object.entries(this.shortcutEditorDrafts)) {
-      const sanitized = sanitizeShortcutOverrides({ [mode]: draft })[mode];
+      const sanitized = this.#overridesToStore({ [mode]: draft }, saved)[mode];
       const savedEntry = saved[mode];
       if (savedEntry && sanitized && this.#overridesEqual({ x: sanitized }, { x: savedEntry })) {
         next[mode] = draft;
@@ -438,7 +454,13 @@ export class SettingsState {
       return null;
     }
     try {
-      const result = await commands.updateSettings(nextSettings);
+      const result = await commands.updateSettings({
+        ...nextSettings,
+        shortcutOverrides: this.#overridesToStore(
+          nextSettings.shortcutOverrides ?? {},
+          this.appliedSettings.shortcutOverrides ?? {}
+        )
+      });
       if (result.status === "error") {
         this.#restoreSettings(rollbackSettings);
         statusLine.set(result.error || "Failed to save settings.");

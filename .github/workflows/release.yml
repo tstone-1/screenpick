@@ -106,10 +106,13 @@ jobs:
         with:
           toolchain: stable
 
+      # Restore only. This job runs on tags, which read their own tag and
+      # `main`, and no job on `main` saves under its key.
       - name: Cache cargo registry and target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri
+          save-if: false
 
       - name: Install JS deps
         run: npm ci
@@ -196,7 +199,8 @@ jobs:
             bundle: src-tauri/target/release/bundle
             machine: "0x8664"
           # Cross-compiled on the x64 runner: the image has the MSVC ARM64
-          # tools and the clang that `ring` needs for this target. Tauri's
+          # tools and the clang that `ring` needs for this target (built here
+          # since v26.10.4). Tauri's
           # NSIS installer does not refuse another architecture, so the
           # signature check below still installs it here and reads every file.
           - platform: windows-2025
@@ -251,11 +255,14 @@ jobs:
           toolchain: stable
           targets: ${{ matrix.rust-targets }}
 
+      # Restore only. A tag run reads its own tag and `main`, and no job on
+      # `main` saves under this key, so a save was about 624 MB never read.
       - name: Cache cargo registry and target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri
           key: ${{ matrix.label }}
+          save-if: false
 
       - name: Install JS deps
         run: npm ci

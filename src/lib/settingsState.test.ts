@@ -291,6 +291,76 @@ describe("blur commits the recorded shortcut", () => {
   });
 });
 
+// Removing every row of a mode stores `[]`, a deliberately disabled mode. A
+// blank row added afterwards is all-blank, which the sanitizers drop as an
+// absent override - and an absent override means the mode's default global
+// shortcuts. So the blank row must reach storage as `[]` again, on every save
+// path, while staying visible as the placeholder it is.
+describe("a disabled mode with a blank row", () => {
+  async function disabledWindowWithBlankRow(): Promise<InstanceType<typeof SettingsState>> {
+    settingsHolder.current = { ...settingsHolder.current, shortcutOverrides: { window: [] } };
+    const s = loadedSettings();
+    s.adoptStoredSettings(settingsHolder.current);
+    s.addShortcutEntry("window");
+    return s;
+  }
+
+  it("a blank row added to a disabled mode does not bring the defaults back", async () => {
+    const s = await disabledWindowWithBlankRow();
+    await s.beginShortcutRecording();
+    await s.endShortcutRecording();
+
+    // Nothing changed in stored form, so the blur only resumes.
+    expect(commandsMock.updateSettings).not.toHaveBeenCalled();
+    expect(commandsMock.resumeShortcuts).toHaveBeenCalledTimes(1);
+    expect(settingsHolder.current.shortcutOverrides?.window).toEqual([]);
+    expect(s.getModeAccelerators("window")).toEqual([""]);
+  });
+
+  it("a toggle with a blank row in a disabled mode keeps the mode disabled", async () => {
+    const s = await disabledWindowWithBlankRow();
+    await s.toggleSetting("copyToClipboard");
+
+    expect(commandsMock.updateSettings).toHaveBeenCalledTimes(1);
+    expect(settingsHolder.current.copyToClipboard).toBe(true);
+    expect(settingsHolder.current.shortcutOverrides?.window).toEqual([]);
+    expect(s.getModeAccelerators("window")).toEqual([""]);
+  });
+
+  it("picking a save folder with a blank row in a disabled mode keeps the mode disabled", async () => {
+    const { pickDirectory } = await import("./editorCommands");
+    vi.mocked(pickDirectory).mockResolvedValueOnce("/picked/captures");
+    const s = await disabledWindowWithBlankRow();
+    await s.pickSaveDirectory();
+
+    expect(commandsMock.updateSettings).toHaveBeenCalledTimes(1);
+    expect(settingsHolder.current.saveDirectory).toBe("/picked/captures");
+    expect(settingsHolder.current.shortcutOverrides?.window).toEqual([]);
+    expect(s.getModeAccelerators("window")).toEqual([""]);
+  });
+
+  it("a chord recorded into that blank row is stored", async () => {
+    const s = await disabledWindowWithBlankRow();
+    await s.beginShortcutRecording();
+    s.setShortcutEntry("window", 0, "CommandOrControl+Shift+G");
+    await s.endShortcutRecording();
+
+    expect(settingsHolder.current.shortcutOverrides?.window).toEqual(["CommandOrControl+Shift+G"]);
+  });
+
+  it("a blank row in a mode with no stored override still stores no key", async () => {
+    settingsHolder.current = { ...settingsHolder.current, shortcutOverrides: {} };
+    const s = loadedSettings();
+    s.adoptStoredSettings(settingsHolder.current);
+    s.shortcutEditorDrafts = { window: [""] };
+    s.settings = { ...s.settings, shortcutOverrides: { window: [""] } };
+    await s.toggleSetting("copyToClipboard");
+
+    expect(commandsMock.updateSettings).toHaveBeenCalledTimes(1);
+    expect(settingsHolder.current.shortcutOverrides).toEqual({});
+  });
+});
+
 describe("shortcutRowState", () => {
   it("reports the registration state of a committed row", () => {
     const s = newSettings();

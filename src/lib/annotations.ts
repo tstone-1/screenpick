@@ -16,6 +16,11 @@ export type Point = {
   y: number;
 };
 
+export type SampledColor = {
+  point: Point;
+  color: string;
+};
+
 export type PenStroke = {
   kind: "pen";
   id: number;
@@ -352,6 +357,27 @@ export function deserializeAnnotationLayer(json: string): StoredAnnotationLayer 
     }
   }
   return { annotations: [], baseFile: null };
+}
+
+// How many entries the stored layer holds before validation, or null when the
+// text is not a layer at all (invalid JSON, or neither on-disk shape).
+// `deserializeAnnotationLayer` answers both cases, and a layer whose entries
+// all failed validation, with the same empty result as a layer that really is
+// empty; the caller compares this count with what survived so that it can log
+// the difference.
+export function storedAnnotationEntryCount(json: string): number | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  if (Array.isArray(parsed)) return parsed.length;
+  if (typeof parsed === "object" && parsed !== null) {
+    const entries = (parsed as Record<string, unknown>).annotations;
+    if (Array.isArray(entries)) return entries.length;
+  }
+  return null;
 }
 
 function validAnnotationsIn(entries: unknown[]): Annotation[] {

@@ -85,8 +85,10 @@ describe("windows signing configuration", () => {
     expect(new Set(revisions).size).toBe(1);
   });
 
-  it("pins every action in the workflows that get the signing login to a full commit SHA", () => {
-    for (const workflow of workflows) {
+  // CI is pinned too: a green CI run on the tagged commit lets the release
+  // skip its own tests, so CI decides what a release has been tested with.
+  it("pins every action in the signing workflows and in CI to a full commit SHA", () => {
+    for (const workflow of [...workflows, ".github/workflows/ci.yml"]) {
       const uses = read(workflow)
         .split(/\r?\n/)
         .filter((line) => /^\s*(- )?uses:/.test(line))

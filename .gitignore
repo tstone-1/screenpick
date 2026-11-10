@@ -12,3 +12,4 @@ vite.config.ts.timestamp-*
 tauri-dev*.log
 .aider*
 docs/reviews/*.md
+AGENTS.local.md

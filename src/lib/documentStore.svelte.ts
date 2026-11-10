@@ -18,6 +18,7 @@ import { renderFlattenedPng } from "./annotationRendering";
 import {
   annotationLayerForBase,
   deserializeAnnotationLayer,
+  storedAnnotationEntryCount,
   serializeAnnotations,
   type Annotation,
   type CropRect
@@ -564,6 +565,22 @@ export class DocumentStore {
               `${droppedFrom}, but the document now holds ${baseFileNameOf(record.basePath)}. ` +
               "The screenshot itself is intact; its annotations could not be placed and were dropped."
           );
+        } else {
+          // A layer that cannot be read, or entries that fail validation,
+          // restore as fewer annotations than were stored. Without this line
+          // that loss looks the same as a document that never had any.
+          const stored = storedAnnotationEntryCount(record.annotations);
+          if (stored === null) {
+            logError(
+              `The annotation layer of document ${record.id} could not be read ` +
+                `(${record.annotations.length} characters); it was restored without annotations.`
+            );
+          } else if (stored > annotations.length) {
+            logError(
+              `Document ${record.id}: ${stored - annotations.length} of ${stored} stored annotations ` +
+                "were invalid and were not restored."
+            );
+          }
         }
         this.seedAnnotations(record.id, annotations);
         return this.recentFromRecord(record);

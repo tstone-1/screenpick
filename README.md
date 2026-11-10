@@ -37,7 +37,7 @@ Download the latest installer from the
   (Snapdragon and similar) take `ScreenPick_<version>_arm64-setup.exe`
   instead. The x64 build also runs there, emulated. An installed copy keeps
   updating to the architecture it was installed with; to switch, install the
-  other `-setup.exe`.
+  other `-setup.exe` (not yet tried over an existing copy).
 
 The `.sig`, `.tar.gz` and `latest.json` files beside them belong to the built-in
 updater; you do not need them. There is no `.msi` any more: if you installed
@@ -208,7 +208,7 @@ Where the program is:
 
 ## Build from source
 
-Prerequisites: [Node.js](https://nodejs.org/) 24+ (with npm) and the
+Prerequisites: [Node.js](https://nodejs.org/) 26+ (with npm) and the
 [Rust toolchain](https://www.rust-lang.org/tools/install) via `rustup`, plus your
 platform's [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
 

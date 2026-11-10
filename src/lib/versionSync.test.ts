@@ -46,3 +46,17 @@ describe("version of record", () => {
     });
   });
 });
+
+// The README's build prerequisite lagged the Node major in `.nvmrc` once
+// (24+ against 26), so a build from source on the old major got an engines
+// warning. The README number is prose, so nothing else would catch it.
+describe("Node.js prerequisite", () => {
+  it("names the major in .nvmrc in the README's build prerequisites", () => {
+    const nvmrc = read(".nvmrc").trim();
+    expect(nvmrc, ".nvmrc").toMatch(/^\d+$/);
+    const readme = /^Prerequisites: \[Node\.js\]\([^)]*\) (\d+)\+/m.exec(read("README.md"))?.[1];
+    // Without a match the comparison below would compare nothing.
+    expect(readme, "README.md Node.js prerequisite").toBeDefined();
+    expect(readme).toBe(nvmrc);
+  });
+});

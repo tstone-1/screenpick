@@ -128,7 +128,9 @@
     if (editor.activeTool === "text") {
       const hadTextDraft = !!editor.textDraft;
       editor.startTextDraft(event);
-      ignoreNextTextBlur = hadTextDraft && !!editor.textDraft;
+      // Only a left press places a new draft (startTextDraft ignores the
+      // others), so only then is the old draft's blur already handled.
+      ignoreNextTextBlur = event.button === 0 && hadTextDraft && !!editor.textDraft;
       return;
     }
     if (editor.activeTool === "color") {

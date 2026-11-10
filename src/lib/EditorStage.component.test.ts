@@ -9,6 +9,7 @@
 // mechanism referenced in the review; Vitest 5 keeps the docblock).
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/svelte";
+import { tick } from "svelte";
 
 import EditorStage from "./EditorStage.svelte";
 import { editor, type RecentCapture } from "./editor.svelte";
@@ -119,5 +120,28 @@ describe("EditorStage", () => {
     expect(editor.annotations).toHaveLength(1);
     expect(editor.annotations[0]?.kind).toBe("pen");
     expect(editor.activeTool).toBe("pen");
+  });
+
+  // Only a left press places a new draft, so only a left press may swallow the
+  // blur of the old one. A right press leaves the draft where it is, and its
+  // blur has to commit it.
+  it("commits an open text draft when a right press on the canvas blurs it", async () => {
+    editor.activeTool = "text";
+    const { container } = render(EditorStage);
+    const frame = container.querySelector(".image-frame")!;
+
+    frame.dispatchEvent(pointerEvent("pointerdown", { clientX: 20, clientY: 20 }));
+    expect(editor.textDraft).not.toBeNull();
+    editor.textDraft!.text = "Hello";
+    await tick();
+    const input = container.querySelector<HTMLInputElement>(".text-draft-input");
+    expect(input).not.toBeNull();
+
+    frame.dispatchEvent(pointerEvent("pointerdown", { clientX: 60, clientY: 60, button: 2 }));
+    input!.dispatchEvent(new FocusEvent("blur"));
+
+    expect(editor.textDraft).toBeNull();
+    expect(editor.annotations).toHaveLength(1);
+    expect(editor.annotations[0]).toMatchObject({ kind: "text", text: "Hello" });
   });
 });

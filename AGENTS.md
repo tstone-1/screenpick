@@ -144,6 +144,8 @@ ScreenPick is an open-source cross-platform screenshot, annotation, and screen u
   two local-build gotchas: run `npm ci` first, and on Windows close every running
   ScreenPick instance before `npx tauri build` (a live process locks
   `target\release\screenpick.exe`; the failure only surfaces after the full compile).
+- The maintainer's custody notes for the signing material and the export
+  commands live in the untracked, gitignored `AGENTS.local.md` at the repo root.
 - **Windows HDR capture:** `capture_backend` routes advanced-color displays
   through `windows_capture` (float scRGB WGC), normalizes by the target display's
   live `DISPLAYCONFIG_SDR_WHITE_LEVEL / 1000`, then encodes sRGB. xcap's 8-bit
@@ -169,7 +171,7 @@ ScreenPick is an open-source cross-platform screenshot, annotation, and screen u
   GPU-composited window (Task Manager, Settings); this is how the v26.6.23
   blank-capture fix was confirmed.
 - **The updater's minisign private key is the most safety-critical secret here.**
-  It lives in KeePass and in the `TAURI_SIGNING_PRIVATE_KEY` /
+  It lives in the maintainer's own key store and in the `TAURI_SIGNING_PRIVATE_KEY` /
   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` repo secrets; the public key is committed
   in `tauri.conf.json`. Losing it permanently orphans every installed copy — a
   new key cannot sign for clients holding the old public key, so each user would
@@ -231,8 +233,12 @@ ScreenPick is an open-source cross-platform screenshot, annotation, and screen u
   that target. A `--target` that silently did not apply would publish an x64
   binary under the ARM64 key, which is why the release reads the PE machine
   type of the installed `screenpick.exe`, and the manifest job checks that
-  each key points at its own architecture's installer. No test runs natively
-  on ARM64, and the ARM64 leg has not yet run: the first rc tag is its test.
+  each key points at its own architecture's installer. The ARM64 leg has built,
+  signed and published since 26.10.4 (2026-10-17; also 26.11.0): its log reads
+  `screenpick.exe machine type: 0xAA64`, and `latest.json` points
+  `windows-aarch64` at the `_arm64-setup.exe`. No test runs natively on
+  ARM64, nobody has installed it on an ARM PC, and installing the ARM64 setup
+  over an x64 copy is untried.
 - **The release matrix must stay `max-parallel: 1`.** `tauri-action` builds
   `latest.json` by read-modify-write against the release asset, so parallel legs
   can clobber each other's platform entries and produce a manifest that updates
@@ -325,6 +331,24 @@ ScreenPick is an open-source cross-platform screenshot, annotation, and screen u
   A valid index can be a replacement written after corruption recovery, so its
   omission of an old folder never proves that deleting the folder is safe.
   Recovery tests must span corruption, a new capture, and a later startup.
+
+- **A base raster is flushed before the manifest names it, and old base files
+  are pruned only behind a readable PNG.** `replace_document_base` and
+  `create_document` copy through `document_store::copy_synced`; the manifest
+  write is durable, so a plain `fs::copy` before it could leave the manifest
+  pointing at a file with its length and no data after a power loss.
+  `prune_stale_base_files` deletes nothing unless the kept file starts with
+  the PNG signature, because the older base is then the only intact raster.
+  A test fixture for the prune needs that signature on the kept file.
+
+- **A shortcut override of `[]` means "this mode is disabled"; an absent key
+  means "use the defaults".** Both sanitizers drop a mode whose entries are all
+  blank, which turns the first into the second. The settings state therefore
+  sends and compares overrides through `#overridesToStore`, which keeps `[]`
+  for a disabled mode whose draft holds only placeholder rows. Any new save
+  path must go through it. A test for this area has to start from a stored
+  `[]`: until 26.11.1 every test started from a mode with a chord, and a blank
+  row in a disabled mode re-registered its default global shortcuts.
 
 ## Command line
 

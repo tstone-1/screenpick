@@ -87,4 +87,28 @@ describe("copying a large selection", () => {
     expect(state.annotations).toHaveLength(1);
     expect(state.historyPast).toEqual([]);
   });
+
+  // After a cut the document also holds the cover over the cut area, so the
+  // paste-back has to fit next to that cover, not only next to what was there.
+  it("counts the cover of the cut when asking whether the paste-back fits", async () => {
+    const limit = 8 * 1024 * 1024 - 1024;
+    const selection = "data:image/png;base64," + "AAAA".repeat(1024);
+    const existingRect = { x: 100, y: 100, width: 20, height: 20 };
+    const sizeWithoutCover = (existing: string) =>
+      JSON.stringify([
+        { kind: "image", id: 1, rect: existingRect, dataUrl: existing },
+        { kind: "image", id: 2, rect, dataUrl: selection }
+      ]).length;
+    const existing = "A".repeat(limit - 40 - sizeWithoutCover(""));
+    // Control: without the cover, selection and existing image fit together.
+    expect(sizeWithoutCover(existing)).toBeLessThan(limit);
+    vi.mocked(renderSelectionPng).mockResolvedValue(selection);
+    const state = setup();
+    state.annotations = [{ kind: "image", id: 1, rect: existingRect, dataUrl: existing }];
+
+    expect(await state.copyRegion(true)).toContain("too large to cut");
+
+    expect(state.annotations).toHaveLength(1);
+    expect(state.historyPast).toEqual([]);
+  });
 });

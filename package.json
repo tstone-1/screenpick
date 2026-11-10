@@ -1,6 +1,6 @@
 {
   "name": "screenpick",
-  "version": "26.11.0",
+  "version": "26.11.1",
   "description": "Cross-platform screenshot and annotation tool for macOS and Windows.",
   "type": "module",
   "imports": {
@@ -43,7 +43,7 @@
     "@testing-library/svelte": "^5.4.2",
     "@types/node": "^26.6.6",
     "@typescript/native": "npm:typescript@^7.0.2",
-    "jsdom": "^30.0.1",
+    "jsdom": "^31.0.0",
     "svelte": "^5.57.0",
     "svelte-check": "^4.7.6",
     "typescript": "^6.0.3",

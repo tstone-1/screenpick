@@ -110,12 +110,56 @@ pub(crate) fn new_base_file_name(now_ms: u64, seq: u64) -> String {
     format!("base-{now_ms}-{seq}.png")
 }
 
+/// Longest document title the store keeps, in characters. Titles are short
+/// labels ("Region - Display"); the cap keeps a runaway value from growing the
+/// manifest toward the read-side ceiling in `MAX_MANIFEST_BYTES`.
+const MAX_TITLE_CHARS: usize = 256;
+
+/// `title` cut to `MAX_TITLE_CHARS` characters, on a character boundary.
+pub(crate) fn clamp_title(mut title: String) -> String {
+    if let Some((cut, _)) = title.char_indices().nth(MAX_TITLE_CHARS) {
+        title.truncate(cut);
+    }
+    title
+}
+
+/// Copy `src` to `dst` and flush `dst` to disk before returning. A plain
+/// `fs::copy` can report success while the data is still only in the cache, and
+/// the manifest that names the copy is written durably right after it.
+/// Opened for writing because Windows refuses to flush a read-only handle.
+pub(crate) fn copy_synced(src: &Path, dst: &Path) -> std::io::Result<()> {
+    fs::copy(src, dst)?;
+    fs::OpenOptions::new().write(true).open(dst)?.sync_all()
+}
+
+const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+
+/// Whether `path` is a non-empty file that starts with the PNG signature.
+fn starts_with_png_signature(path: &Path) -> bool {
+    use std::io::Read;
+    let mut head = [0u8; 8];
+    fs::File::open(path)
+        .and_then(|mut file| file.read_exact(&mut head))
+        .is_ok_and(|()| &head == PNG_SIGNATURE)
+}
+
 /// Delete superseded base rasters (`base.png` / `base-*.png` other than `keep`)
 /// from a document folder. Only safe when no editor session holds undo history
 /// into this document — i.e. at restore time, before the document is opened.
 /// Best-effort: a file that can't be removed is left behind (it costs disk, not
 /// correctness) and logged at `warn`.
+///
+/// Nothing is pruned unless `keep` is a readable PNG: after a power loss the
+/// manifest can name a base file that has its length but no data, and the
+/// older base files are then the only raster the document still has.
 pub(crate) fn prune_stale_base_files(dir: &Path, keep: &str) {
+    if !starts_with_png_signature(&dir.join(keep)) {
+        log::warn!(
+            "current base raster {keep} in {} is not a readable PNG; keeping older base files",
+            dir.display()
+        );
+        return;
+    }
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
@@ -565,6 +609,8 @@ mod tests {
         ] {
             fs::write(dir.join(name), b"x").unwrap();
         }
+        // The kept base must be a PNG, or the prune keeps everything.
+        fs::write(dir.join("base-2-1.png"), png_bytes()).unwrap();
 
         prune_stale_base_files(&dir, "base-2-1.png");
 
@@ -575,6 +621,84 @@ mod tests {
         assert!(dir.join("annotations.json").exists());
 
         fs::remove_dir_all(&dir).ok();
+    }
+
+    fn png_bytes() -> Vec<u8> {
+        let mut bytes = PNG_SIGNATURE.to_vec();
+        bytes.extend_from_slice(b"rest of the image");
+        bytes
+    }
+
+    // After a power loss the manifest can name a base file that has its length
+    // and no data. The previous base is then the only intact raster.
+    #[test]
+    fn a_base_that_is_not_a_png_keeps_its_predecessors() {
+        let dir = temp_dir_for("prune-not-png");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("base.png"), png_bytes()).unwrap();
+        fs::write(dir.join("base-2-1.png"), vec![0u8; 4096]).unwrap();
+
+        prune_stale_base_files(&dir, "base-2-1.png");
+
+        assert_eq!(fs::read(dir.join("base.png")).unwrap(), png_bytes());
+        assert!(dir.join("base-2-1.png").exists());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_base_that_is_a_png_prunes_its_predecessors() {
+        let dir = temp_dir_for("prune-png");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("base.png"), png_bytes()).unwrap();
+        fs::write(dir.join("base-2-1.png"), png_bytes()).unwrap();
+
+        prune_stale_base_files(&dir, "base-2-1.png");
+
+        assert!(!dir.join("base.png").exists());
+        assert!(dir.join("base-2-1.png").exists());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    // An empty or missing kept base is the same case as a zero-filled one.
+    #[test]
+    fn an_empty_or_missing_base_keeps_its_predecessors() {
+        let dir = temp_dir_for("prune-empty");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("base.png"), png_bytes()).unwrap();
+        fs::write(dir.join("base-2-1.png"), b"").unwrap();
+
+        prune_stale_base_files(&dir, "base-2-1.png");
+        prune_stale_base_files(&dir, "base-3-1.png");
+
+        assert!(dir.join("base.png").exists());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn copy_synced_copies_the_bytes() {
+        let dir = temp_dir_for("copy-synced");
+        fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("source.png");
+        fs::write(&src, png_bytes()).unwrap();
+
+        copy_synced(&src, &dir.join("base.png")).unwrap();
+
+        assert_eq!(fs::read(dir.join("base.png")).unwrap(), png_bytes());
+        assert!(copy_synced(&dir.join("missing.png"), &dir.join("other.png")).is_err());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    // Multi-byte characters: a byte-index cut could split one and panic.
+    #[test]
+    fn clamp_title_cuts_long_titles_on_a_character_boundary() {
+        let long = "\u{00e4}\u{00d7}".repeat(MAX_TITLE_CHARS);
+        let clamped = clamp_title(long.clone());
+        assert_eq!(clamped.chars().count(), MAX_TITLE_CHARS);
+        assert!(long.starts_with(&clamped));
+
+        let exact = "\u{00e4}".repeat(MAX_TITLE_CHARS);
+        assert_eq!(clamp_title(exact.clone()), exact);
+        assert_eq!(clamp_title("Region - Display".into()), "Region - Display");
     }
 
     fn names(values: &[&str]) -> Vec<String> {

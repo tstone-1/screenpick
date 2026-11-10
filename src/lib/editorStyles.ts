@@ -1,5 +1,4 @@
-import type { AnnotationBounds, CropRect } from "./annotations";
-import type { SampledColor } from "./editor.svelte";
+import type { AnnotationBounds, CropRect, SampledColor } from "./annotations";
 
 // Pure inline-style helpers consumed by EditorStage.svelte. Lives outside
 // editor.svelte.ts because these are presentation-only (build a CSS string

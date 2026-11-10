@@ -157,6 +157,16 @@ export function acceleratorMatches(
   );
 }
 
+// A bare Backspace or Delete clears the shortcut row being recorded. With a
+// modifier held the press is a chord instead, so `Ctrl+Delete` can be recorded
+// like any other allow-listed key.
+export function clearsShortcutRow(
+  event: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey">
+): boolean {
+  if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return false;
+  return event.key === "Backspace" || event.key === "Delete";
+}
+
 // Build an accelerator string from a recorded keydown, or null when the event
 // is a modifier-only press or an unbindable key — letting the caller keep
 // waiting for a complete chord. `isMac` controls which physical modifier maps

@@ -40,8 +40,9 @@ ScreenPick is a Tauri 2 (Rust) + Svelte 5 / SvelteKit 3 (TypeScript) desktop app
   "MSVC C++ ARM64 build tools", and LLVM, with `clang` on `PATH`: `ring`, from
   the updater's TLS stack, compiles its assembly with clang for this target and
   fails with `failed to find tool "clang"` without it. The release
-  leg relies on the `windows-2025` runner image having all three; the first
-  release with the ARM64 leg confirms it.
+  leg relies on the `windows-2025` runner image having all three, and it has
+  built there since 26.10.4 (see
+  [What has been seen and what has not](#what-has-been-seen-and-what-has-not)).
 
 ## Development
 
@@ -122,14 +123,15 @@ format). Clients verify it against `plugins.updater.pubkey` in
 Windows code signing and is *not* fixed by adding a Developer ID or an
 Authenticode certificate.
 
-- **Private key + password: KeePass**, and mirrored into the repo secrets
+- **Private key + password:** kept outside CI by the maintainer (where is in
+  the maintainer's private notes), and mirrored into the repo secrets
   `TAURI_SIGNING_PRIVATE_KEY` (the key file's **contents**) and
   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
 - **Public key: committed** in `tauri.conf.json`. Public by design.
 - **Losing the private key permanently orphans the installed base.** A new key
   cannot sign for clients that already hold the old public key, so every
   existing user would have to find and reinstall ScreenPick by hand. There is
-  no recovery path. Keep the KeePass database backed up.
+  no recovery path. Keep the storage that holds it backed up.
 
 Regenerating (only ever for a *new* app, never to "fix" a lost key):
 
@@ -168,7 +170,7 @@ Do this after any change to the updater wiring, and before trusting a release to
 reach real users. It exercises signature verification, download, in-place bundle
 replacement and relaunch without publishing anything or burning a tag.
 
-Use a **throwaway keypair** so the real private key never leaves KeePass/CI:
+Use a **throwaway keypair** so the real private key never leaves its storage and CI:
 
 ```sh
 SCRATCH=$(mktemp -d)
@@ -233,13 +235,13 @@ purpose, different failure mode. See [Updater signing key](#updater-signing-key)
 
 | Thing | Where it lives | Recoverable if lost? |
 |---|---|---|
-| Developer ID Application cert + private key | this Mac's login keychain; `.p12` export attached to a KeePass entry (authoritative), second copy in iCloud Drive → `Developer/signing/apple-developer-id-NVX72G8SJ8.p12` | Yes — revoke and reissue (limit 5) |
-| The `.p12` export password | the same KeePass entry as the `.p12`. Inside an encrypted vault that co-location is fine; **in iCloud it is not** — iCloud is not sole-custody storage, so the password must never sit there next to the file | No — without it the `.p12` is inert |
-| App Store Connect API key (`.p8`) | `~/.appstoreconnect/private_keys/`, KeePass attachment (it is an *unencrypted* private key — it does not go in iCloud) | Yes — revoke and generate another |
-| Key ID, Issuer ID, Team ID | KeePass | Yes — readable in the portal |
+| Developer ID Application cert + private key | maintainer's private notes | Yes - revoke and reissue (limit 5) |
+| The `.p12` export password | maintainer's private notes. Keep it in an encrypted vault, never in plain cloud storage next to the `.p12` | No - without it the `.p12` is inert |
+| App Store Connect API key (`.p8`) | maintainer's private notes (it is an *unencrypted* private key) | Yes - revoke and generate another |
+| Key ID, Issuer ID, Team ID | maintainer's private notes | Yes - readable in the portal |
 
-The identity in use is `Developer ID Application: Timo Stein (NVX72G8SJ8)`; Team ID
-`NVX72G8SJ8`, G2 sub-CA, **valid to 2031-07-26**.
+The certificate in use is issued under the G2 sub-CA and is **valid to
+2031-07-26**.
 
 On expiry — or if the key is ever compromised — repeat *Setup* for a new
 certificate and update `APPLE_CERTIFICATE` / `APPLE_CERTIFICATE_PASSWORD` /
@@ -311,45 +313,24 @@ answer **Always Allow**, or every subsequent build blocks on the same prompt
 
 ### Backing up the identity
 
-**The backup filename is deliberately team-scoped, not app-scoped.** A Developer
-ID Application certificate certifies the *team* (`NVX72G8SJ8`), never one app —
-the friendly name inside the `.p12` is plain "Timo Stein" — and this same file
-signs `dblitz` too. It was originally exported as `screenpick-devid.p12` and
-renamed 2026-07-25, once the second app started using it: an app-scoped name
-invites the next person to export a redundant second certificate against the
-account's limit of five.
+**Name the backup after the team, not after the app.** A Developer ID
+Application certificate certifies the *team*, never one app, and this same
+certificate signs `dblitz` too. An app-scoped name invites the next person to
+export a redundant second certificate against the account's limit of five.
 
-Export the identity to a `.p12` the moment it exists — a login keychain is one
-disk failure from costing a revoke-and-reissue cycle:
+Export the identity to a `.p12` the moment it exists: a login keychain is one
+disk failure from costing a revoke-and-reissue cycle. Then verify that the
+backup restores into a scratch keychain (`security import` into a new keychain,
+then `security find-identity` on it must list the identity with the same SHA-1),
+rather than trusting that a file appeared. The maintainer's export and restore
+commands are in the maintainer's private notes.
 
-```sh
-security export -k ~/Library/Keychains/login.keychain-db \
-  -t identities -f pkcs12 -P "$(pbpaste)" \
-  -o "$HOME/Library/Mobile Documents/com~apple~CloudDocs/Developer/signing/apple-developer-id-NVX72G8SJ8.p12"
-```
-
-Generate the export password in KeePass, copy it, and let `"$(pbpaste)"` expand
-it — the value never appears in the command text, shell history, or an agent
-transcript. Two traps around that:
-
-- **Omitting `-P` hangs forever without a TTY.** `security export` then wants to
-  prompt for the passphrase, and under an agent tool call or any non-interactive
-  shell there is no terminal to prompt on, so it blocks until killed. Same shape
-  as the `tauri signer generate` failure. Always pass `-P`.
-- **KeePass clears the clipboard ~12s after a copy**, which is shorter than a
-  copy-then-run round trip. Start the command *first* with a short poll loop
-  waiting for the clipboard to become non-empty, then copy — don't copy and then
-  go looking for the command.
-
-Verify the backup actually restores, rather than trusting that a file appeared:
-
-```sh
-KC=/tmp/verify.keychain
-security create-keychain -p "$(openssl rand -base64 24)" "$KC"
-security import <the>.p12 -k "$KC" -P "$(pbpaste)" -A
-security find-identity "$KC"        # must list the identity, same SHA-1
-security delete-keychain "$KC"
-```
+**Never type the export password into a command line or paste it into a tool
+call or a script.** Hand it over so that it never appears in the command text,
+shell history or a session log. And always pass the password option to
+`security export`: without it the command wants to prompt for the passphrase,
+and in any non-interactive shell there is no terminal to prompt on, so it
+blocks until killed. Same shape as the `tauri signer generate` failure.
 
 > **`openssl pkcs12` reports a valid Apple `.p12` as unopenable.** Apple encrypts
 > the cert bag with 40-bit RC2 (OID `1.2.840.113549.1.12.1.6`), which OpenSSL 3.x
@@ -359,8 +340,7 @@ security delete-keychain "$KC"
 > keychain-import check above, which is better evidence anyway since it exercises
 > the same Security framework path a real restore would.
 
-Then attach the `.p12` to the KeePass entry alongside its password, and clear the
-clipboard.
+Then store the `.p12` together with its password in an encrypted vault.
 
 ### Building signed locally
 
@@ -444,8 +424,8 @@ Six repo secrets, consumed by the macOS leg only:
 |---|---|
 | `APPLE_CERTIFICATE` | base64 of the `.p12` (`openssl base64 -A -in …`) |
 | `APPLE_CERTIFICATE_PASSWORD` | the `.p12` export password |
-| `APPLE_SIGNING_IDENTITY` | `Developer ID Application: Timo Stein (NVX72G8SJ8)` |
-| `APPLE_API_KEY` | the Key ID, `T87S5KZQ4J` |
+| `APPLE_SIGNING_IDENTITY` | the Developer ID Application identity string, `Developer ID Application: <Name> (TEAMID)` |
+| `APPLE_API_KEY` | the Key ID of the App Store Connect API key |
 | `APPLE_API_ISSUER` | the Issuer UUID |
 | `APPLE_API_KEY_P8` | the `.p8` contents; the workflow writes it to `$RUNNER_TEMP` and points `APPLE_API_KEY_PATH` at it |
 
@@ -485,13 +465,11 @@ while `security find-identity -v -p codesigning` still reports the identity as
 valid. It is not the certificate or the chain: it is the private key's ACL. The
 earlier successes came from an interactive "Allow" that does not persist, and a
 non-interactive shell has no TTY for the prompt to reappear on, so it fails hard
-instead of asking. Grant persistent access once:
-
-```sh
-security unlock-keychain ~/Library/Keychains/login.keychain-db
-security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
-  -k "$(pbpaste)" ~/Library/Keychains/login.keychain-db
-```
+instead of asking. Grant persistent access once, in an interactive terminal:
+unlock the login keychain with `security unlock-keychain`, then run
+`security set-key-partition-list -S apple-tool:,apple:,codesign: -s` on it,
+handing it the keychain password without typing it into the command line.
+The maintainer's form of the two commands is in the maintainer's private notes.
 
 **Ignore that command's exit code — judge it by a test signature.** It walks
 every key in the keychain and returns non-zero if any unrelated key fails, after
@@ -508,7 +486,7 @@ This does not affect CI, which builds in a fresh keychain each run.
 ## Windows code signing
 
 **Status: wired into `release.yml` on 2026-10-08 and rehearsed the same day,
-with `sign-rehearsal.yml` and with a full build from a rehearsal tag. 26.10.3,
+with `sign-rehearsal.yml` and with a full build from a rehearsal tag.** 26.10.3,
 published on 2026-10-09, is the first signed release; see *What has been seen
 and what has not* below.
 
@@ -556,12 +534,12 @@ The login is two secrets of the GitHub environment `signing`: `CERTUM_EMAIL`
 and `CERTUM_OTP_URI`, the whole `otpauth://` address Certum shows once, at
 activation. Keep the whole address and not only its `secret`: `ssign` reads
 `algorithm`, `digits` and `period` from it. The environment accepts the `main`
-branch and `v*` tags. Set a secret from the clipboard, so that the value is in
-no command line:
+branch and `v*` tags. Set each secret through stdin or the prompt of
+`gh secret set`, so that the value is in no command line:
 
 ```sh
-pbpaste | gh secret set CERTUM_EMAIL --env signing --repo tstone-1/screenpick
-pbpaste | gh secret set CERTUM_OTP_URI --env signing --repo tstone-1/screenpick
+gh secret set CERTUM_EMAIL --env signing --repo tstone-1/screenpick
+gh secret set CERTUM_OTP_URI --env signing --repo tstone-1/screenpick
 ```
 
 After the build the Windows leg reads the installer's signature back, installs
@@ -638,9 +616,12 @@ from how GitHub scopes a cache:
   rehearsal on `main`: `gh cache list --key ssign-` shows what is there and on
   which ref.
 
-The cargo cache of the release job (`Swatinem/rust-cache`) holds cargo's own
-folders and `src-tauri/target`. The client is not in either, and has to stay
-out of `~/.cargo/bin`, which that cache saves.
+The cargo cache of the release job (`Swatinem/rust-cache`) covers cargo's own
+folders and `src-tauri/target`. It restores only (`save-if: false`): a tag run
+reads caches of its own tag and `main`, and no job on `main` saves under its
+key, so each save uploaded about 624 MB that nothing read. The client is not
+in either folder, and has to stay out of `~/.cargo/bin`, which that cache
+covers.
 
 ### Four failures already paid for
 
@@ -756,7 +737,21 @@ Seen on 2026-10-09, at commit `f28abaa`:
   a minute after publishing: the redirect is cached. Wait and ask again before
   reading a stale version as a failed release.
 
-Not yet seen: the signed installer read on a Windows computer outside GitHub.
+Seen on 2026-10-17, at commit `1f2b3f1`, the first release with the ARM64 leg:
+
+- The tag `v26.10.4`, run 39035902994: the audit, the macOS leg, both Windows
+  legs and *Check the updater manifest* passed. The ARM64 leg was
+  cross-compiled on the x64 runner, signed, installed on the runner, read its
+  installer, `screenpick.exe` and `uninstall.exe` as valid, timestamped and by
+  the signer, and printed `screenpick.exe machine type: 0xAA64`. The release
+  was published with eight assets. The same held for `v26.11.0`, run
+  42004233887, on 2026-11-05, whose published `latest.json` points
+  `windows-aarch64` at the `_arm64-setup.exe` and `windows-x86_64` at the
+  `_x64-setup.exe`.
+
+Not yet seen: the signed installer read on a Windows computer outside GitHub;
+any test run natively on ARM64; the ARM64 build installed on an ARM PC; the
+ARM64 setup installed over an existing x64 copy.
 
 ## Release Procedure
 
@@ -823,8 +818,8 @@ entirely, and its clippy line lacked `--all-targets -- -D warnings`).
       `cfg(not(all(test, target_os = "windows")))` gate atop `src-tauri/src/lib.rs` for
       why it cannot run on Windows (a `cargo test` binary never gets the Windows GUI
       manifest `tauri_build` embeds into the real app, so the linked-in Tauri GUI stack
-      fails to even start the test process — verified, not a shortcut). Development
-      happens on Windows, where drift is structurally invisible, so the CI run is the
+      fails to even start the test process — verified, not a shortcut). A Windows
+      checkout cannot see drift at all, so for work done there the CI run is the
       only evidence there is: **do not tag on a red — or missing — macOS run.** A local
       Mac run is still the *regeneration* path after an IPC change: run
       `cargo test --manifest-path src-tauri/Cargo.toml export_typescript_bindings` with

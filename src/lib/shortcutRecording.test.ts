@@ -4,6 +4,7 @@ import {
   acceleratorFromKeyboardEvent,
   acceleratorKey,
   acceleratorMatches,
+  clearsShortcutRow,
   codeFromKeyToken,
   keyTokenFromCode
 } from "./shortcutRecording";
@@ -159,6 +160,37 @@ describe("acceleratorFromKeyboardEvent", () => {
     expect(acceleratorFromKeyboardEvent(ev("F1"), false)).toBe("F1");
     expect(acceleratorFromKeyboardEvent(ev("F24"), false)).toBe("F24");
     expect(acceleratorFromKeyboardEvent(ev("PrintScreen"), false)).toBe("PrintScreen");
+  });
+});
+
+describe("clearsShortcutRow", () => {
+  function keyEv(key: string, mods: Partial<KeyEventLike> = {}) {
+    return { key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...mods };
+  }
+
+  it("clears on a bare Backspace or Delete", () => {
+    expect(clearsShortcutRow(keyEv("Backspace"))).toBe(true);
+    expect(clearsShortcutRow(keyEv("Delete"))).toBe(true);
+  });
+
+  it.each(["ctrlKey", "metaKey", "altKey", "shiftKey"] as const)(
+    "does not clear on Delete with %s held, so the chord records",
+    (flag) => {
+      expect(clearsShortcutRow(keyEv("Delete", { [flag]: true }))).toBe(false);
+      expect(clearsShortcutRow(keyEv("Backspace", { [flag]: true }))).toBe(false);
+    }
+  );
+
+  it("records Ctrl+Delete as a chord", () => {
+    expect(clearsShortcutRow(keyEv("Delete", { ctrlKey: true }))).toBe(false);
+    expect(acceleratorFromKeyboardEvent(ev("Delete", { ctrlKey: true }), false)).toBe(
+      "CommandOrControl+Delete"
+    );
+  });
+
+  it("does not clear on other keys", () => {
+    expect(clearsShortcutRow(keyEv("a"))).toBe(false);
+    expect(clearsShortcutRow(keyEv("Escape"))).toBe(false);
   });
 });
 

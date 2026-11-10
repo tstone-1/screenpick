@@ -1,6 +1,7 @@
 //! The app's one atomic-write primitive. Pure (no `AppHandle`), so it sits in
 //! the ungated module group and is unit-tested on Windows like its siblings.
-//! The document store and the settings store both write through it.
+//! The document store, the settings store, the PNG export and the command-line
+//! capture all write through it.
 
 use std::{
     fs,
@@ -19,7 +20,9 @@ use std::{
 /// containing directory (see `sync_parent_dir`). The tmp file is removed on any
 /// failure so a write that doesn't complete doesn't litter the directory
 /// forever. This is the single atomic-write primitive for the app: the document
-/// store and settings.rs both call it rather than keeping their own copy.
+/// store, settings.rs, the PNG export and the CLI capture all call it rather
+/// than keeping their own copy. A bare file name is written in the current
+/// directory (see `parent_or_dot`).
 ///
 /// What a returned `Ok` guarantees after a power loss: the target holds either
 /// the complete new bytes or the complete previous ones, never a mix — that is
@@ -29,7 +32,7 @@ use std::{
 /// Windows the directory sync is skipped (see `sync_parent_dir`), so the
 /// torn-file guarantee holds there and the roll-back window does not close.
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let parent = parent_or_dot(path);
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -54,6 +57,16 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     }
     sync_parent_dir(parent);
     Ok(())
+}
+
+/// The directory `path` lives in. `Path::parent` returns an empty path, not
+/// `None`, for a bare file name such as `shot.png`, and an empty path cannot be
+/// opened for the directory sync, so both cases mean the current directory.
+fn parent_or_dot(path: &Path) -> &Path {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    }
 }
 
 /// Flush the directory entry the rename in `write_atomic` just created.
@@ -158,6 +171,20 @@ mod tests {
         assert_eq!(fs::read(&other_link).unwrap(), b"old");
 
         fs::remove_dir_all(&dir).ok();
+    }
+
+    // `screenpick capture screen -o shot.png` passes a bare name. The temp file
+    // and the directory sync must both use the current directory then, not an
+    // empty path. Tested on the helper so no test changes the working directory
+    // of the shared test process.
+    #[test]
+    fn a_bare_file_name_lives_in_the_current_directory() {
+        assert_eq!(parent_or_dot(Path::new("shot.png")), Path::new("."));
+        assert_eq!(parent_or_dot(Path::new("")), Path::new("."));
+        assert_eq!(
+            parent_or_dot(Path::new("out").join("shot.png").as_path()),
+            Path::new("out")
+        );
     }
 
     #[test]

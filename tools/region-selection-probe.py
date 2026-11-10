@@ -9,7 +9,7 @@ import os
 from playwright.sync_api import sync_playwright
 
 with sync_playwright() as p:
-    browser = p.chromium.launch()
+    browser = p.chromium.launch(chromium_sandbox=True)
     page = browser.new_page(viewport={"width": 1440, "height": 1000}, device_scale_factor=1)
     page.goto(os.environ.get('SCREENPICK_TEST_URL', 'http://127.0.0.1:1420/'))
     page.wait_for_selector('.canvas-stage')

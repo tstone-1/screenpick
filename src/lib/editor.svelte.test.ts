@@ -525,6 +525,29 @@ describe("EditorState", () => {
     expect(state.annotations).toEqual([arrow]);
   });
 
+  // A control that goes away with the selection may never fire its change or
+  // blur, so clearing the selection has to close the edit it left open.
+  it("clearSelection closes a held selection edit so the next edit gets its own undo step", () => {
+    const state = new EditorState();
+    const arrow = arrowAnnotation(1, { width: 2 });
+    state.openCapture(capture("/arrow-cleared-gesture.png"));
+    state.annotations = [arrow];
+    state.selectedAnnotationId = arrow.id;
+
+    state.beginSelectionEdit();
+    state.updateSelectedAnnotation({ width: 4 }, { commitHistory: false });
+    state.clearSelection();
+    state.selectedAnnotationId = arrow.id;
+    state.beginSelectionEdit();
+    state.updateSelectedAnnotation({ width: 6 }, { commitHistory: false });
+    state.endSelectionEdit();
+
+    expect(state.historyPast).toHaveLength(2);
+
+    state.undo();
+    expect((state.annotations[0] as ArrowAnnotation).width).toBe(4);
+  });
+
   it("reorders selected annotations within their layer", () => {
     const state = new EditorState();
     const a = shapeAnnotation(1);
@@ -1281,6 +1304,13 @@ describe("slugifyCaptureTitle", () => {
   it("does not touch names that merely contain a reserved word", () => {
     expect(slugifyCaptureTitle("Console Window")).toBe("console-window");
     expect(slugifyCaptureTitle("COM1 Settings")).toBe("com1-settings");
+  });
+
+  // Crop and cut titles carry the size as "100 × 80"; the sign is neither a
+  // letter nor a digit, so without mapping it the size digits run together.
+  it("keeps the multiplication sign of a size as an x", () => {
+    expect(slugifyCaptureTitle("Cut - 100 × 80")).toBe("cut-100-x-80");
+    expect(slugifyCaptureTitle("Cut - 100 x 80")).toBe("cut-100-x-80");
   });
 });
 

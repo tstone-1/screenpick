@@ -125,10 +125,17 @@ pub(crate) fn save_png_bytes_new(
     {
         Ok(mut file) => {
             use std::io::Write;
-            file.write_all(&bytes).map_err(|err| {
+            if let Err(err) = file.write_all(&bytes) {
                 log::error!("failed to write export to {dest_path}: {err}");
-                "Failed to write export file.".to_string()
-            })?;
+                // This call created the file, so a partial write is only ours
+                // to clean up. Close the handle first: Windows refuses to
+                // remove a file that is still open.
+                drop(file);
+                if let Err(remove_err) = fs::remove_file(&dest_path) {
+                    log::warn!("could not remove partial export {dest_path}: {remove_err}");
+                }
+                return Err("Failed to write export file.".to_string());
+            }
             Ok(true)
         }
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
@@ -852,7 +859,7 @@ fn capture_dir(app: &AppHandle) -> Result<PathBuf, String> {
 
     if let Some(Some(dir)) = settings.as_ref().map(|s| s.save_directory.as_ref()) {
         let home = app.path().home_dir().map_err(error_message)?;
-        return configured_capture_dir(dir, &home, |dir| {
+        return crate::capture_trust::configured_capture_dir(dir, &home, |dir| {
             crate::settings::validate_save_directory(app, Some(dir)).map(|_| ())
         });
     }
@@ -864,66 +871,6 @@ fn capture_dir(app: &AppHandle) -> Result<PathBuf, String> {
         .join("captures");
     fs::create_dir_all(&dir).map_err(error_message)?;
     Ok(dir)
-}
-
-/// The configured save folder, ready to write into. A folder that has gone
-/// missing since it was chosen (deleted, renamed back later, a fresh profile)
-/// is created again rather than failing every capture: validation resolves the
-/// path and so can only pass for a folder that exists, which is why the
-/// creation comes first.
-///
-/// Nothing is created outside the user profile. `validate` still has the last
-/// word on the folder afterwards, whether it was just created or was there.
-fn configured_capture_dir(
-    dir: &str,
-    home: &Path,
-    validate: impl FnOnce(&str) -> Result<(), String>,
-) -> Result<PathBuf, String> {
-    let path = PathBuf::from(dir);
-    if !path.is_dir() {
-        let create_err = if missing_dir_is_inside(&path, home) {
-            fs::create_dir_all(&path).err()
-        } else {
-            None
-        };
-        if !path.is_dir() {
-            return Err(match create_err {
-                Some(err) => format!("Configured save directory is not available: {dir} ({err})"),
-                None => format!("Configured save directory is not available: {dir}"),
-            });
-        }
-    }
-    validate(dir)?;
-    Ok(path)
-}
-
-/// Whether creating the missing `path` would put it strictly inside `home`.
-/// The part of `path` that exists is resolved, so a symlink on the way cannot
-/// lead outside; the part that does not exist yet must be plain names.
-fn missing_dir_is_inside(path: &Path, home: &Path) -> bool {
-    use std::path::Component;
-
-    if !path.is_absolute() {
-        return false;
-    }
-    let Ok(home) = home.canonicalize() else {
-        return false;
-    };
-    let Some(existing) = path.ancestors().find(|ancestor| ancestor.exists()) else {
-        return false;
-    };
-    let Ok(missing) = path.strip_prefix(existing) else {
-        return false;
-    };
-    if !missing
-        .components()
-        .all(|component| matches!(component, Component::Normal(_)))
-    {
-        return false;
-    }
-    existing
-        .canonicalize()
-        .is_ok_and(|existing| existing.starts_with(&home))
 }
 
 fn capture_path(app: &AppHandle, mode: &str) -> Result<PathBuf, String> {
@@ -1123,107 +1070,5 @@ mod tests {
     fn clipboard_dimension_guard_rejects_huge_decoded_images() {
         assert!(ensure_clipboard_dimensions_fit(60_000, 60_000).is_err());
         assert!(ensure_clipboard_dimensions_fit(100, 100).is_ok());
-    }
-}
-
-#[cfg(test)]
-mod configured_capture_dir_tests {
-    use super::configured_capture_dir;
-    use std::fs;
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
-
-    // A stand-in user profile. Label, pid and a counter, so parallel tests
-    // never share one.
-    fn temp_home(label: &str) -> PathBuf {
-        let home = std::env::temp_dir().join(format!(
-            "screenpick-capture-dir-test-{label}-{}-{}",
-            std::process::id(),
-            NEXT_DIR.fetch_add(1, Ordering::SeqCst)
-        ));
-        fs::create_dir_all(&home).unwrap();
-        home
-    }
-
-    #[test]
-    fn a_missing_folder_inside_the_profile_is_created_before_validation() {
-        let home = temp_home("recreate");
-        let dir = home.join("Pictures").join("Shots");
-        let dir_text = dir.to_str().unwrap();
-
-        // Validation resolves the path, so it can only pass for a folder that
-        // exists by the time it runs.
-        let result = configured_capture_dir(dir_text, &home, |dir| {
-            PathBuf::from(dir)
-                .canonicalize()
-                .map(|_| ())
-                .map_err(|_| "validated a folder that does not exist".to_string())
-        });
-
-        assert_eq!(result, Ok(dir.clone()));
-        assert!(dir.is_dir());
-        let _ = fs::remove_dir_all(&home);
-    }
-
-    #[test]
-    fn a_missing_folder_outside_the_profile_is_not_created() {
-        let home = temp_home("outside-home");
-        let elsewhere = temp_home("outside-target");
-        let dir = elsewhere.join("Shots");
-
-        let result = configured_capture_dir(dir.to_str().unwrap(), &home, |_| Ok(()));
-
-        assert!(result.unwrap_err().contains("is not available"));
-        assert!(!dir.exists());
-        let _ = fs::remove_dir_all(&home);
-        let _ = fs::remove_dir_all(&elsewhere);
-    }
-
-    #[test]
-    fn a_missing_folder_reached_through_parent_segments_is_not_created() {
-        let home = temp_home("dotdot-home");
-        let elsewhere = temp_home("dotdot-target");
-        let name = elsewhere.file_name().unwrap().to_str().unwrap().to_string();
-        // Spelled as a path under the profile that climbs back out of it.
-        let dir = home
-            .join("missing")
-            .join("..")
-            .join("..")
-            .join(&name)
-            .join("Shots");
-
-        let result = configured_capture_dir(dir.to_str().unwrap(), &home, |_| Ok(()));
-
-        assert!(result.is_err());
-        assert!(!elsewhere.join("Shots").exists());
-        let _ = fs::remove_dir_all(&home);
-        let _ = fs::remove_dir_all(&elsewhere);
-    }
-
-    #[test]
-    fn validation_still_decides_about_a_folder_that_exists() {
-        let home = temp_home("validate");
-        let dir = home.join("Shots");
-        fs::create_dir_all(&dir).unwrap();
-
-        let result =
-            configured_capture_dir(dir.to_str().unwrap(), &home, |_| Err("refused".to_string()));
-
-        assert_eq!(result, Err("refused".to_string()));
-        let _ = fs::remove_dir_all(&home);
-    }
-
-    #[test]
-    fn validation_still_decides_about_a_folder_that_was_just_created() {
-        let home = temp_home("validate-created");
-        let dir = home.join("Shots");
-
-        let result =
-            configured_capture_dir(dir.to_str().unwrap(), &home, |_| Err("refused".to_string()));
-
-        assert_eq!(result, Err("refused".to_string()));
-        let _ = fs::remove_dir_all(&home);
     }
 }

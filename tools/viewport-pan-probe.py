@@ -6,7 +6,7 @@ import os
 from playwright.sync_api import sync_playwright
 
 with sync_playwright() as p:
-    browser = p.chromium.launch()
+    browser = p.chromium.launch(chromium_sandbox=True)
     page = browser.new_page(viewport={"width": 1440, "height": 900})
     page.goto(os.environ.get('SCREENPICK_TEST_URL', 'http://localhost:1420/'))
     page.wait_for_selector('.canvas-stage')

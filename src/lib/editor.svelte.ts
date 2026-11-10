@@ -37,6 +37,7 @@ import {
   type ImageAnnotation,
   type PenStroke,
   type Point,
+  type SampledColor,
   type ShapeAnnotation,
   type ShapeKind,
   type TextAnnotation
@@ -139,11 +140,6 @@ export const ERASE_AREA_WIDTH_DEFAULT = 28;
 // Default solid color offered when the user switches the image eraser out of
 // transparent mode. Black is the conventional redaction fill.
 export const ERASE_AREA_COLOR_DEFAULT = "#000000";
-
-export type SampledColor = {
-  point: Point;
-  color: string;
-};
 
 type SampleCanvas = {
   canvas: HTMLCanvasElement;
@@ -1032,8 +1028,10 @@ export class EditorState {
       // not copying out, so the check comes after the clipboard write. A cut
       // would remove pixels that could then not be pasted back, so it asks the
       // same whole-document question pasteRegion does (#imageFits), not just
-      // whether the selection alone is small.
-      if (cut && !this.#imageFits({ kind: "image", id: this.#nextAnnotationId, rect, dataUrl })) {
+      // whether the selection alone is small. The paste-back lands next to the
+      // cover this cut adds, so the cover counts too.
+      const id = this.#nextAnnotationId;
+      if (cut && !this.#imageFits({ kind: "image", id, rect, dataUrl: null }, { kind: "image", id: id + 1, rect, dataUrl })) {
         return "Selection copied; it is too large to cut. Select a smaller area.";
       }
       if (cut) {
@@ -1057,8 +1055,8 @@ export class EditorState {
     }
   }
 
-  #imageFits(image: ImageAnnotation): boolean {
-    return new TextEncoder().encode(JSON.stringify([...this.annotations, image])).length < 8 * 1024 * 1024 - 1024;
+  #imageFits(...images: ImageAnnotation[]): boolean {
+    return new TextEncoder().encode(JSON.stringify([...this.annotations, ...images])).length < 8 * 1024 * 1024 - 1024;
   }
 
   pasteRegion(): string | null {
@@ -1754,6 +1752,9 @@ export class EditorState {
   }
 
   clearSelection() {
+    // A control removed with the selection may fire neither change nor blur,
+    // which would leave the edit open and merge the next one into its undo step.
+    this.endSelectionEdit();
     this.selectedAnnotationId = null;
     this.#endSelectionDrag();
   }
@@ -2094,8 +2095,8 @@ export class EditorState {
   // The crop/cut IPC already wrote its output file; a result dropped by the
   // generation check leaves it in the save folder with no other trace, and
   // files are never deleted here, so say where it is.
-  #discardStaleResult(path: string): null {
-    logWarn(`crop result discarded (document changed meanwhile): ${path}`);
+  #discardStaleResult(operation: "crop" | "cut", path: string): null {
+    logWarn(`${operation} result discarded (document changed meanwhile): ${path}`);
     return null;
   }
 
@@ -2121,7 +2122,7 @@ export class EditorState {
       if (result.status === "error") {
         return result.error || "Crop failed.";
       }
-      if (generation !== this.#documentGeneration) return this.#discardStaleResult(result.data.path);
+      if (generation !== this.#documentGeneration) return this.#discardStaleResult("crop", result.data.path);
       const survivors = cropAnnotations(
         this.annotations,
         cropX,
@@ -2136,7 +2137,7 @@ export class EditorState {
       await this.#settlePendingCreate(beforeCrop.document?.capture);
       // Re-checked after the awaits: the open document can be closed mid-crop.
       if (!this.document || generation !== this.#documentGeneration) {
-        return this.#discardStaleResult(result.data.path);
+        return this.#discardStaleResult("crop", result.data.path);
       }
       const capture = rebasedCapture(this.document.capture, result.data);
       this.historyPast = [...this.historyPast, beforeCrop].slice(-HISTORY_LIMIT);
@@ -2306,7 +2307,7 @@ export class EditorState {
       if (result.status === "error") {
         return result.error || "Cut failed.";
       }
-      if (generation !== this.#documentGeneration) return this.#discardStaleResult(result.data.path);
+      if (generation !== this.#documentGeneration) return this.#discardStaleResult("cut", result.data.path);
       const survivors = cutoutAnnotations(
         this.annotations,
         axis,
@@ -2332,7 +2333,7 @@ export class EditorState {
       // cannot match, and nothing would ever be written for it again.
       await this.#settlePendingCreate(beforeCut.document?.capture);
       if (!this.document || generation !== this.#documentGeneration) {
-        return this.#discardStaleResult(result.data.path);
+        return this.#discardStaleResult("cut", result.data.path);
       }
       const capture = rebasedCapture(this.document.capture, result.data);
       this.historyPast = [...this.historyPast, beforeCut].slice(-HISTORY_LIMIT);

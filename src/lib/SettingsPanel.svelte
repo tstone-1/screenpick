@@ -5,7 +5,7 @@
   // (and the quit button); everything the panel edits lives on `settingsStore`.
   import { capture, settingsStore } from "#lib/captureOrchestration.svelte.ts";
   import { unlockCaptureSound } from "#lib/captureSound.ts";
-  import { acceleratorFromKeyboardEvent } from "#lib/shortcutRecording.ts";
+  import { acceleratorFromKeyboardEvent, clearsShortcutRow } from "#lib/shortcutRecording.ts";
   import { update } from "#lib/updateState.svelte.ts";
 
   let recordingShortcut = $state<string | null>(null);
@@ -26,7 +26,7 @@
       (event.currentTarget as HTMLInputElement).blur();
       return;
     }
-    if (event.key === "Backspace" || event.key === "Delete") {
+    if (clearsShortcutRow(event)) {
       settingsStore.setShortcutEntry(modeId, index, "");
       return;
     }

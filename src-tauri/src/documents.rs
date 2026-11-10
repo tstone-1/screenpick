@@ -267,16 +267,16 @@ pub(crate) fn create_document(
     fs::create_dir_all(&dir).map_err(error_message)?;
 
     let base = dir.join("base.png");
-    fs::copy(&canonical_source, &base).map_err(error_message)?;
+    document_store::copy_synced(&canonical_source, &base).map_err(error_message)?;
     // current.png starts identical to the base — no annotations yet.
-    fs::copy(&base, dir.join("current.png")).map_err(error_message)?;
+    document_store::copy_synced(&base, &dir.join("current.png")).map_err(error_message)?;
     write_atomic(&dir.join("annotations.json"), b"[]")?;
 
     let now = now_millis();
     let meta = DocumentMeta {
         id,
         mode,
-        title,
+        title: document_store::clamp_title(title),
         width,
         height,
         created_at: now,
@@ -324,7 +324,9 @@ pub(crate) fn replace_document_base(
         now_millis(),
         NEXT_DOC_SEQ.fetch_add(1, Ordering::SeqCst),
     );
-    fs::copy(&canonical_source, dir.join(&base_file)).map_err(error_message)?;
+    // Flushed before the manifest names it: a manifest that survives a power
+    // loss must not point at a base file that did not.
+    document_store::copy_synced(&canonical_source, &dir.join(&base_file)).map_err(error_message)?;
 
     let guard = MANIFEST_LOCK
         .lock()
@@ -334,7 +336,7 @@ pub(crate) fn replace_document_base(
         .iter_mut()
         .find(|meta| meta.id == id)
         .ok_or_else(|| "Document not found.".to_string())?;
-    meta.title = title;
+    meta.title = document_store::clamp_title(title);
     meta.width = width;
     meta.height = height;
     meta.updated_at = now_millis();
@@ -401,15 +403,21 @@ pub(crate) fn save_document(
 #[specta::specta]
 pub(crate) fn delete_document(app: AppHandle, id: String) -> Result<(), String> {
     let dir = doc_dir(&app, &id)?;
+    // The manifest entry goes first. A folder that then cannot be removed in
+    // full is unindexed, and the startup sweep moves it to `recovered/`; the
+    // other order left an indexed entry pointing at a half-deleted folder.
+    {
+        let _guard = MANIFEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut manifest = read_manifest(&app);
+        manifest.retain(|meta| meta.id != id);
+        write_manifest(&app, &manifest)?;
+    }
     if dir.is_dir() {
         fs::remove_dir_all(&dir).map_err(error_message)?;
     }
-    let _guard = MANIFEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let mut manifest = read_manifest(&app);
-    manifest.retain(|meta| meta.id != id);
-    write_manifest(&app, &manifest)
+    Ok(())
 }
 
 #[cfg(test)]

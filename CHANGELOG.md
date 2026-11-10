@@ -6,6 +6,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [CalVer](https://calver.org/) `YY.M.MICRO` versioning
 (see [BUILD.md](BUILD.md#version-management)).
 
+## [26.11.1] - 2026-11-10
+
+### Fixed
+
+- Adding an empty shortcut row to a capture mode whose shortcuts you had all
+  removed no longer turns that mode's default global shortcuts back on.
+  Neither does changing a setting while that empty row is shown.
+- After a power cut shortly after a crop or cut, the next start could delete
+  the document's previous image and leave a document with no readable image.
+  The new image is now written to disk before the document points at it, and
+  older images are only removed once the current one reads as a valid PNG.
+- Closing a document whose folder could not be fully deleted left it
+  half-deleted and still indexed. Its entry is now removed first, and whatever
+  stays behind is moved to `documents/recovered` at the next start.
+- A "Save N images as..." export that failed partway through writing a file no
+  longer leaves a broken PNG under the export name.
+- `screenpick capture ... -o shot.png` with a bare file name now also flushes
+  the folder entry, so a power cut right after the capture cannot lose the new
+  file's name.
+- Shortcuts that use Delete with a modifier, such as Ctrl+Delete, can now be
+  recorded. A plain Backspace or Delete still clears the field.
+- Undo no longer reverts two property edits at once when the selection was
+  cleared while a slider or colour edit was still held.
+- A right-click on the canvas while typing a text annotation no longer leaves
+  the text unfocused and uncommitted.
+- Crop and cut screenshots again get filenames with the size separated, such
+  as `cut-100-x-80.png`; since 26.11.0 they came out as `cut-100-80.png`.
+- A cut is refused when pasting the cut area back would not fit next to the
+  cover the cut leaves behind.
+- The diagnostic log now names a document whose annotations could not be read
+  or were partly invalid at startup, and says "cut" rather than "crop" when a
+  cut result is discarded.
+
+### Changed
+
+- Building from source needs Node.js 26 or newer. The requirement moved with
+  26.11.0; the README still said 24.
+- Document titles are limited to 256 characters.
+- CI pins GitHub's own actions by commit, as the release workflows do, and the
+  release build no longer uploads a Rust build cache that no later run could
+  read.
+- Updated frontend and Rust dependencies within their ranges, including Vite
+  8.3.7, wry 0.57.2 and zip 9.5.0. The test environment moves to jsdom 31.
+
 ## [26.11.0] - 2026-11-05
 
 ### Added
