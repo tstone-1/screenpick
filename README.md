@@ -15,6 +15,9 @@ it, and the only network request it makes is the check for a new version.
 
 - **Capture modes** — region select, window pick (click the window you want),
   full screen, pick-a-display, and a screen color picker.
+- **QR reader** - drag around a QR code on screen (or use Read QR in the
+  editor) to copy its text; links get an Open button and never open by
+  themselves.
 - **Annotation editor** — straight and bent arrows, shapes, freehand pen, text,
   highlighter, blur, crop, and cut, with undo/redo, pan, and zoom.
 - **Global shortcuts** — trigger any capture mode from anywhere without focusing
@@ -174,6 +177,7 @@ screenpick capture region        # open the region selector
 screenpick capture window        # capture the active window
 screenpick capture screen        # capture the display under the cursor
 screenpick capture screen-pick   # open the display picker
+screenpick capture qr            # scan a QR code in a selected region
 ```
 
 These do what the mode's global shortcut does, in the running ScreenPick. If it

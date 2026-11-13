@@ -28,6 +28,7 @@ const commandsMock = vi.hoisted(() => ({
   startRegionSelection: vi.fn(),
   startWindowSelection: vi.fn(),
   startScreenSelection: vi.fn(),
+  startQrScan: vi.fn(),
   captureScreenUnderCursor: vi.fn(),
   cancelRegionSelection: vi.fn(),
   cancelWindowSelection: vi.fn(),
@@ -45,7 +46,8 @@ const eventsMock = vi.hoisted(() => ({
   captureShortcut: { listen: vi.fn().mockResolvedValue(() => {}) },
   shortcutRegistration: { listen: vi.fn().mockResolvedValue(() => {}) },
   captureCompleted: { listen: vi.fn().mockResolvedValue(() => {}) },
-  captureCancelled: { listen: vi.fn().mockResolvedValue(() => {}) }
+  captureCancelled: { listen: vi.fn().mockResolvedValue(() => {}) },
+  qrScanCompleted: { listen: vi.fn().mockResolvedValue(() => {}) }
 }));
 
 const editorMock = vi.hoisted(() => ({
@@ -98,7 +100,8 @@ const modes: CaptureMode[] = [
     accelerators: ["CommandOrControl+Shift+W", "CommandOrControl+Alt+W"]
   },
   { id: "screen", label: "Screen", accelerators: ["CommandOrControl+Shift+S"] },
-  { id: "screen-pick", label: "Pick display", accelerators: ["CommandOrControl+Shift+Alt+S"] }
+  { id: "screen-pick", label: "Pick display", accelerators: ["CommandOrControl+Shift+Alt+S"] },
+  { id: "qr", label: "Scan QR", accelerators: ["CommandOrControl+Shift+Alt+R"] }
 ];
 
 function status(accelerator: string, mode: string, state: "registered" | "failed"): ShortcutStatus {
@@ -432,6 +435,7 @@ describe("requestCapture", () => {
     commandsMock.startRegionSelection.mockResolvedValue({ status: "ok", data: null });
     commandsMock.startWindowSelection.mockResolvedValue({ status: "ok", data: null });
     commandsMock.startScreenSelection.mockResolvedValue({ status: "ok", data: null });
+    commandsMock.startQrScan.mockResolvedValue({ status: "ok", data: null });
 
     for (const mode of modes) {
       const o = new CaptureOrchestration();
@@ -441,6 +445,37 @@ describe("requestCapture", () => {
     }
 
     expect(logError).not.toHaveBeenCalled();
+  });
+
+  // A scan ends with QrScanCompleted instead of CaptureCompleted: the result
+  // goes to the QR panel, never into the editor or Recent, and the pending
+  // flag must still drop or every capture button stays disabled.
+  it("starts a QR scan and hands its result to the QR panel, not the editor", async () => {
+    const { qrReader } = await import("./qrReader.svelte");
+    qrReader.dismiss();
+    commandsMock.startQrScan.mockResolvedValue({ status: "ok", data: null });
+    const o = new CaptureOrchestration();
+    const teardown = o.setup();
+    await vi.waitFor(() => expect(eventsMock.qrScanCompleted.listen).toHaveBeenCalledOnce());
+    const onScan = eventsMock.qrScanCompleted.listen.mock.calls[0][0] as (event: {
+      payload: unknown;
+    }) => void;
+
+    await o.requestCapture("qr", "shortcut");
+    expect(commandsMock.startQrScan).toHaveBeenCalledOnce();
+    expect(commandsMock.startRegionSelection).not.toHaveBeenCalled();
+    expect(o.capturePending).toBe(true);
+
+    const result = { codes: [{ text: "https://example.com", isUrl: true }], copied: true };
+    onScan({ payload: result });
+
+    expect(o.capturePending).toBe(false);
+    expect(qrReader.result).toEqual(result);
+    expect(statusLine.message).toBe("QR code read and copied to the clipboard.");
+    expect(editorMock.ingestCompleted).not.toHaveBeenCalled();
+    expect(editorMock.ingestWithoutOpening).not.toHaveBeenCalled();
+    teardown();
+    qrReader.dismiss();
   });
 
   it("logs and clears pending for a mode id with no dispatch entry", async () => {
@@ -585,6 +620,16 @@ describe("capture watchdog", () => {
     expect(commandsMock.cancelWindowSelection).toHaveBeenCalledOnce();
     expect(commandsMock.cancelRegionSelection).toHaveBeenCalledOnce();
     expect(commandsMock.cancelScreenSelection).not.toHaveBeenCalled();
+
+    // The QR scan runs on the region overlay, so it is cancelled as one.
+    commandsMock.startQrScan.mockResolvedValue({ status: "ok", data: null });
+    const qr = new CaptureOrchestration();
+    qr.captureModes = modes;
+    await qr.requestCapture("qr", "button");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(commandsMock.cancelRegionSelection).toHaveBeenCalledTimes(2);
+    expect(commandsMock.cancelWindowSelection).toHaveBeenCalledOnce();
+    expect(qr.capturePending).toBe(false);
   });
 });
 

@@ -17,6 +17,7 @@
     MousePointer2,
     PenLine,
     Pipette,
+    QrCode,
     Scissors,
     Scan,
     Settings,
@@ -40,6 +41,7 @@
   import { confirmDiscard } from "#lib/editorCommands.ts";
   import { unlockCaptureSound } from "#lib/captureSound.ts";
   import { update } from "#lib/updateState.svelte.ts";
+  import { qrReader } from "#lib/qrReader.svelte.ts";
   import { listenForExit } from "#lib/shutdown.ts";
   import { suppressMiddleClickAutoscroll, targetIsEditable } from "#lib/domUtils.ts";
   import EditorStage from "../lib/EditorStage.svelte";
@@ -632,6 +634,45 @@
       </div>
     {/if}
 
+    {#if qrReader.result}
+      <!-- Shares the informational look of the update notice. -->
+      <div class="update-notice qr-notice" role="status">
+        <div class="notice-header">
+          <QrCode size={16} />
+          <span>
+            {#if qrReader.result.codes.length === 0}
+              No QR code found
+            {:else if qrReader.result.codes.length === 1}
+              QR code
+            {:else}
+              {qrReader.result.codes.length} QR codes
+            {/if}
+          </span>
+          <button type="button" aria-label="Dismiss QR result" onclick={() => qrReader.dismiss()}>
+            <X size={14} />
+          </button>
+        </div>
+        {#if qrReader.result.codes.length === 0}
+          <p>Nothing readable as a QR code in the selected area. Select the whole code, including its corner squares.</p>
+        {/if}
+        {#each qrReader.result.codes as code, codeIndex (codeIndex)}
+          <div class="qr-code">
+            <p class="qr-text">{code.text}</p>
+            <div class="qr-actions">
+              {#if code.isUrl}
+                <button type="button" class="notice-action" onclick={() => void qrReader.openUrl(code)}>
+                  Open link
+                </button>
+              {/if}
+              <button type="button" class="notice-link" onclick={() => void qrReader.copyText(code)}>
+                Copy
+              </button>
+            </div>
+          </div>
+        {/each}
+      </div>
+    {/if}
+
     <div class="capture-list">
       <!-- "screen-pick" is a hotkey-only mode (its own accelerator opens the
            display picker); the Screen button already opens the picker on click,
@@ -785,6 +826,14 @@
           onclick={() => editor.setEditorZoom((editor.document?.zoom ?? 1) + 0.1)}
         >
           <ZoomIn size={17} />
+        </button>
+        <button
+          type="button"
+          disabled={!editor.document || qrReader.readPending}
+          onclick={() => editor.document && void qrReader.readCapture(editor.document.capture.path)}
+          title="Read QR codes in this capture"
+        >
+          <QrCode size={17} /> Read QR
         </button>
         <button
           type="button"
@@ -1215,6 +1264,33 @@
     color: #3c4652;
     font-size: 11px;
     line-height: 17px;
+  }
+
+  .qr-code {
+    display: grid;
+    gap: 6px;
+  }
+
+  /* Decoded text is arbitrary: wrap anything, keep it selectable, and cap a
+     long payload so the sidebar stays usable. */
+  .update-notice p.qr-text {
+    max-height: 120px;
+    overflow: auto;
+    padding: 6px 8px;
+    background: #ffffff;
+    border: 1px solid #d5e6e3;
+    border-radius: 6px;
+    font-family: ui-monospace, "Cascadia Mono", Menlo, monospace;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  .qr-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
   }
 
   .update-progress {

@@ -3,6 +3,7 @@ use specta::Type;
 use tauri_specta::Event;
 
 use crate::capture::CaptureResult;
+use crate::qr_scan::QrScanResult;
 use crate::shortcuts::ShortcutStatus;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Type, Event)]
@@ -16,6 +17,11 @@ pub(crate) struct CaptureCompleted(pub CaptureResult);
 
 #[derive(Serialize, Deserialize, Clone, Debug, Type, Event)]
 pub(crate) struct CaptureCancelled(pub String);
+
+// The Scan QR mode's terminal event, in place of `CaptureCompleted`: the
+// region was decoded, not saved. A failed scan emits `CaptureCancelled`.
+#[derive(Serialize, Deserialize, Clone, Debug, Type, Event)]
+pub(crate) struct QrScanCompleted(pub QrScanResult);
 
 // Emitted by the tray's "Check for updates" item. The check itself runs in the
 // webview (that is where the updater plugin's progress and banner live), so the

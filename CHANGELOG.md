@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [CalVer](https://calver.org/) `YY.M.MICRO` versioning
 (see [BUILD.md](BUILD.md#version-management)).
 
+## [26.11.2] - Unreleased
+
+### Added
+
+- QR reader. The new **Scan QR** mode (button, and Ctrl+Shift+Alt+R on
+  Windows, Cmd+Shift+Option+R on macOS) opens the region selector; drag
+  around a QR code and its text is copied to the clipboard and shown in the
+  sidebar. The scan saves no image and adds nothing to Recent. **Read QR** in
+  the editor reads the codes in the open capture. A link gets an **Open link**
+  button; only http and https links can be opened, and nothing opens by
+  itself. Light-on-dark codes and several codes in one selection are read.
+- `screenpick capture qr` starts a scan from the command line.
+
+### Fixed
+
+- "Release notes" and "Download from GitHub" open the browser through the
+  Windows shell instead of `explorer`, which drops links that contain a comma.
+
 ## [26.11.1] - 2026-11-10
 
 ### Fixed

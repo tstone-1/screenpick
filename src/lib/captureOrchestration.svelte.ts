@@ -16,6 +16,7 @@ import {
 import type { Result } from "./commandResult";
 import { editor } from "./editor.svelte";
 import { playCaptureSound } from "./captureSound";
+import { qrReader } from "./qrReader.svelte";
 import { logError } from "./diagnosticsLog";
 import { acceleratorMatches } from "./shortcutRecording";
 import { isMacPlatform, SettingsState } from "./settingsState.svelte";
@@ -42,7 +43,7 @@ const CAPTURE_WATCHDOG_MS = 60_000;
 // added to `capture_modes.rs` and to neither is caught at run time only:
 // `requestCapture` logs it and says so in the status line, instead of
 // shipping a button that silently does nothing.
-type KnownCaptureModeId = "region" | "window" | "screen" | "screen-pick";
+type KnownCaptureModeId = "region" | "window" | "screen" | "screen-pick" | "qr";
 
 // A start either hands the interaction to an overlay — the shot arrives later
 // as a `CaptureCompleted` event, so the pending flag stays up — or captures
@@ -108,6 +109,14 @@ const captureDispatch: Record<KnownCaptureModeId, CaptureModeDispatch> = {
     activity: () => "Screen selection active.",
     start: async () => ({ kind: "pending", result: await commands.startScreenSelection() }),
     cancel: () => commands.cancelScreenSelection()
+  },
+  qr: {
+    // The region overlay, decoding instead of saving. It ends with
+    // `QrScanCompleted` (or `CaptureCancelled`), never `CaptureCompleted`, and
+    // it is cancelled like any region selection.
+    activity: () => "Drag around a QR code.",
+    start: async () => ({ kind: "pending", result: await commands.startQrScan() }),
+    cancel: () => commands.cancelRegionSelection()
   }
 };
 
@@ -438,12 +447,17 @@ export class CaptureOrchestration {
         statusLine.set(event.payload);
         this.#setCapturePending(false);
       });
+      const uQrScanCompleted = await events.qrScanCompleted.listen((event) => {
+        this.#setCapturePending(false);
+        qrReader.show(event.payload);
+      });
 
       if (this.#cancelled) {
         uCapture();
         uRegistration();
         uCaptureCompleted();
         uCaptureCancelled();
+        uQrScanCompleted();
         return;
       }
 
@@ -452,6 +466,7 @@ export class CaptureOrchestration {
         uRegistration();
         uCaptureCompleted();
         uCaptureCancelled();
+        uQrScanCompleted();
       };
 
       await this.#runStartupCapture();

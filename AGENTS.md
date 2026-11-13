@@ -350,6 +350,24 @@ ScreenPick is an open-source cross-platform screenshot, annotation, and screen u
   `[]`: until 26.11.1 every test started from a mode with a chord, and a blank
   row in a disabled mode re-registered its default global shortcuts.
 
+## QR reader
+
+- **The Scan QR mode (`qr`) is the region overlay with another purpose.**
+  `RegionPickerSession` records a `RegionPurpose` at start, and
+  `finish_region_selection` branches on it; the overlay page does not know
+  which one it serves. A scan keeps its pixels in memory: no file in the save
+  directory, no Recent entry, and it ends with `QrScanCompleted` instead of
+  `CaptureCompleted`. Its cancel is `cancel_region_selection`.
+- Decoding (`qr.rs`) is pure and runs in the Windows test build; the
+  commands (`qr_scan.rs`) are gated like the other GUI modules. Rust copies
+  the decoded text to the clipboard, because after a shortcut scan the main
+  window is only coming forward and a webview clipboard write needs focus.
+- **Only an `is_web_url` text is opened, and Rust checks again in
+  `open_qr_url`**: the text came off a screen. On Windows links open through
+  `ShellExecuteW`. `explorer <url>` reads commas as separators: measured with a
+  local server, a URL with `?q=a,b,c` arrived intact through ShellExecute and
+  not at all through explorer.
+
 ## Command line
 
 `cli.rs` parses (pure, tested on Windows too); `run()` and `cli_capture.rs` act.

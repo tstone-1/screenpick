@@ -10,6 +10,7 @@ mod document_store;
 mod export_validation;
 mod monitor_pairing;
 mod path_utils;
+mod qr;
 mod shortcut_config;
 mod updates;
 #[cfg(all(target_os = "windows", not(test)))]
@@ -62,6 +63,8 @@ mod main_window;
 #[cfg(not(all(test, target_os = "windows")))]
 mod picker_session;
 #[cfg(not(all(test, target_os = "windows")))]
+mod qr_scan;
+#[cfg(not(all(test, target_os = "windows")))]
 mod region;
 #[cfg(not(all(test, target_os = "windows")))]
 mod screen_picker;
@@ -76,8 +79,8 @@ mod window_picker;
 
 #[cfg(not(all(test, target_os = "windows")))]
 use events::{
-    AppExiting, CaptureCancelled, CaptureCompleted, CaptureShortcut, ShortcutRegistration,
-    UpdateCheckRequested,
+    AppExiting, CaptureCancelled, CaptureCompleted, CaptureShortcut, QrScanCompleted,
+    ShortcutRegistration, UpdateCheckRequested,
 };
 #[cfg(not(all(test, target_os = "windows")))]
 use region::RegionPickerSession;
@@ -342,6 +345,9 @@ fn specta_builder() -> Builder<tauri::Wry> {
             screen_picker::list_screens_for_selection,
             screen_picker::finish_screen_selection,
             screen_picker::cancel_screen_selection,
+            qr_scan::start_qr_scan,
+            qr_scan::decode_qr_in_capture,
+            qr_scan::open_qr_url,
             tray::quit_app,
         ])
         .events(collect_events![
@@ -349,6 +355,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             ShortcutRegistration,
             CaptureCompleted,
             CaptureCancelled,
+            QrScanCompleted,
             UpdateCheckRequested,
             AppExiting,
         ])

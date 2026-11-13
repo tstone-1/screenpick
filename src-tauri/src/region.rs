@@ -13,11 +13,24 @@ use crate::capture::{
 };
 use crate::errors::error_message;
 use crate::picker_session::{
-    emit_capture_cancelled, finish_capture, hide_before_capture, place_overlay,
+    emit_capture_cancelled, finish_capture, finish_picker, hide_before_capture, place_overlay,
     run_capture_off_ui_thread, PickerSession,
 };
+use crate::qr_scan::{emit_qr_scan_outcome, QrScanResult};
 
 const REGION_WINDOW: &str = "region-selector";
+
+/// What a finished region selection is for. The overlay is the same for both
+/// and does not know which one it serves; the session records it at start and
+/// `finish_region_selection` branches on it.
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RegionPurpose {
+    /// Save the region as a capture and emit `CaptureCompleted`.
+    #[default]
+    Capture,
+    /// Decode QR codes in the region, write no file, emit `QrScanCompleted`.
+    QrScan,
+}
 
 #[derive(Default)]
 pub(crate) struct RegionPickerSession {
@@ -27,6 +40,7 @@ pub(crate) struct RegionPickerSession {
     /// monitor at finish time even if the display configuration has changed
     /// in between (e.g. a hot-plug changed the "primary" monitor).
     target_monitor_id: Mutex<Option<u32>>,
+    purpose: Mutex<RegionPurpose>,
 }
 
 impl RegionPickerSession {
@@ -50,6 +64,20 @@ impl RegionPickerSession {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
+
+    fn set_purpose(&self, purpose: RegionPurpose) {
+        *self
+            .purpose
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = purpose;
+    }
+
+    fn purpose(&self) -> RegionPurpose {
+        *self
+            .purpose
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Type)]
@@ -65,6 +93,12 @@ pub(crate) struct RegionSelection {
 #[tauri::command]
 #[specta::specta]
 pub(crate) fn start_region_selection(app: AppHandle) -> Result<(), String> {
+    begin_region_selection(app, RegionPurpose::Capture)
+}
+
+/// Open the region overlay for `purpose`. Shared by `start_region_selection`
+/// and `start_qr_scan`, so the two cannot differ in how the overlay is placed.
+pub(crate) fn begin_region_selection(app: AppHandle, purpose: RegionPurpose) -> Result<(), String> {
     ensure_screen_capture_access()?;
 
     app.state::<RegionPickerSession>()
@@ -88,6 +122,7 @@ pub(crate) fn start_region_selection(app: AppHandle) -> Result<(), String> {
 
     let session_state = app.state::<RegionPickerSession>();
     session_state.set_target_monitor(monitor_id);
+    session_state.set_purpose(purpose);
     session_state.session().record(id);
 
     tauri::async_runtime::spawn(create_region_window(app.clone(), id, position, size));
@@ -148,7 +183,7 @@ async fn create_region_window(
 pub(crate) async fn finish_region_selection(
     app: AppHandle,
     selection: RegionSelection,
-) -> Result<CaptureResult, String> {
+) -> Result<(), String> {
     // Snapshot the session id BEFORE the hide-and-capture window so a re-entry
     // (global shortcut firing again, or the user clicking start while the
     // overlay is hiding) can't emit a CaptureCompleted on someone else's
@@ -156,21 +191,36 @@ pub(crate) async fn finish_region_selection(
     let session_id = app.state::<RegionPickerSession>().session().current();
     // Teardown clears session state before capture. Own the target across it.
     let target_monitor = app.state::<RegionPickerSession>().target_monitor();
+    let purpose = app.state::<RegionPickerSession>().purpose();
+    let hide = |app: &AppHandle| {
+        if let Some(window) = app.get_webview_window(REGION_WINDOW) {
+            hide_before_capture(&window, "region overlay", 0);
+        }
+    };
     // async + run_capture_off_ui_thread so the overlay's hide is applied before
-    // the shot instead of being blocked behind our own settle sleep.
-    run_capture_off_ui_thread(move || {
-        finish_capture(
+    // the shot instead of being blocked behind our own settle sleep. The result
+    // travels to the main window as an event; the overlay only needs to know
+    // whether the finish failed.
+    run_capture_off_ui_thread(move || match purpose {
+        RegionPurpose::Capture => finish_capture(
             &app,
             session_id,
             "Region capture was already cancelled.",
-            |app| {
-                if let Some(window) = app.get_webview_window(REGION_WINDOW) {
-                    hide_before_capture(&window, "region overlay", 0);
-                }
-            },
+            hide,
             finish_region_session,
             |app| capture_region_selection(app, &selection, target_monitor),
         )
+        .map(|_| ()),
+        RegionPurpose::QrScan => finish_picker(
+            &app,
+            session_id,
+            "QR scan was already cancelled.",
+            hide,
+            finish_region_session,
+            |_| scan_region_selection(&selection, target_monitor),
+            emit_qr_scan_outcome,
+        )
+        .map(|_| ()),
     })
     .await
 }
@@ -214,6 +264,30 @@ fn capture_region_selection(
     selection: &RegionSelection,
     target_monitor: Option<u32>,
 ) -> Result<CaptureResult, String> {
+    let (monitor, x, y, width, height) = region_pixels(selection, target_monitor)?;
+    capture_region_image(app, &monitor, x, y, width, height)
+}
+
+// The QR scan reads the same pixels a region capture would save, through the
+// same backend (so HDR displays get the same correction), and keeps them in
+// memory: a scan leaves no file in the save directory and no Recent entry.
+fn scan_region_selection(
+    selection: &RegionSelection,
+    target_monitor: Option<u32>,
+) -> Result<QrScanResult, String> {
+    ensure_screen_capture_access()?;
+    let (monitor, x, y, width, height) = region_pixels(selection, target_monitor)?;
+    let image = crate::capture_backend::region_image(&monitor, x, y, width, height)?;
+    Ok(crate::qr_scan::scan_result(
+        &xcap::image::DynamicImage::ImageRgba8(image),
+    ))
+}
+
+/// The selection in the target monitor's physical pixels, clamped to it.
+fn region_pixels(
+    selection: &RegionSelection,
+    target_monitor: Option<u32>,
+) -> Result<(Monitor, u32, u32, u32, u32), String> {
     let monitor = resolve_target_monitor(target_monitor)?;
     let monitor_width = monitor.width().map_err(error_message)?;
     let monitor_height = monitor.height().map_err(error_message)?;
@@ -238,7 +312,7 @@ fn capture_region_selection(
         .round()
         .clamp(1.0, f64::from(available_height)) as u32;
 
-    capture_region_image(app, &monitor, x, y, width, height)
+    Ok((monitor, x, y, width, height))
 }
 
 /// Look up the monitor that the overlay was sized to at start time. Falls

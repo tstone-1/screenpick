@@ -31,6 +31,9 @@ mod default_accelerators {
     pub(super) const SCREEN: &[&str] = &["CommandOrControl+Shift+Alt+S"];
     // Not the Alt+S chord that `screen` takes on macOS: D for "display".
     pub(super) const SCREEN_PICK: &[&str] = &["CommandOrControl+Shift+Alt+D"];
+    // R for "read". Not Q: Cmd+Shift+Q is Log Out, and with Option added it
+    // logs out without asking, so a failed registration would cost the session.
+    pub(super) const QR: &[&str] = &["CommandOrControl+Shift+Alt+R"];
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -39,6 +42,9 @@ mod default_accelerators {
     pub(super) const WINDOW: &[&str] = &["CommandOrControl+Shift+W", "CommandOrControl+Alt+W"];
     pub(super) const SCREEN: &[&str] = &["CommandOrControl+Shift+S", "CommandOrControl+Alt+S"];
     pub(super) const SCREEN_PICK: &[&str] = &["CommandOrControl+Shift+Alt+S"];
+    // Not Ctrl+Shift+R, which is the hard reload in every browser and would be
+    // taken from them while ScreenPick runs.
+    pub(super) const QR: &[&str] = &["CommandOrControl+Shift+Alt+R"];
 }
 
 fn owned(accelerators: &[&str]) -> Vec<String> {
@@ -74,6 +80,13 @@ pub(crate) fn capture_modes() -> &'static Vec<CaptureMode> {
                 id: "screen-pick".to_string(),
                 label: "Pick display".to_string(),
                 accelerators: owned(default_accelerators::SCREEN_PICK),
+            },
+            // Region selection that decodes QR codes instead of saving a
+            // capture (qr_scan.rs). Has its own button and hotkey.
+            CaptureMode {
+                id: "qr".to_string(),
+                label: "Scan QR".to_string(),
+                accelerators: owned(default_accelerators::QR),
             },
         ]
     })

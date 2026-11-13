@@ -69,6 +69,15 @@ tauri-specta = { version = "=2.0.0-rc.26", features = ["derive", "typescript"] }
 # (a non-blocking wait must not park a tokio worker thread via std::thread::sleep).
 # Tauri already ships tokio transitively, so this adds no real weight.
 tokio = { version = "1", features = ["time"] }
+# QR decoding for the Scan QR mode and the editor's Read QR action. Pure Rust.
+# No default features: `img` pulls in an `image` of its own, and the closure
+# API reads the greyscale buffer that xcap's `image` already produces.
+rqrr = { version = "0.11", default-features = false }
+
+[dev-dependencies]
+# Generates the QR images the decoder tests read; no rendering features needed.
+qrcode = { version = "0.14", default-features = false }
+
 [target.'cfg(target_os = "windows")'.dependencies]
 # WGC's 8-bit HDR output can clip before xcap receives it. Capture scRGB float
 # on advanced-color displays and normalize using their live SDR white level.
@@ -82,6 +91,8 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common",
     "Win32_System_Console", "Win32_System_WinRT", "Win32_System_WinRT_Direct3D11",
     "Win32_System_WinRT_Graphics_Capture",
+    # ShellExecuteW opens links (updates::open_in_browser).
+    "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging",
 ] }
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-core-graphics = "0.3.2"

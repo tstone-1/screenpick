@@ -36,7 +36,7 @@ export const commands = {
 	autostartEnabled: () => typedError<boolean, string>(__TAURI_INVOKE("autostart_enabled")),
 	setAutostart: (enabled: boolean) => typedError<boolean, string>(__TAURI_INVOKE("set_autostart", { enabled })),
 	startRegionSelection: () => typedError<null, string>(__TAURI_INVOKE("start_region_selection")),
-	finishRegionSelection: (selection: RegionSelection) => typedError<CaptureResult, string>(__TAURI_INVOKE("finish_region_selection", { selection })),
+	finishRegionSelection: (selection: RegionSelection) => typedError<null, string>(__TAURI_INVOKE("finish_region_selection", { selection })),
 	cancelRegionSelection: () => typedError<null, string>(__TAURI_INVOKE("cancel_region_selection")),
 	startWindowSelection: () => typedError<null, string>(__TAURI_INVOKE("start_window_selection")),
 	finishWindowPointSelection: (x: number | null, y: number | null) => typedError<CaptureResult, string>(__TAURI_INVOKE("finish_window_point_selection", { x, y })),
@@ -56,6 +56,9 @@ export const commands = {
 	listScreensForSelection: () => typedError<CapturableMonitor[], string>(__TAURI_INVOKE("list_screens_for_selection")),
 	finishScreenSelection: (monitorId: number) => typedError<CaptureResult, string>(__TAURI_INVOKE("finish_screen_selection", { monitorId })),
 	cancelScreenSelection: () => typedError<null, string>(__TAURI_INVOKE("cancel_screen_selection")),
+	startQrScan: () => typedError<null, string>(__TAURI_INVOKE("start_qr_scan")),
+	decodeQrInCapture: (path: string) => typedError<QrScanResult, string>(__TAURI_INVOKE("decode_qr_in_capture", { path })),
+	openQrUrl: (url: string) => typedError<null, string>(__TAURI_INVOKE("open_qr_url", { url })),
 	quitApp: () => __TAURI_INVOKE<void>("quit_app"),
 };
 
@@ -65,6 +68,7 @@ export const events = {
 	captureCancelled: makeEvent<CaptureCancelled, CaptureCancelled>("capture-cancelled"),
 	captureCompleted: makeEvent<CaptureCompleted, CaptureCompleted>("capture-completed"),
 	captureShortcut: makeEvent<CaptureShortcut, CaptureShortcut>("capture-shortcut"),
+	qrScanCompleted: makeEvent<QrScanCompleted, QrScanCompleted>("qr-scan-completed"),
 	shortcutRegistration: makeEvent<ShortcutRegistration_Serialize, ShortcutRegistration_Deserialize>("shortcut-registration"),
 	updateCheckRequested: makeEvent<UpdateCheckRequested, UpdateCheckRequested>("update-check-requested"),
 };
@@ -144,6 +148,18 @@ export type DocumentRecord = {
 	basePath: string,
 	currentPath: string,
 	annotations: string,
+};
+
+export type QrCode = {
+	text: string,
+	isUrl: boolean,
+};
+
+export type QrScanCompleted = QrScanResult;
+
+export type QrScanResult = {
+	codes: QrCode[],
+	copied: boolean,
 };
 
 export type RegionSelection = {

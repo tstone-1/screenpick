@@ -145,6 +145,30 @@ pub(crate) fn finish_capture(
     end_session: impl FnOnce(&AppHandle, Option<u64>) -> bool,
     capture: impl FnOnce(&AppHandle) -> Result<CaptureResult, String>,
 ) -> Result<CaptureResult, String> {
+    finish_picker(
+        app,
+        session_id,
+        cancelled_message,
+        hide,
+        end_session,
+        capture,
+        emit_capture_outcome,
+    )
+}
+
+/// `finish_capture` for a picker whose result is not a saved capture (the QR
+/// scan): same hide, settle, end and restore order, with the caller's own
+/// terminal event. `emit` receives whether this call still owned the session
+/// and must emit nothing when it did not.
+pub(crate) fn finish_picker<T>(
+    app: &AppHandle,
+    session_id: Option<u64>,
+    cancelled_message: &str,
+    hide: impl FnOnce(&AppHandle),
+    end_session: impl FnOnce(&AppHandle, Option<u64>) -> bool,
+    capture: impl FnOnce(&AppHandle) -> Result<T, String>,
+    emit: impl FnOnce(&AppHandle, bool, Result<T, String>) -> Result<T, String>,
+) -> Result<T, String> {
     let Some((still_active, result)) = finish_sequence(
         session_id,
         cancelled_message,
@@ -161,7 +185,7 @@ pub(crate) fn finish_capture(
         restore_main_window(app);
     }
 
-    emit_capture_outcome(app, still_active, result)
+    emit(app, still_active, result)
 }
 
 /// The order of a finish, without the windows: refuse a finish that saw no

@@ -17,7 +17,7 @@ Usage:
       Start ScreenPick, or show its window when it is already running.
   screenpick capture <mode>
       Start a capture in ScreenPick, exactly as the mode's shortcut does.
-      Modes: region, window, screen, screen-pick.
+      Modes: region, window, screen, screen-pick, qr.
   screenpick capture screen --output <file.png> [--display <n>]
   screenpick capture region --rect <x,y,width,height> --output <file.png> [--display <n>]
       Capture at once, without any window, and write the PNG. An existing
@@ -274,7 +274,7 @@ mod tests {
 
     #[test]
     fn capture_without_output_triggers_every_known_mode() {
-        for mode in ["region", "window", "screen", "screen-pick"] {
+        for mode in ["region", "window", "screen", "screen-pick", "qr"] {
             assert_eq!(
                 run(&["capture", mode]),
                 Invocation::Trigger(mode.to_string())

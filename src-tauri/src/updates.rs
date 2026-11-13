@@ -74,19 +74,55 @@ const RELEASES_URL: &str = "https://github.com/tstone-1/screenpick/releases/late
 #[tauri::command]
 #[specta::specta]
 pub(crate) fn open_releases_page() -> Result<(), String> {
+    open_in_browser(RELEASES_URL).map_err(|err| format!("Could not open the releases page: {err}"))
+}
+
+// Hand `url` to the OS default browser. The caller decides that `url` is a
+// web link; this only passes it on, as one string and with no shell between.
+//
+// Windows uses ShellExecuteW, not `explorer <url>`: explorer reads commas as
+// separators (its `/select,<path>` syntax). Measured against a local server,
+// `http://127.0.0.1:8765/x?q=a,b,c` reached it intact through ShellExecute and
+// not at all through explorer. A QR code's link often has a comma.
+#[cfg(all(target_os = "windows", not(test)))]
+pub(crate) fn open_in_browser(url: &str) -> Result<(), String> {
+    use windows::core::{w, HSTRING, PCWSTR};
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let target = HSTRING::from(url);
+    // SAFETY: every pointer is a NUL-terminated wide string that outlives the
+    // call; null parameters and directory are documented as allowed.
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            w!("open"),
+            &target,
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    // The documented success test: a value above 32. Below it is an error code.
+    let code = result.0 as isize;
+    if code > 32 {
+        Ok(())
+    } else {
+        Err(format!("ShellExecute failed with code {code}"))
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn open_in_browser(url: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let program = "open";
-    // explorer exits with 1 even when it opened the URL, so only a spawn
-    // failure counts as an error here.
-    #[cfg(target_os = "windows")]
-    let program = "explorer";
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(target_os = "macos"))]
     let program = "xdg-open";
     std::process::Command::new(program)
-        .arg(RELEASES_URL)
+        .arg(url)
         .spawn()
         .map(|_| ())
-        .map_err(|err| format!("Could not open the releases page: {err}"))
+        .map_err(|err| err.to_string())
 }
 
 #[cfg(test)]
