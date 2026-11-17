@@ -552,6 +552,47 @@ export function cutoutAnnotations(
     .filter((annotation) => rectsIntersect(annotationBounds(annotation), newBounds));
 }
 
+// Shift-drag constraints (the Photoshop / PowerPoint / Figma convention). Both
+// take the drag start, the pointer, and the image size, and keep the result
+// inside the image: `start` is already clamped, so shortening along the locked
+// direction always fits without bending it off the angle or the square.
+
+// Locks a line to the nearest multiple of 45 degrees. The length is the
+// pointer's projection onto that direction, so sliding along it feels the same
+// as an unconstrained drag. A diagonal moves the same whole number of pixels on
+// both axes, which keeps it exactly at 45 degrees after rounding.
+export function snapToAngleStep(start: Point, end: Point, size: { width: number; height: number }): Point {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  if (dx === 0 && dy === 0) return { ...start };
+  const step = Math.round(Math.atan2(dy, dx) / (Math.PI / 4));
+  const ux = Math.round(Math.cos((step * Math.PI) / 4));
+  const uy = Math.round(Math.sin((step * Math.PI) / 4));
+  const projection = dx * ux + dy * uy;
+  let distance = Math.max(0, Math.round(ux !== 0 && uy !== 0 ? projection / 2 : projection));
+  if (ux !== 0) distance = Math.min(distance, ux > 0 ? size.width - start.x : start.x);
+  if (uy !== 0) distance = Math.min(distance, uy > 0 ? size.height - start.y : start.y);
+  return { x: start.x + ux * distance, y: start.y + uy * distance };
+}
+
+// The square (or circle, for an ellipse) from `start` toward the pointer, sized
+// by the longer of the two drag distances.
+export function squareFromPoints(start: Point, end: Point, size: { width: number; height: number }): CropRect {
+  const sx = end.x < start.x ? -1 : 1;
+  const sy = end.y < start.y ? -1 : 1;
+  const side = Math.min(
+    Math.max(Math.abs(end.x - start.x), Math.abs(end.y - start.y)),
+    sx > 0 ? size.width - start.x : start.x,
+    sy > 0 ? size.height - start.y : start.y
+  );
+  return {
+    x: sx > 0 ? start.x : start.x - side,
+    y: sy > 0 ? start.y : start.y - side,
+    width: side,
+    height: side
+  };
+}
+
 export function pointsBounds(points: Point[], padding = 0): AnnotationBounds {
   if (points.length === 0) return { x: 0, y: 0, width: 0, height: 0 };
   const xs = points.map((point) => point.x);

@@ -175,6 +175,10 @@ function pointer(clientX: number, clientY: number): PointerEvent {
   } as unknown as PointerEvent;
 }
 
+function shiftPointer(clientX: number, clientY: number): PointerEvent {
+  return { ...pointer(clientX, clientY), shiftKey: true } as PointerEvent;
+}
+
 function canvasStage(width = 800, height = 600): HTMLDivElement {
   return { clientWidth: width, clientHeight: height } as unknown as HTMLDivElement;
 }
@@ -331,6 +335,61 @@ describe("EditorState", () => {
     const placed = state.annotations.at(-1)!;
     expect(state.selectedAnnotationId).toBe(placed.id);
     expect(state.activeTool).toBe("select");
+  });
+
+  it("draws an equal-sided shape while Shift is held, and only the shape tool squares", () => {
+    const state = new EditorState();
+    state.openCapture(capture("/shift-shape.png"));
+    state.imageFrame = imageFrame();
+    state.activeTool = "shape";
+    state.shapeKind = "ellipse";
+    state.startShapeDrag(pointer(20, 20));
+    state.updateShapeDrag(shiftPointer(70, 40));
+    state.finishShapeDrag(shiftPointer(70, 40));
+    expect(state.annotations.at(-1)).toMatchObject({ shape: "ellipse", rect: { x: 20, y: 20, width: 50, height: 50 } });
+
+    state.activeTool = "highlight";
+    state.startHighlightDrag(pointer(20, 20));
+    state.updateHighlightDrag(shiftPointer(70, 40));
+    state.finishHighlightDrag(shiftPointer(70, 40));
+    expect(state.annotations.at(-1)).toMatchObject({ kind: "highlight", rect: { width: 50, height: 20 } });
+  });
+
+  it("locks an arrow to 45-degree steps while Shift is held", () => {
+    const state = new EditorState();
+    state.openCapture(capture("/shift-arrow.png"));
+    state.imageFrame = imageFrame();
+    state.activeTool = "arrow";
+    state.startArrowDrag(pointer(10, 10));
+    state.updateArrowDrag(shiftPointer(60, 18));
+    state.finishArrowDrag(shiftPointer(60, 18));
+    expect(state.annotations.at(-1)).toMatchObject({ kind: "arrow", start: { x: 10, y: 10 }, end: { x: 60, y: 10 } });
+  });
+
+  it("applies and lifts the Shift constraint without a pointer move", () => {
+    const state = new EditorState();
+    state.openCapture(capture("/shift-key.png"));
+    state.imageFrame = imageFrame();
+    state.activeTool = "arrow";
+    state.startArrowDrag(pointer(10, 10));
+    state.updateArrowDrag(pointer(60, 18));
+    expect(state.arrowDraft?.end).toEqual({ x: 60, y: 18 });
+
+    state.setConstrainModifier(true);
+    expect(state.arrowDraft?.end).toEqual({ x: 60, y: 10 });
+
+    state.setConstrainModifier(false);
+    expect(state.arrowDraft?.end).toEqual({ x: 60, y: 18 });
+    state.finishArrowDrag(pointer(60, 18));
+
+    state.activeTool = "shape";
+    state.startShapeDrag(pointer(20, 20));
+    state.setConstrainModifier(true);
+    expect(state.shapeDraft?.rect).toEqual({ x: 20, y: 20, width: 0, height: 0 });
+    state.updateShapeDrag(pointer(70, 40));
+    expect(state.shapeDraft?.rect).toEqual({ x: 20, y: 20, width: 50, height: 20 });
+    state.setConstrainModifier(true);
+    expect(state.shapeDraft?.rect).toEqual({ x: 20, y: 20, width: 50, height: 50 });
   });
 
   it("does not select or switch tool when a too-small shape never commits", () => {

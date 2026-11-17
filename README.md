@@ -19,7 +19,8 @@ it, and the only network request it makes is the check for a new version.
   editor) to copy its text; links get an Open button and never open by
   themselves.
 - **Annotation editor** — straight and bent arrows, shapes, freehand pen, text,
-  highlighter, blur, crop, and cut, with undo/redo, pan, and zoom.
+  highlighter, blur, crop, and cut, with undo/redo, pan, and zoom. Hold Shift
+  to lock an arrow to 45-degree steps or to draw a square or circle.
 - **Global shortcuts** — trigger any capture mode from anywhere without focusing
   the app; shortcuts are configurable in Settings.
 - **Clipboard & file export** — copy the result straight to the clipboard or save

@@ -66,6 +66,7 @@
 
   onMount(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Shift") editor.setConstrainModifier(true);
       if (event.code !== "Space" || event.repeat) return;
       if (!editor.document || targetIsEditable(event.target)) return;
       // Stop Space from scrolling the page or activating a focused button.
@@ -73,12 +74,14 @@
       spaceHeld = true;
     };
     const onKeyUp = (event: KeyboardEvent) => {
+      if (event.key === "Shift") editor.setConstrainModifier(false);
       if (event.code === "Space") spaceHeld = false;
     };
     // Releasing the key while another window has focus would otherwise leave
     // the pan gesture armed forever.
     const onWindowBlur = () => {
       spaceHeld = false;
+      editor.setConstrainModifier(false);
     };
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);

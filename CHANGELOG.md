@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [CalVer](https://calver.org/) `YY.M.MICRO` versioning
 (see [BUILD.md](BUILD.md#version-management)).
 
-## [26.11.2] - Unreleased
+## [26.11.2] - 2026-11-17
 
 ### Added
 
@@ -18,6 +18,13 @@ and this project uses [CalVer](https://calver.org/) `YY.M.MICRO` versioning
   button; only http and https links can be opened, and nothing opens by
   itself. Light-on-dark codes and several codes in one selection are read.
 - `screenpick capture qr` starts a scan from the command line.
+- Hold Shift while drawing an arrow to lock it to horizontal, vertical or
+  45 degrees, and while drawing a shape to give it equal width and height (a
+  square, a circle). Pressing or releasing Shift mid-drag takes effect at once.
+
+### Changed
+
+- Dependency updates (Rust crates and npm packages, patch and minor releases).
 
 ### Fixed
 

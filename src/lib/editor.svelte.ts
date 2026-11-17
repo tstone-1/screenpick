@@ -25,6 +25,8 @@ import {
   nextAnnotationIdFor,
   normalizeHexColor,
   rgbToHex,
+  snapToAngleStep,
+  squareFromPoints,
   translateAnnotation,
   type Annotation,
   type AnnotationBounds,
@@ -177,6 +179,9 @@ type RectDragSpec<A extends RectDragAnnotation> = {
   setStart: (start: Point | null) => void;
   makeDraft: (start: Point, id: number) => A;
   selectOnPlace: boolean;
+  // Shift draws equal width and height. Only the shape tool: a square
+  // highlight or blur has no use the free drag lacks.
+  squareWithShift: boolean;
 };
 
 export const SHAPE_FILL_OPACITY_MIN = 0;
@@ -309,6 +314,12 @@ export class EditorState {
   shapeDraft = $state<ShapeAnnotation | null>(null);
   shapeKind = $state<ShapeKind>("rectangle");
   shapeDragStart = $state<Point | null>(null);
+  // Shift held during an arrow or shape drag: the arrow locks to 45-degree
+  // steps, the shape to equal width and height. `#drawPointer` is the last
+  // pointer position of that drag, so pressing or releasing Shift without
+  // moving the mouse redraws the draft at once (setConstrainModifier).
+  #constrainHeld = false;
+  #drawPointer: Point | null = null;
   shapeFill = $state(false);
   shapeFillOpacity = $state(SHAPE_FILL_OPACITY_DEFAULT);
   highlightDraft = $state<HighlightAnnotation | null>(null);
@@ -1376,6 +1387,7 @@ export class EditorState {
     if (!start) return;
     event.preventDefault();
     this.imageFrame?.setPointerCapture(event.pointerId);
+    this.#drawPointer = start;
     this.arrowDraft = {
       kind: "arrow",
       id: this.#nextAnnotationId++,
@@ -1390,7 +1402,31 @@ export class EditorState {
     if (!this.arrowDraft || this.activeTool !== "arrow") return;
     const end = this.#pointInImage(event);
     if (!end) return;
-    this.arrowDraft = { ...this.arrowDraft, end };
+    this.#constrainHeld = event.shiftKey === true;
+    this.#drawPointer = end;
+    this.#redrawArrowDraft();
+  }
+
+  #redrawArrowDraft() {
+    const draft = this.arrowDraft;
+    const end = this.#drawPointer;
+    const capture = this.document?.capture;
+    if (!draft || !end || !capture) return;
+    this.arrowDraft = {
+      ...draft,
+      end: this.#constrainHeld ? snapToAngleStep(draft.start, end, capture) : end
+    };
+  }
+
+  // Called by the stage on Shift keydown/keyup (and window blur), so the
+  // constraint follows the key while the pointer rests. Pointer events carry
+  // `shiftKey` too and stay authoritative: a release missed while another
+  // window had focus is corrected by the next move.
+  setConstrainModifier(held: boolean) {
+    if (this.#constrainHeld === held) return;
+    this.#constrainHeld = held;
+    if (this.arrowDraft && this.activeTool === "arrow") this.#redrawArrowDraft();
+    if (this.shapeDraft && this.activeTool === "shape") this.#redrawRectDraft(this.#shapeRectDrag());
   }
 
   finishArrowDrag(event: PointerEvent) {
@@ -1433,6 +1469,7 @@ export class EditorState {
       setStart: (start) => {
         this.shapeDragStart = start;
       },
+      squareWithShift: true,
       makeDraft: (start, id) => ({
         kind: "shape",
         id,
@@ -1458,6 +1495,7 @@ export class EditorState {
       setStart: (start) => {
         this.highlightDragStart = start;
       },
+      squareWithShift: false,
       makeDraft: (start, id) => ({
         kind: "highlight",
         id,
@@ -1482,6 +1520,7 @@ export class EditorState {
       setStart: (start) => {
         this.blurDragStart = start;
       },
+      squareWithShift: false,
       makeDraft: (start, id) => ({
         kind: "blur",
         id,
@@ -1499,6 +1538,7 @@ export class EditorState {
     if (!start) return;
     event.preventDefault();
     this.imageFrame?.setPointerCapture(event.pointerId);
+    this.#drawPointer = start;
     spec.setStart(start);
     spec.setDraft(spec.makeDraft(start, this.#nextAnnotationId++));
   }
@@ -1509,7 +1549,22 @@ export class EditorState {
     if (!draft || !start || this.activeTool !== spec.tool) return;
     const point = this.#pointInImage(event);
     if (!point) return;
-    spec.setDraft({ ...draft, rect: this.#rectFromPoints(start, point) });
+    this.#constrainHeld = event.shiftKey === true;
+    this.#drawPointer = point;
+    this.#redrawRectDraft(spec);
+  }
+
+  #redrawRectDraft<A extends RectDragAnnotation>(spec: RectDragSpec<A>) {
+    const draft = spec.getDraft();
+    const start = spec.getStart();
+    const point = this.#drawPointer;
+    const capture = this.document?.capture;
+    if (!draft || !start || !point || !capture) return;
+    const rect =
+      spec.squareWithShift && this.#constrainHeld
+        ? squareFromPoints(start, point, capture)
+        : this.#rectFromPoints(start, point);
+    spec.setDraft({ ...draft, rect });
   }
 
   #finishRectDrag<A extends RectDragAnnotation>(spec: RectDragSpec<A>, event: PointerEvent) {

@@ -26,6 +26,8 @@ import {
   serializeAnnotations,
   shapeHitTest,
   shapeOutlinePoints,
+  snapToAngleStep,
+  squareFromPoints,
   translateAnnotation,
   type Annotation,
   type ArrowAnnotation,
@@ -884,5 +886,49 @@ describe("bent arrow", () => {
 
   it("is read back from a saved layer", () => {
     expect(deserializeAnnotations(serializeAnnotations([bent, straight]))).toEqual([bent, straight]);
+  });
+});
+
+describe("snapToAngleStep", () => {
+  const size = { width: 200, height: 200 };
+  const start = { x: 100, y: 100 };
+
+  it.each([
+    [{ x: 160, y: 108 }, { x: 160, y: 100 }],
+    [{ x: 93, y: 40 }, { x: 100, y: 40 }],
+    [{ x: 40, y: 104 }, { x: 40, y: 100 }],
+    [{ x: 150, y: 140 }, { x: 145, y: 145 }],
+    [{ x: 60, y: 135 }, { x: 62, y: 138 }],
+    [{ x: 52, y: 60 }, { x: 56, y: 56 }]
+  ])("locks %o to the nearest 45-degree step", (end, expected) => {
+    expect(snapToAngleStep(start, end, size)).toEqual(expected);
+  });
+
+  it("keeps a diagonal exactly at 45 degrees", () => {
+    const snapped = snapToAngleStep(start, { x: 171, y: 158 }, size);
+    expect(Math.abs(snapped.x - start.x)).toBe(Math.abs(snapped.y - start.y));
+  });
+
+  it("shortens along the locked direction instead of leaving the image", () => {
+    expect(snapToAngleStep({ x: 180, y: 20 }, { x: 200, y: 0 }, size)).toEqual({ x: 200, y: 0 });
+    expect(snapToAngleStep({ x: 190, y: 100 }, { x: 200, y: 115 }, size)).toEqual({ x: 200, y: 110 });
+  });
+
+  it("returns the start for a zero-length drag", () => {
+    expect(snapToAngleStep(start, start, size)).toEqual(start);
+  });
+});
+
+describe("squareFromPoints", () => {
+  const size = { width: 200, height: 200 };
+
+  it("uses the longer drag distance for both sides, in every direction", () => {
+    expect(squareFromPoints({ x: 50, y: 50 }, { x: 90, y: 60 }, size)).toEqual({ x: 50, y: 50, width: 40, height: 40 });
+    expect(squareFromPoints({ x: 50, y: 50 }, { x: 40, y: 20 }, size)).toEqual({ x: 20, y: 20, width: 30, height: 30 });
+    expect(squareFromPoints({ x: 50, y: 50 }, { x: 30, y: 60 }, size)).toEqual({ x: 30, y: 50, width: 20, height: 20 });
+  });
+
+  it("shrinks the square to fit the image", () => {
+    expect(squareFromPoints({ x: 180, y: 50 }, { x: 200, y: 150 }, size)).toEqual({ x: 180, y: 50, width: 20, height: 20 });
   });
 });
